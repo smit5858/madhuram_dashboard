@@ -9,9 +9,10 @@ const Courier = sequelize.define(
       primaryKey: true,
       autoIncrement: true,
     },
+    // Legacy fields — kept for backward compatibility
     name: {
       type: DataTypes.STRING,
-      allowNull: false,
+      allowNull: true,
     },
     email: {
       type: DataTypes.STRING,
@@ -21,6 +22,62 @@ const Courier = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true,
     },
+
+    // --- Required fields as per spec ---
+    customerName: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    address: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    city: {
+      type: DataTypes.STRING,
+      allowNull: true, // city of the courier pickup — used for location scoping
+    },
+    mobileNo: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    productName: {
+      type: DataTypes.STRING,
+      allowNull: true, // used for the Product Name filter
+    },
+    charge: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+    },
+    freePickup: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+    },
+    courierName: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    trackId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    kg: {
+      type: DataTypes.DECIMAL(10, 3),
+      allowNull: true,
+    },
+    pending: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+    },
+    note: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    completedDate: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+    },
+
+    // Foreign key to the owning user
     userId: {
       type: DataTypes.INTEGER,
       allowNull: false,

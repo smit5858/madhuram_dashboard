@@ -50,6 +50,7 @@ exports.login = async (req, res) => {
         email: user.email,
         roleId: user.roleId,
         roleName: roleName,
+        allowedCity: user.allowedCity || null,
       },
     });
   } catch (err) {

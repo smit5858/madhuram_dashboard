@@ -2,9 +2,27 @@ import httpService from "./http-service";
 
 export interface CourierData {
     id?: number;
-    name: string;
+
+    // Legacy fields
+    name?: string;
     email?: string;
     phone?: string;
+
+    // Required columns per spec
+    customerName?: string;
+    address?: string;
+    city?: string;
+    mobileNo?: string;
+    productName?: string;
+    charge?: number | string;
+    freePickup?: boolean;
+    courierName?: string;
+    trackId?: string;
+    kg?: number | string;
+    pending?: boolean;
+    note?: string;
+    completedDate?: string;
+
     userId?: number;
     User?: {
         id: number;
@@ -15,8 +33,9 @@ export interface CourierData {
     updatedAt?: string;
 }
 
-const getCouriers = () =>
-    httpService.get<{ success: boolean; data: CourierData[] }>("/couriers");
+/** Fetch couriers — backend applies city scope automatically for non-Admin users. */
+const getCouriers = (params?: { productName?: string }) =>
+    httpService.get<{ success: boolean; data: CourierData[] }>("/couriers", { params });
 
 const getCourierById = (id: number) =>
     httpService.get<{ success: boolean; data: CourierData }>(`/couriers/${id}`);

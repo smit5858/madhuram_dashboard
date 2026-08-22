@@ -3,18 +3,20 @@ import { useMutation } from '@tanstack/react-query';
 import { useDispatch } from 'react-redux';
 import { useMemo } from 'react';
 import toast from 'react-hot-toast';
-import LOGO from "@/assets/logo.jpg"
+import LOGO from "@/assets/logo.jpg";
 
 import authService from '../../services/auth.service';
+import permissionService from '../../services/permission.service';
 import FormikInput from '../../shared/components/formik-fields/FormikInput';
 
-import { loginSchema, type LoginFormValues, } from '@/validation/login.validation';
+import { loginSchema, type LoginFormValues } from '@/validation/login.validation';
 import { useNavigate } from 'react-router-dom';
-import { login } from '@/store/slices/authSlice';
+import { login, setPermissions } from '@/store/slices/authSlice';
 
 const Login = () => {
     const navigate = useNavigate();
     const dispatch = useDispatch();
+
     const { mutate: loginMutation, isPending: loginLoading } = useMutation({
         mutationFn: (values: { email: string; password: string }) =>
             authService.loginService({
@@ -22,11 +24,12 @@ const Login = () => {
                 password: values.password,
             }),
 
-        onSuccess: (response: any) => {
+        onSuccess: async (response: any) => {
             const data = response.data || response;
             const user = data.user || {};
             const token = data.accessToken || data.token;
 
+            // 1. Store user identity + token in Redux
             dispatch(
                 login({
                     name: user.name,
@@ -34,13 +37,28 @@ const Login = () => {
                     mail: user.email,
                     phone: user.phone || null,
                     token: token,
+                    allowedCity: user.allowedCity || null,
                 })
             );
-            navigate('/dashboard')
+
+            // 2. Call Permission API ONCE — load ALL permissions for this user's role
+            try {
+                const permRes = await permissionService.getAllPermissionsService();
+                const allPermissions = permRes.data?.permissions || [];
+
+                // Store permissions globally — sidebar and all pages use this stored state
+                dispatch(setPermissions(allPermissions));
+            } catch (permErr) {
+                console.error("Failed to load permissions after login", permErr);
+                toast.error("Could not load permissions. Some features may be restricted.");
+            }
+
+            // 3. Navigate — sidebar already built from stored permissions
+            navigate('/dashboard');
         },
 
         onError: (err: any) => {
-            toast.error(err?.message || 'Login failed');
+            toast.error(err?.response?.data?.message || err?.message || 'Login failed');
         },
     });
 
@@ -62,11 +80,9 @@ const Login = () => {
         return result.error.issues.reduce(
             (errors, issue) => {
                 const field = issue.path[0] as keyof LoginFormValues;
-
                 if (!errors[field]) {
                     errors[field] = issue.message;
                 }
-
                 return errors;
             },
             {} as Partial<Record<keyof LoginFormValues, string>>

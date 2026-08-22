@@ -35,6 +35,10 @@ const User = sequelize.define(
             type: DataTypes.BOOLEAN,
             defaultValue: true,
         },
+        allowedCity: {
+            type: DataTypes.STRING,
+            allowNull: true, // null = no city restriction (Admin overrides via role check)
+        },
         tokenInvalidatedAt: {
           type: DataTypes.DATE,
           allowNull: true, 

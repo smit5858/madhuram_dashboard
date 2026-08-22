@@ -1,6 +1,63 @@
 const { Permission, Route } = require("../models");
 const { Op } = require("sequelize");
 
+// GET /permissions/all
+// Called ONCE after login — returns full permission set for the logged-in user's role
+exports.getAllPermissions = async (req, res) => {
+  try {
+    const { roleId, roleName } = req.user;
+
+    // Fetch all routes
+    const allRoutes = await Route.findAll();
+
+    // Admin gets full access on every route automatically
+    if (roleName === "Admin") {
+      const permissions = allRoutes.map((r) => ({
+        routeId: r.id,
+        routeName: r.name,
+        routePath: r.path,
+        canRead: true,
+        canCreate: true,
+        canUpdate: true,
+        canDelete: true,
+      }));
+      return res.status(200).json({ success: true, permissions });
+    }
+
+    // For non-Admin: fetch all permission rows for this role, joined with Route
+    const permissionRows = await Permission.findAll({
+      where: { roleId },
+      include: { model: Route },
+    });
+
+    // Build a map: routeId → Permission row
+    const permMap = {};
+    for (const p of permissionRows) {
+      if (p.Route) {
+        permMap[p.Route.id] = p;
+      }
+    }
+
+    // Emit an entry for every known route (missing = all false)
+    const permissions = allRoutes.map((r) => {
+      const p = permMap[r.id];
+      return {
+        routeId: r.id,
+        routeName: r.name,
+        routePath: r.path,
+        canRead: p ? p.canRead : false,
+        canCreate: p ? p.canCreate : false,
+        canUpdate: p ? p.canUpdate : false,
+        canDelete: p ? p.canDelete : false,
+      };
+    });
+
+    return res.status(200).json({ success: true, permissions });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 exports.getSidebarPermissions = async (req, res) => {
   try {
     const { roleId } = req.user;
