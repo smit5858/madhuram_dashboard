@@ -11,11 +11,11 @@ const Notification = sequelize.define(
     },
     // Which module should receive this notification
     recipientModule: {
-      type: DataTypes.ENUM("couriers", "account", "all"),
+      type: DataTypes.ENUM("couriers", "account", "admin", "all"),
       allowNull: false,
     },
     type: {
-      type: DataTypes.ENUM("NEW_SALE", "STOCK_LOW", "PAYMENT_RECEIVED"),
+      type: DataTypes.ENUM("NEW_SALE", "NEW_CUSTOMER", "STOCK_LOW", "PAYMENT_RECEIVED"),
       allowNull: false,
     },
     title: {

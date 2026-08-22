@@ -11,4 +11,7 @@ interface LoginPayload {
 const loginService = async (payload: LoginPayload): Promise<AxiosResponse<ApiResponse<AuthState>>> =>
     httpService.post<ApiResponse<AuthState>>("/auth/login", payload);
 
-export default { loginService };
+const refreshTokenService = async (refreshToken?: string): Promise<AxiosResponse<ApiResponse<{ accessToken: string; refreshToken?: string }>>> =>
+    httpService.post<ApiResponse<{ accessToken: string; refreshToken?: string }>>("/auth/refresh", { refreshToken });
+
+export default { loginService, refreshTokenService };

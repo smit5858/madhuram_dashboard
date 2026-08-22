@@ -10,6 +10,7 @@ import saleService, {
   type SaleData,
   type CreateSalePayload,
   type SalesFilters,
+  type SellsTotalsData,
 } from "../../services/sells.service";
 import productService, {
   type ProductData,
@@ -69,7 +70,9 @@ const FilterSync = ({
 
 const Sells = () => {
   const queryClient = useQueryClient();
-  const { permissions } = useSelector((state: RootState) => state.auth);
+  const auth = useSelector((state: RootState) => state.auth);
+  const { permissions } = auth;
+  const isAdmin = auth.role === "Admin";
 
   // Permission derivation
   const pagePermission = useMemo(() => {
@@ -99,6 +102,20 @@ const Sells = () => {
   const [appliedFilters, setAppliedFilters] = useState<SalesFilters>({});
   const [pageSize] = useState(10);
   const [isExportOpen, setIsExportOpen] = useState(false);
+
+  // Query: Sells Totals (server-side authorization scoped)
+  const { data: totalsResponse } = useQuery({
+    queryKey: ["sells-totals", appliedFilters.userId],
+    queryFn: () => saleService.getSellsTotals({ userId: appliedFilters.userId }),
+    enabled: pagePermission.canRead,
+  });
+
+  const totalsData: SellsTotalsData = totalsResponse?.data?.data || {
+    totalSellingAmount: 0,
+    totalCollectedAmount: 0,
+    totalPendingAmount: 0,
+    totalSalesCount: 0,
+  };
 
   // Query: Sells List
   const {
@@ -291,6 +308,7 @@ const Sells = () => {
     onSuccess: (res) => {
       toast.success(res.data?.message || "Sells entry created successfully");
       queryClient.invalidateQueries({ queryKey: ["sells"] });
+      queryClient.invalidateQueries({ queryKey: ["sells-totals"] });
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["customers"] });
       closeModal();
@@ -311,6 +329,7 @@ const Sells = () => {
     onSuccess: (res) => {
       toast.success(res.data?.message || "Sale updated successfully");
       queryClient.invalidateQueries({ queryKey: ["sells"] });
+      queryClient.invalidateQueries({ queryKey: ["sells-totals"] });
       queryClient.invalidateQueries({ queryKey: ["customers"] });
       closeModal();
     },
@@ -327,6 +346,7 @@ const Sells = () => {
     onSuccess: (res) => {
       toast.success(res.data?.message || "Sale cancelled successfully");
       queryClient.invalidateQueries({ queryKey: ["sells"] });
+      queryClient.invalidateQueries({ queryKey: ["sells-totals"] });
     },
     onError: (err: any) => {
       toast.error(
@@ -584,7 +604,72 @@ const Sells = () => {
   };
 
   return (
-    <div className="p-6 bg-white rounded-xl shadow-md">
+    <div className="p-6 bg-white rounded-xl shadow-md flex flex-col gap-6">
+      {/* Top Summary Cards Banner */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50/60 to-white p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wider text-blue-700">
+              {isAdmin ? "Total Sells" : "My Total Sells"}
+            </span>
+            <div className="rounded-xl bg-blue-100 p-2 text-blue-600">
+              <IndianRupee className="h-5 w-5" />
+            </div>
+          </div>
+          <div className="mt-2 text-2xl font-bold text-slate-900 font-mono">
+            ₹{totalsData.totalSellingAmount.toLocaleString("en-IN")}
+          </div>
+          <p className="mt-1 text-[11px] text-slate-500">
+            {isAdmin ? "Combined team selling total" : "Your total sales contribution"}
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50/60 to-white p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wider text-emerald-700">
+              Collected Amount
+            </span>
+            <div className="rounded-xl bg-emerald-100 p-2 text-emerald-600">
+              <CheckCircle2 className="h-5 w-5" />
+            </div>
+          </div>
+          <div className="mt-2 text-2xl font-bold text-emerald-700 font-mono">
+            ₹{totalsData.totalCollectedAmount.toLocaleString("en-IN")}
+          </div>
+          <p className="mt-1 text-[11px] text-slate-500">Total payments received</p>
+        </div>
+
+        <div className="rounded-2xl border border-amber-100 bg-gradient-to-br from-amber-50/60 to-white p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wider text-amber-700">
+              Pending Amount
+            </span>
+            <div className="rounded-xl bg-amber-100 p-2 text-amber-600">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+          </div>
+          <div className="mt-2 text-2xl font-bold text-amber-700 font-mono">
+            ₹{totalsData.totalPendingAmount.toLocaleString("en-IN")}
+          </div>
+          <p className="mt-1 text-[11px] text-slate-500">Outstanding balance</p>
+        </div>
+
+        <div className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50/60 to-white p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wider text-indigo-700">
+              Total Orders
+            </span>
+            <div className="rounded-xl bg-indigo-100 p-2 text-indigo-600">
+              <ShoppingBag className="h-5 w-5" />
+            </div>
+          </div>
+          <div className="mt-2 text-2xl font-bold text-slate-900 font-mono">
+            {totalsData.totalSalesCount}
+          </div>
+          <p className="mt-1 text-[11px] text-slate-500">Recorded transactions</p>
+        </div>
+      </div>
+
       {/* Filter Section */}
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <Formik initialValues={{ search: "", startDate: "", endDate: "" }} onSubmit={() => { }}>
@@ -601,6 +686,25 @@ const Sells = () => {
                   className="rounded-full border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-3 text-xs text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                 />
               </div>
+
+              {isAdmin && (
+                <select
+                  value={appliedFilters.userId || ""}
+                  onChange={(e) =>
+                    setAppliedFilters((prev) => ({
+                      ...prev,
+                      userId: e.target.value || undefined,
+                      page: 1,
+                    }))
+                  }
+                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none cursor-pointer"
+                >
+                  <option value="">All Team Members</option>
+                  <option value="2">Parth</option>
+                  <option value="4">Vraj</option>
+                  <option value="3">Darshil</option>
+                </select>
+              )}
 
               <Field
                 name="startDate"

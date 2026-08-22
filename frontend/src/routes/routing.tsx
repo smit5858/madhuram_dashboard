@@ -5,6 +5,8 @@ export const Routing = {
     Couriers: `/couriers`,
     Customers: `/customers`,
     Sells: `/sells`,
+    Products: `/products`,
+    Stock: `/stock`,
     AccountSells: `/account/sells`,
     AccountExpense: `/account/expense`,
     AccountDebited: `/account/debited`,

@@ -1,5 +1,6 @@
-const { Customer, Sale, User } = require("../models");
+const { Customer, Sale, User, Notification } = require("../models");
 const { Op } = require("sequelize");
+const { getIO } = require("../socket");
 
 // GET /customers
 exports.getCustomers = async (req, res) => {
@@ -159,6 +160,33 @@ exports.createCustomer = async (req, res) => {
       notes: notes ? notes.trim() : null,
       createdBy: user ? user.id : null,
     });
+
+    // Notify Admin after customer creation
+    try {
+      const creatorName = user ? (user.name || user.email || `User #${user.id}`) : "Sells Member";
+      const notifDate = new Date().toLocaleString();
+      const notifData = {
+        recipientModule: "admin",
+        type: "NEW_CUSTOMER",
+        title: "New Customer Added",
+        message: `Customer: ${customer.name}\nAdded by: ${creatorName}\nDate/Time: ${notifDate}`,
+        referenceType: "customer",
+        referenceId: customer.id,
+      };
+
+      const adminNotif = await Notification.create(notifData);
+      try {
+        const io = getIO();
+        io.to("admin").emit("new_customer", {
+          notification: adminNotif,
+          customer: { id: customer.id, name: customer.name, phone: customer.phone },
+        });
+      } catch (sockErr) {
+        console.warn("WebSocket notification emit failed:", sockErr.message);
+      }
+    } catch (notifErr) {
+      console.warn("Customer creation notification failed:", notifErr.message);
+    }
 
     return res.status(201).json({
       success: true,

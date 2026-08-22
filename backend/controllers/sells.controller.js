@@ -239,9 +239,29 @@ exports.createSale = async (req, res) => {
     await t.commit();
 
     // ── Build notification payload (after commit) ──────────────
+    const creatorName = user ? (user.name || user.email || `User #${user.id}`) : "Sells Member";
+    const dateFormatted = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
     const productSummary = saleItemsResult
       .map((i) => `${i.productName} × ${i.quantity}`)
       .join(", ");
+
+    const adminNotifData = {
+      recipientModule: "admin",
+      type: "NEW_SALE",
+      title: "New Sells Entry",
+      message: `Customer: ${customerName}\nAmount: ₹${selling.toFixed(2)}\nCreated by: ${creatorName}\nDate: ${dateFormatted}`,
+      referenceType: "sale",
+      referenceId: sale.id,
+    };
+
+    const accountNotifData = {
+      recipientModule: "account",
+      type: "NEW_SALE",
+      title: "New Sells Entry",
+      message: `Customer: ${customerName}\nAmount: ₹${selling.toFixed(2)}\nCreated by: ${creatorName}\nDate: ${dateFormatted}`,
+      referenceType: "sale",
+      referenceId: sale.id,
+    };
 
     const courierNotifData = {
       recipientModule: "couriers",
@@ -252,35 +272,33 @@ exports.createSale = async (req, res) => {
       referenceId: sale.id,
     };
 
-    const accountNotifData = {
-      recipientModule: "account",
-      type: "NEW_SALE",
-      title: "New Sales Entry",
-      message: `Customer: ${customerName}\nSelling: ₹${selling.toFixed(2)}\nCollected: ₹${collected.toFixed(2)}\nPending: ₹${pending.toFixed(2)}\nPayment: ${paymentMethod || "—"}`,
-      referenceType: "sale",
-      referenceId: sale.id,
-    };
-
-    // Persist notifications
-    const [courierNotif, accountNotif] = await Promise.all([
-      Notification.create(courierNotifData),
-      Notification.create(accountNotifData),
-    ]);
-
-    // Emit real-time WebSocket events
+    // Fail-safe notification persistence & socket emits
     try {
-      const io = getIO();
-      io.to("couriers").emit("new_sale", {
-        notification: courierNotif,
-        sale: { id: sale.id, invoiceNumber, customerName, city },
-      });
-      io.to("account").emit("new_sale", {
-        notification: accountNotif,
-        sale: { id: sale.id, invoiceNumber, customerName, sellingAmount: selling, collectedAmount: collected, pendingAmount: pending },
-      });
-    } catch (socketErr) {
-      // WebSocket failure must NOT affect the HTTP response
-      console.warn("WebSocket emit failed:", socketErr.message);
+      const [adminNotif, accountNotif, courierNotif] = await Promise.all([
+        Notification.create(adminNotifData),
+        Notification.create(accountNotifData),
+        Notification.create(courierNotifData),
+      ]);
+
+      try {
+        const io = getIO();
+        io.to("admin").emit("new_sale", {
+          notification: adminNotif,
+          sale: { id: sale.id, invoiceNumber, customerName, sellingAmount: selling, createdBy: user.id, creatorName },
+        });
+        io.to("account").emit("new_sale", {
+          notification: accountNotif,
+          sale: { id: sale.id, invoiceNumber, customerName, sellingAmount: selling, collectedAmount: collected, pendingAmount: pending },
+        });
+        io.to("couriers").emit("new_sale", {
+          notification: courierNotif,
+          sale: { id: sale.id, invoiceNumber, customerName, city },
+        });
+      } catch (socketErr) {
+        console.warn("WebSocket emit failed:", socketErr.message);
+      }
+    } catch (notifErr) {
+      console.warn("Sale creation notification failed:", notifErr.message);
     }
 
     return res.status(201).json({
@@ -300,6 +318,9 @@ exports.createSale = async (req, res) => {
 // GET /sales
 exports.getSales = async (req, res) => {
   try {
+    const user = req.user;
+    const isAdmin = user && user.roleName === "Admin";
+
     const {
       platform,
       paymentMethod,
@@ -308,9 +329,22 @@ exports.getSales = async (req, res) => {
       startDate,
       endDate,
       customerName,
+      userId,
+      createdBy,
     } = req.query;
 
     const where = {};
+
+    // Ownership filter: Admin can filter by userId/createdBy; Sales users are locked to req.user.id
+    if (isAdmin) {
+      const targetUser = userId || createdBy;
+      if (targetUser) {
+        where.createdBy = targetUser;
+      }
+    } else {
+      where.createdBy = user.id;
+    }
+
     if (platform) where.platform = { [Op.like]: `%${platform}%` };
     if (paymentMethod) where.paymentMethod = paymentMethod;
     if (status) where.status = status;
@@ -354,10 +388,59 @@ exports.getSales = async (req, res) => {
   }
 };
 
+// GET /sales/totals
+exports.getSellsTotals = async (req, res) => {
+  try {
+    const user = req.user;
+    const isAdmin = user && user.roleName === "Admin";
+    const where = {};
+
+    if (isAdmin) {
+      const { userId, createdBy } = req.query;
+      const targetUser = userId || createdBy;
+      if (targetUser) {
+        where.createdBy = targetUser;
+      }
+    } else {
+      where.createdBy = user.id;
+    }
+
+    const totals = await Sale.findAll({
+      where: {
+        ...where,
+        status: { [Op.ne]: "CANCELLED" },
+      },
+      attributes: [
+        [sequelize.fn("SUM", sequelize.col("sellingAmount")), "totalSellingAmount"],
+        [sequelize.fn("SUM", sequelize.col("collectedAmount")), "totalCollectedAmount"],
+        [sequelize.fn("SUM", sequelize.col("pendingAmount")), "totalPendingAmount"],
+        [sequelize.fn("COUNT", sequelize.col("id")), "totalSalesCount"],
+      ],
+      raw: true,
+    });
+
+    const result = totals[0] || {};
+    return res.status(200).json({
+      success: true,
+      data: {
+        totalSellingAmount: parseFloat(result.totalSellingAmount) || 0,
+        totalCollectedAmount: parseFloat(result.totalCollectedAmount) || 0,
+        totalPendingAmount: parseFloat(result.totalPendingAmount) || 0,
+        totalSalesCount: parseInt(result.totalSalesCount, 10) || 0,
+        scope: isAdmin ? (where.createdBy ? "USER_FILTERED" : "ALL") : "OWN_ONLY",
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 // GET /sales/:id
 exports.getSaleById = async (req, res) => {
   try {
     const { id } = req.params;
+    const user = req.user;
+    const isAdmin = user && user.roleName === "Admin";
 
     const sale = await Sale.findByPk(id, {
       include: [
@@ -383,6 +466,10 @@ exports.getSaleById = async (req, res) => {
       return res.status(404).json({ success: false, message: "Sale not found" });
     }
 
+    if (!isAdmin && sale.createdBy !== user.id) {
+      return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to view this sale" });
+    }
+
     return res.status(200).json({ success: true, data: sale });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -393,6 +480,9 @@ exports.getSaleById = async (req, res) => {
 exports.updateSale = async (req, res) => {
   try {
     const { id } = req.params;
+    const user = req.user;
+    const isAdmin = user && user.roleName === "Admin";
+
     const {
       platform,
       customerId,
@@ -411,6 +501,10 @@ exports.updateSale = async (req, res) => {
     const sale = await Sale.findByPk(id);
     if (!sale) {
       return res.status(404).json({ success: false, message: "Sale not found" });
+    }
+
+    if (!isAdmin && sale.createdBy !== user.id) {
+      return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to update this sale" });
     }
 
     if (platform !== undefined) sale.platform = platform;
@@ -445,10 +539,16 @@ exports.updateSale = async (req, res) => {
 exports.deleteSale = async (req, res) => {
   try {
     const { id } = req.params;
+    const user = req.user;
+    const isAdmin = user && user.roleName === "Admin";
 
     const sale = await Sale.findByPk(id);
     if (!sale) {
       return res.status(404).json({ success: false, message: "Sale not found" });
+    }
+
+    if (!isAdmin && sale.createdBy !== user.id) {
+      return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to delete this sale" });
     }
 
     // Soft-delete: mark as CANCELLED to preserve audit trail

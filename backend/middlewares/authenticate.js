@@ -11,7 +11,7 @@ module.exports = async (req, res, next) => {
   try {
     const decoded = verifyAccessToken(token);
     const user = await User.findByPk(decoded.id, {
-      attributes: ["id", "tokenInvalidatedAt"],
+      attributes: ["id", "name", "email", "tokenInvalidatedAt"],
     });
 
     if (!user) {
@@ -19,13 +19,17 @@ module.exports = async (req, res, next) => {
     }
 
     if (user.tokenInvalidatedAt) {
-      const tokenIssuedAt = decoded.iat * 1000; // jwt iat is in seconds, convert to ms
+      const tokenIssuedAt = (decoded.iat || 0) * 1000; // jwt iat is in seconds, convert to ms
       if (tokenIssuedAt < user.tokenInvalidatedAt.getTime()) {
         return res.status(401).json({ success: false, message: "Session expired, please login again" });
       }
     }
 
-    req.user = decoded; // { id, email, role, permissions }
+    req.user = {
+      ...decoded,
+      name: user.name || decoded.name || null,
+      email: user.email || decoded.email || null,
+    };
     next();
   } catch (err) {
     return res.status(401).json({ success: false, message: "Invalid or expired token" });

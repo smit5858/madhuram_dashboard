@@ -70,6 +70,14 @@ export interface CreateSalePayload {
   }>;
 }
 
+export interface SellsTotalsData {
+  totalSellingAmount: number;
+  totalCollectedAmount: number;
+  totalPendingAmount: number;
+  totalSalesCount: number;
+  scope?: string;
+}
+
 export interface SalesFilters {
   platform?: string;
   paymentMethod?: string;
@@ -81,11 +89,16 @@ export interface SalesFilters {
   search?: string;
   page?: number;
   limit?: number;
+  userId?: number | string;
+  createdBy?: number | string;
 }
 
 
 const getSales = (filters: SalesFilters, config?: { signal?: AbortSignal }) =>
   httpService.get<{ success: boolean; data: SaleData[], meta: { page: number; totalPages: number; total: number }; }>("/sells", { params: filters, signal: config?.signal });
+
+const getSellsTotals = (filters?: SalesFilters) =>
+  httpService.get<{ success: boolean; data: SellsTotalsData }>("/sells/totals", { params: filters });
 
 const getSaleById = (id: number) =>
   httpService.get<{ success: boolean; data: SaleData }>(`/sells/${id}`);
@@ -104,6 +117,7 @@ const exportSales = (format: "pdf" | "excel", filters?: SalesFilters) =>
 
 export default {
   getSales,
+  getSellsTotals,
   getSaleById,
   createSale,
   updateSale,

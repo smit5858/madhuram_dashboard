@@ -57,10 +57,13 @@ const runSeeder = async () => {
     const usersRoute = await Route.create({ name: "Users", path: "/users" });
     const reportsRoute = await Route.create({ name: "Reports", path: "/reports" });
     const salesRoute = await Route.create({ name: "Sells", path: "/sells" });
+    const productsRoute = await Route.create({ name: "Products", path: "/products" });
+    const stockRoute = await Route.create({ name: "Stock", path: "/stock" });
+    const accountRoute = await Route.create({ name: "Account", path: "/account" });
     const accountSalesRoute = await Route.create({ name: "Account Sells", path: "/account/sells" });
     const accountExpenseRoute = await Route.create({ name: "Expense", path: "/account/expense" });
     const accountDebitedRoute = await Route.create({ name: "Debited", path: "/account/debited" });
-    console.log("✔ Routes created: Dashboard, Couriers, Customers, Users, Reports, Sells, Account/Sells, Account/Expense, Account/Debited");
+    console.log("✔ Routes created: Dashboard, Couriers, Customers, Products, Stock, Users, Reports, Sells, Account, Account/Sells, Account/Expense, Account/Debited");
 
     // 3. Create Permissions
     // Admin permissions: Full access on all routes
@@ -68,9 +71,12 @@ const runSeeder = async () => {
       dashboardRoute,
       couriersRoute,
       customersRoute,
+      productsRoute,
+      stockRoute,
       usersRoute,
       reportsRoute,
       salesRoute,
+      accountRoute,
       accountSalesRoute,
       accountExpenseRoute,
       accountDebitedRoute,
@@ -86,7 +92,7 @@ const runSeeder = async () => {
       });
     }
 
-    // User permissions:
+    // User permissions (Sales role):
     // - Dashboard: Read only
     await Permission.create({
       roleId: userRole.id,
@@ -96,7 +102,7 @@ const runSeeder = async () => {
       canUpdate: false,
       canDelete: false,
     });
-    // - Couriers: Read, Create, Update, but NO Delete
+    // - Couriers: Read, Create, Update, NO Delete
     await Permission.create({
       roleId: userRole.id,
       routeId: couriersRoute.id,
@@ -105,7 +111,7 @@ const runSeeder = async () => {
       canUpdate: true,
       canDelete: false,
     });
-    // - Customers: Read, Create, Update, but NO Delete (for Sales users)
+    // - Customers: Read, Create, Update, NO Delete
     await Permission.create({
       roleId: userRole.id,
       routeId: customersRoute.id,
@@ -114,7 +120,52 @@ const runSeeder = async () => {
       canUpdate: true,
       canDelete: false,
     });
-    // - Users: No permissions (canRead = false)
+    // - Products: Read, Create, Update, NO Delete
+    await Permission.create({
+      roleId: userRole.id,
+      routeId: productsRoute.id,
+      canRead: true,
+      canCreate: true,
+      canUpdate: true,
+      canDelete: false,
+    });
+    // - Stock: Read, Create, Update, NO Delete
+    await Permission.create({
+      roleId: userRole.id,
+      routeId: stockRoute.id,
+      canRead: true,
+      canCreate: true,
+      canUpdate: true,
+      canDelete: false,
+    });
+    // - Sells: Read, Create, Update, NO Delete
+    await Permission.create({
+      roleId: userRole.id,
+      routeId: salesRoute.id,
+      canRead: true,
+      canCreate: true,
+      canUpdate: true,
+      canDelete: false,
+    });
+    // - Account Parent Route: Read only
+    await Permission.create({
+      roleId: userRole.id,
+      routeId: accountRoute.id,
+      canRead: true,
+      canCreate: false,
+      canUpdate: false,
+      canDelete: false,
+    });
+    // - Account / Sales: Read only
+    await Permission.create({
+      roleId: userRole.id,
+      routeId: accountSalesRoute.id,
+      canRead: true,
+      canCreate: false,
+      canUpdate: false,
+      canDelete: false,
+    });
+    // - Users: No permissions
     await Permission.create({
       roleId: userRole.id,
       routeId: usersRoute.id,
@@ -123,31 +174,11 @@ const runSeeder = async () => {
       canUpdate: false,
       canDelete: false,
     });
-    // - Reports: No permissions (canRead = false)
+    // - Reports: No permissions
     await Permission.create({
       roleId: userRole.id,
       routeId: reportsRoute.id,
       canRead: false,
-      canCreate: false,
-      canUpdate: false,
-      canDelete: false,
-    });
-
-    // - Sales (top-level): Read, Create, Update, Delete for Sales
-    await Permission.create({
-      roleId: userRole.id,
-      routeId: salesRoute.id,
-      canRead: true,
-      canCreate: true,
-      canUpdate: true,
-      canDelete: true,
-    });
-
-    // - Account / Sales: Read only
-    await Permission.create({
-      roleId: userRole.id,
-      routeId: accountSalesRoute.id,
-      canRead: true,
       canCreate: false,
       canUpdate: false,
       canDelete: false,
@@ -196,13 +227,13 @@ const runSeeder = async () => {
       roleId: userRole.id,
     });
 
-    const vragUser = await User.create({
-      name: "Vrag",
-      email: "vrag@madhuram.com",
+    const vrajUser = await User.create({
+      name: "Vraj",
+      email: "vraj@madhuram.com",
       password: defaultPassword,
       roleId: userRole.id,
     });
-    console.log("✔ Test users created: admin@madhuram.com, parth@madhuram.com, darshil@madhuram.com, vrag@madhuram.com");
+    console.log("✔ Test users created: admin@madhuram.com, parth@madhuram.com, darshil@madhuram.com, vraj@madhuram.com");
 
     // 5. Create Couriers owned by users
     await Courier.create({

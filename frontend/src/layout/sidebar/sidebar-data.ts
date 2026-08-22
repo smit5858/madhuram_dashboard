@@ -28,6 +28,8 @@ export const ALL_SIDEBAR_ITEMS: SidebarItem[] = [
     { path: "/couriers",  name: "Couriers"  },
     { path: "/customers", name: "Customers" },
     { path: "/sells",     name: "Sells"     },
+    { path: "/products",  name: "Products"  },
+    { path: "/stock",     name: "Stock"     },
     { path: "/users",     name: "Users"     },
     {
         path: "/account",

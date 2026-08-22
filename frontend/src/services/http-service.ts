@@ -45,35 +45,104 @@ axios.interceptors.request.use(
     },
 );
 
+interface FailedRequestQueueItem {
+    resolve: (token: string) => void;
+    reject: (error: any) => void;
+}
+
+let isRefreshing = false;
+let failedQueue: FailedRequestQueueItem[] = [];
+
+const processQueue = (error: any, token: string | null = null) => {
+    failedQueue.forEach((promise) => {
+        if (error) {
+            promise.reject(error);
+        } else if (token) {
+            promise.resolve(token);
+        }
+    });
+    failedQueue = [];
+};
+
 axios.interceptors.response.use(
     (response: AxiosResponse) => {
         return response;
     },
     async (error: AxiosError) => {
+        const originalRequest = error.config as any;
+
+        if (error.response?.status === HttpStatusCode.Unauthorized && originalRequest && !originalRequest._retry) {
+            // Do not attempt refresh on auth endpoints to prevent infinite loops
+            if (originalRequest.url?.includes("/auth/login") || originalRequest.url?.includes("/auth/refresh")) {
+                return Promise.reject(error);
+            }
+
+            if (isRefreshing) {
+                return new Promise((resolve, reject) => {
+                    failedQueue.push({ resolve, reject });
+                })
+                    .then((newToken) => {
+                        originalRequest.headers.Authorization = `Bearer ${newToken}`;
+                        return axios(originalRequest);
+                    })
+                    .catch((err) => Promise.reject(err));
+            }
+
+            originalRequest._retry = true;
+            isRefreshing = true;
+
+            const savedAuth = sessionStorage.getItem("auth");
+            let refreshToken: string | null = null;
+            if (savedAuth) {
+                try {
+                    const parsed = JSON.parse(savedAuth);
+                    refreshToken = parsed.refreshToken || null;
+                } catch (e) {
+                    console.error("Failed to parse auth data for refresh", e);
+                }
+            }
+
+            const backend_url = import.meta.env.VITE_APP_BASE_URL ?? "http://localhost:3000";
+            const refreshUrl = getBaseURL(backend_url) + "/auth/refresh";
+
+            try {
+                const response = await axios.post(refreshUrl, { refreshToken });
+                const { accessToken, refreshToken: newRefreshToken } = response.data;
+
+                if (accessToken && savedAuth) {
+                    const authObj = JSON.parse(savedAuth);
+                    authObj.token = accessToken;
+                    if (newRefreshToken) authObj.refreshToken = newRefreshToken;
+                    sessionStorage.setItem("auth", JSON.stringify(authObj));
+                }
+
+                processQueue(null, accessToken);
+                originalRequest.headers.Authorization = `Bearer ${accessToken}`;
+                return axios(originalRequest);
+            } catch (refreshErr) {
+                processQueue(refreshErr, null);
+                sessionStorage.removeItem("auth");
+                if (window.location.pathname !== "/login") {
+                    window.location.href = "/login";
+                }
+                return Promise.reject(refreshErr);
+            } finally {
+                isRefreshing = false;
+            }
+        }
 
         switch (error.response?.status) {
-            case HttpStatusCode.Forbidden:
-            case HttpStatusCode.Unauthorized:
-                console.warn("Unauthorized - dispatching logout.");
-                // Dispatch logout and let the auth flow / main.tsx handle navigation and MSAL logout
-                // store.dispatch(logout());
-                // Avoid directly manipulating storage or navigating here to prevent navigation races
-                return Promise.reject(error);
-
-            
-
             case HttpStatusCode.BadRequest:
             case HttpStatusCode.ConflictError:
             case HttpStatusCode.InternalServerError:
             case HttpStatusCode.NotFound:
-                if ((error.response!.data as { message: string }).message) {
+                if ((error.response!.data as { message: string })?.message) {
                     console.error((error.response!.data as { message: string }).message);
                 }
                 return Promise.reject(error);
         }
-        
 
-        return Promise.reject("Something went wrong. Please try again.");
+        return Promise.reject(error);
     },
 );
 

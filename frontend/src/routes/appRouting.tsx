@@ -14,12 +14,9 @@ const AccountSells = lazy(() => import('../pages/account/Sells'));
 const Expense = lazy(() => import('../pages/account/Expense'));
 const Debited = lazy(() => import('../pages/account/Debited'));
 const Forbidden = lazy(() => import('../pages/error/Forbidden'));
+const LoadingFallback = lazy(() => import('../pages/loadingfallback/LoadingFallback'));
 
-const LoadingFallback = () => (
-    <div className="flex h-screen w-screen items-center justify-center bg-[#f3f6ff]">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#3d6fe0] border-t-transparent"></div>
-    </div>
-);
+
 
 const routesConfig = [
   {
@@ -80,6 +77,34 @@ const routesConfig = [
         element: (
           <AuthGuard>
             <PermissionGuard requiredPath="/sells">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <Sells />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.Products,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/products">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <Sells />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.Stock,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/stock">
               <Suspense fallback={<LoadingFallback />}>
                 <MainLayout>
                   <Sells />

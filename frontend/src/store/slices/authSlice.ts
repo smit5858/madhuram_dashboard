@@ -23,6 +23,7 @@ export interface AuthState {
     mail: string | null;
     phone: string | null;
     token: string | null;
+    refreshToken: string | null;
     allowedCity: string | null;
     /** Sidebar-visible routes (canRead === true) — derived from permissions on login */
     allowedRoutes: AuthRoute[] | null;
@@ -37,6 +38,7 @@ const defaultAuthState: AuthState = {
     mail: null,
     phone: null,
     token: null,
+    refreshToken: null,
     allowedCity: null,
     allowedRoutes: null,
     permissions: null,
@@ -60,6 +62,7 @@ const authSlice = createSlice({
             mail: string;
             phone: string | null;
             token: string;
+            refreshToken?: string | null;
             allowedCity?: string | null;
         }>) => {
             state.name = action.payload.name;
@@ -67,6 +70,7 @@ const authSlice = createSlice({
             state.mail = action.payload.mail;
             state.phone = action.payload.phone;
             state.token = action.payload.token;
+            state.refreshToken = action.payload.refreshToken ?? null;
             state.allowedCity = action.payload.allowedCity ?? null;
             state.allowedRoutes = null; // Will be set by setPermissions
             state.permissions = null;   // Will be set by setPermissions

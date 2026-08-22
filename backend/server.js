@@ -44,32 +44,79 @@ const { Route, Role, Permission } = require("./models");
 // Wrap Express in an http.Server so Socket.io can attach
 const httpServer = http.createServer(app);
 
-const ensureCustomerRoute = async () => {
+const ensureAllRoutesAndPermissions = async () => {
   try {
-    let [customersRoute] = await Route.findOrCreate({
-      where: { path: "/customers" },
-      defaults: { name: "Customers", path: "/customers" },
-    });
+    const SYSTEM_ROUTES = [
+      { name: "Dashboard", path: "/dashboard" },
+      { name: "Couriers", path: "/couriers" },
+      { name: "Customers", path: "/customers" },
+      { name: "Sells", path: "/sells" },
+      { name: "Products", path: "/products" },
+      { name: "Stock", path: "/stock" },
+      { name: "Users", path: "/users" },
+      { name: "Reports", path: "/reports" },
+      { name: "Account", path: "/account" },
+      { name: "Account Sells", path: "/account/sells" },
+      { name: "Expense", path: "/account/expense" },
+      { name: "Debited", path: "/account/debited" },
+    ];
+
+    const createdRoutes = [];
+    for (const rDef of SYSTEM_ROUTES) {
+      const [route] = await Route.findOrCreate({
+        where: { path: rDef.path },
+        defaults: rDef,
+      });
+      if (route.name !== rDef.name) {
+        await route.update({ name: rDef.name });
+      }
+      createdRoutes.push(route);
+    }
 
     const roles = await Role.findAll();
     for (const role of roles) {
-      const existingPerm = await Permission.findOne({
-        where: { roleId: role.id, routeId: customersRoute.id },
-      });
-      if (!existingPerm) {
-        const isAdmin = role.name === "Admin";
-        await Permission.create({
-          roleId: role.id,
-          routeId: customersRoute.id,
-          canRead: true,
-          canCreate: true,
-          canUpdate: true,
-          canDelete: isAdmin,
+      const isAdmin = role.name === "Admin";
+
+      for (const route of createdRoutes) {
+        const path = route.path.toLowerCase();
+
+        let canRead = false;
+        let canCreate = false;
+        let canUpdate = false;
+        let canDelete = false;
+
+        if (isAdmin) {
+          canRead = true;
+          canCreate = true;
+          canUpdate = true;
+          canDelete = true;
+        } else {
+          // Sales / User Role
+          if (["/sells", "/customers", "/products", "/stock", "/couriers"].includes(path)) {
+            canRead = true;
+            canCreate = true;
+            canUpdate = true;
+            canDelete = false; // NO delete permission for Sales
+          } else if (path === "/dashboard" || path === "/account" || path === "/account/sells") {
+            canRead = true;
+            canCreate = false;
+            canUpdate = false;
+            canDelete = false;
+          }
+        }
+
+        const [perm, created] = await Permission.findOrCreate({
+          where: { roleId: role.id, routeId: route.id },
+          defaults: { canRead, canCreate, canUpdate, canDelete },
         });
+
+        if (!created) {
+          await perm.update({ canRead, canCreate, canUpdate, canDelete });
+        }
       }
     }
   } catch (e) {
-    console.warn("Could not ensure customer route permissions:", e.message);
+    console.warn("Could not ensure routes and permissions:", e.message);
   }
 };
 
@@ -141,7 +188,7 @@ sequelize
   .then(async () => {
     logger.info("Models synced");
     await renameSalesRoutes();
-    await ensureCustomerRoute();
+    await ensureAllRoutesAndPermissions();
 
     // Initialize Socket.io after DB is ready
     initSocket(httpServer);

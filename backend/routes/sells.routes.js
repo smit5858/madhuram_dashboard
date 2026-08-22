@@ -5,6 +5,7 @@ const authorize = require("../middlewares/authorize");
 const saleController = require("../controllers/sells.controller");
 
 router.get("/", authenticate, authorize("/sells", "read"), saleController.getSales);
+router.get("/totals", authenticate, authorize("/sells", "read"), saleController.getSellsTotals);
 router.post("/", authenticate, authorize("/sells", "create"), saleController.createSale);
 router.get("/:id", authenticate, authorize("/sells", "read"), saleController.getSaleById);
 router.put("/:id", authenticate, authorize("/sells", "update"), saleController.updateSale);
