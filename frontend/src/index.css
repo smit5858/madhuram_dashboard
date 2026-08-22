@@ -1,0 +1,77 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg-page: #f8fafc;
+  --text-page: #0f172a;
+  --bg-card: rgba(255,255,255,0.9);
+  --border-color: rgba(0,0,0,0.1);
+  --bg-soft: rgba(0,0,0,0.05);
+  --text-muted: #334155;
+  --grid-line: #000;
+}
+.dark {
+  --bg-page: #070b12;
+  --text-page: #ffffff;
+  --bg-card: rgba(13,19,29,0.9);
+  --border-color: rgba(255,255,255,0.1);
+  --bg-soft: rgba(0,0,0,0.2);
+  --text-muted: #cbd5e1;
+  --grid-line: #fff;
+}
+
+* {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+section {
+  padding: 100px 0px;
+}
+
+.container {
+  max-width: 1250px;
+  width: 90%;
+  margin: 0 auto;
+}
+
+.sidebar-main {
+  min-width: 300px;
+  border-right: 1px solid #e0e0e0;
+}
+
+.header {
+  padding: 10px 30px;
+}
+
+.header-content {
+  display: flex;
+  line-height: 31.6px;
+  z-index: 1000;
+}
+
+.main-content-container {
+  width: 100%;
+  height: 100vh;  
+  overflow-y: hidden;
+
+  display: flex;
+  flex-direction: column;
+
+}
+
+
+.content-main {
+  /* height: 100%; */
+  padding: 20px;
+  background-color: #f1f1f1;
+  flex-grow: 1;
+  overflow-y: auto;
+}
+
+/* more specific override to target HeroUI helper text */
+[data-slot="helper-wrapper"] .text-tiny,
+[data-slot="error-message"].text-tiny {
+  font-size: 0.9rem !important;   /* ~ text-2xl */
+  line-height: 1.25 !important;
+}
