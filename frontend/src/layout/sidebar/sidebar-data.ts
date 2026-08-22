@@ -14,6 +14,8 @@ export interface SidebarItem {
     path: string;
     /** Display label */
     name: string;
+    /** Optional child routes for grouped modules */
+    children?: SidebarItem[];
 }
 
 /**
@@ -24,6 +26,16 @@ export interface SidebarItem {
 export const ALL_SIDEBAR_ITEMS: SidebarItem[] = [
     { path: "/dashboard", name: "Dashboard" },
     { path: "/couriers",  name: "Couriers"  },
+    { path: "/customers", name: "Customers" },
+    { path: "/sells",     name: "Sells"     },
     { path: "/users",     name: "Users"     },
-    { path: "/reports",   name: "Reports"   },
+    {
+        path: "/account",
+        name: "Account",
+        children: [
+            { path: "/account/sells", name: "Sells" },
+            { path: "/account/expense", name: "Expense" },
+            { path: "/account/debited", name: "Debited" },
+        ],
+    },
 ];

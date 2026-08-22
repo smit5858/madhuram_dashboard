@@ -1,5 +1,18 @@
 const sequelize = require("../config/db");
-const { User, Role, Route, Permission, Courier } = require("../models");
+const {
+  User,
+  Role,
+  Route,
+  Permission,
+  Courier,
+  Customer,
+  Product,
+  Stock,
+  StockMovement,
+  Sale,
+  SaleItem,
+  Notification,
+} = require("../models");
 const { hashPassword } = require("../helper/common");
 
 const runSeeder = async () => {
@@ -10,6 +23,13 @@ const runSeeder = async () => {
     await sequelize.query("SET FOREIGN_KEY_CHECKS = 0;");
 
     // Drop all possible tables (including obsolete ones)
+    await sequelize.query("DROP TABLE IF EXISTS `notifications`;");
+    await sequelize.query("DROP TABLE IF EXISTS `sells_items`;");
+    await sequelize.query("DROP TABLE IF EXISTS `sells`;");
+    await sequelize.query("DROP TABLE IF EXISTS `customers`;");
+    await sequelize.query("DROP TABLE IF EXISTS `stock_movements`;");
+    await sequelize.query("DROP TABLE IF EXISTS `stocks`;");
+    await sequelize.query("DROP TABLE IF EXISTS `products`;");
     await sequelize.query("DROP TABLE IF EXISTS `permissions`;");
     await sequelize.query("DROP TABLE IF EXISTS `user_permissions`;");
     await sequelize.query("DROP TABLE IF EXISTS `couriers`;");
@@ -33,13 +53,28 @@ const runSeeder = async () => {
     // 2. Create Routes
     const dashboardRoute = await Route.create({ name: "Dashboard", path: "/dashboard" });
     const couriersRoute = await Route.create({ name: "Couriers", path: "/couriers" });
+    const customersRoute = await Route.create({ name: "Customers", path: "/customers" });
     const usersRoute = await Route.create({ name: "Users", path: "/users" });
     const reportsRoute = await Route.create({ name: "Reports", path: "/reports" });
-    console.log("✔ Routes created: Dashboard, Couriers, Users, Reports");
+    const salesRoute = await Route.create({ name: "Sells", path: "/sells" });
+    const accountSalesRoute = await Route.create({ name: "Account Sells", path: "/account/sells" });
+    const accountExpenseRoute = await Route.create({ name: "Expense", path: "/account/expense" });
+    const accountDebitedRoute = await Route.create({ name: "Debited", path: "/account/debited" });
+    console.log("✔ Routes created: Dashboard, Couriers, Customers, Users, Reports, Sells, Account/Sells, Account/Expense, Account/Debited");
 
     // 3. Create Permissions
     // Admin permissions: Full access on all routes
-    const adminRoutes = [dashboardRoute, couriersRoute, usersRoute, reportsRoute];
+    const adminRoutes = [
+      dashboardRoute,
+      couriersRoute,
+      customersRoute,
+      usersRoute,
+      reportsRoute,
+      salesRoute,
+      accountSalesRoute,
+      accountExpenseRoute,
+      accountDebitedRoute,
+    ];
     for (const route of adminRoutes) {
       await Permission.create({
         roleId: adminRole.id,
@@ -70,6 +105,15 @@ const runSeeder = async () => {
       canUpdate: true,
       canDelete: false,
     });
+    // - Customers: Read, Create, Update, but NO Delete (for Sales users)
+    await Permission.create({
+      roleId: userRole.id,
+      routeId: customersRoute.id,
+      canRead: true,
+      canCreate: true,
+      canUpdate: true,
+      canDelete: false,
+    });
     // - Users: No permissions (canRead = false)
     await Permission.create({
       roleId: userRole.id,
@@ -83,6 +127,44 @@ const runSeeder = async () => {
     await Permission.create({
       roleId: userRole.id,
       routeId: reportsRoute.id,
+      canRead: false,
+      canCreate: false,
+      canUpdate: false,
+      canDelete: false,
+    });
+
+    // - Sales (top-level): Read, Create, Update, Delete for Sales
+    await Permission.create({
+      roleId: userRole.id,
+      routeId: salesRoute.id,
+      canRead: true,
+      canCreate: true,
+      canUpdate: true,
+      canDelete: true,
+    });
+
+    // - Account / Sales: Read only
+    await Permission.create({
+      roleId: userRole.id,
+      routeId: accountSalesRoute.id,
+      canRead: true,
+      canCreate: false,
+      canUpdate: false,
+      canDelete: false,
+    });
+    // - Account / Expense: No permissions
+    await Permission.create({
+      roleId: userRole.id,
+      routeId: accountExpenseRoute.id,
+      canRead: false,
+      canCreate: false,
+      canUpdate: false,
+      canDelete: false,
+    });
+    // - Account / Debited: No permissions
+    await Permission.create({
+      roleId: userRole.id,
+      routeId: accountDebitedRoute.id,
       canRead: false,
       canCreate: false,
       canUpdate: false,
@@ -149,13 +231,82 @@ const runSeeder = async () => {
       userId: darshilUser.id,
     });
 
-    await Courier.create({
-      name: "Vrag Swift Post",
-      email: "vrag.swift@example.com",
-      phone: "+91 88888 77777",
-      userId: vragUser.id,
+    // 6. Create Sample Products & Initial Stocks
+    const productA = await Product.create({
+      name: "Engine Oil 15W-40 (1L)",
+      description: "Premium synthetic blend engine oil",
     });
-    console.log("✔ Test courier records seeded successfully linked to owners");
+    const productB = await Product.create({
+      name: "Brake Pads Set (Front)",
+      description: "Ceramic brake pads for commercial vehicles",
+    });
+    const productC = await Product.create({
+      name: "Air Filter Standard",
+      description: "High-flow OEM replacement air filter",
+    });
+
+    await Stock.create({ productId: productA.id, quantity: 10 });
+    await Stock.create({ productId: productB.id, quantity: 5 });
+    await Stock.create({ productId: productC.id, quantity: 20 });
+
+    await StockMovement.create({
+      productId: productA.id,
+      type: "PURCHASE",
+      quantity: 10,
+      referenceType: "manual",
+      createdBy: adminUser.id,
+      notes: "Opening stock",
+    });
+    await StockMovement.create({
+      productId: productB.id,
+      type: "PURCHASE",
+      quantity: 5,
+      referenceType: "manual",
+      createdBy: adminUser.id,
+      notes: "Opening stock",
+    });
+    await StockMovement.create({
+      productId: productC.id,
+      type: "PURCHASE",
+      quantity: 20,
+      referenceType: "manual",
+      createdBy: adminUser.id,
+      notes: "Opening stock",
+    });
+    console.log("✔ Sample products & initial stocks seeded: Engine Oil (10), Brake Pads (5), Air Filter (20)");
+
+    // 7. Create Sample Customers
+    await Customer.create({
+      name: "Parth Patel",
+      phone: "9876543210",
+      email: "parth.patel@example.com",
+      address: "XYZ Street, Mavdi Road",
+      city: "Rajkot",
+      pincode: "360001",
+      notes: "Preferred customer, wholesale buyer",
+      createdBy: adminUser.id,
+    });
+    await Customer.create({
+      name: "Ramesh Shah",
+      phone: "9825012345",
+      email: "ramesh.shah@example.com",
+      address: "12 Ring Road, Satellite",
+      city: "Ahmedabad",
+      pincode: "380015",
+      notes: "Regular commercial vehicle fleet customer",
+      createdBy: adminUser.id,
+    });
+    await Customer.create({
+      name: "Suresh Mehta",
+      phone: "9909055443",
+      email: "suresh.mehta@example.com",
+      address: "Station Road, Varachha",
+      city: "Surat",
+      pincode: "395003",
+      notes: "Retail garage workshop owner",
+      createdBy: adminUser.id,
+    });
+    console.log("✔ Sample customers seeded: Parth Patel (9876543210), Ramesh Shah (9825012345), Suresh Mehta (9909055443)");
 
     console.log("Seeding complete! Database is ready.");
     process.exit(0);
