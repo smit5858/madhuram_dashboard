@@ -1,337 +1,31 @@
-const { Sale, SaleItem, Product, Stock, StockMovement, Notification, User, Customer } = require("../models");
+const { Sale, SaleItem, Product, Customer, User, SerialUnit, Courier, Payment } = require("../models");
 const sequelize = require("../config/db");
 const { Op } = require("sequelize");
-const { getIO } = require("../socket");
+const orderService = require("../services/order.service");
 
-/**
- * Generate a sequential invoice number: MM-YYYYMM-XXXX
- * e.g. MM-202608-0001
- */
-const generateInvoiceNumber = async (t) => {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const year = now.getFullYear();
-  const prefix = `MM-${year}${month}`;
-
-  const lastSale = await Sale.findOne({
-    where: { invoiceNumber: { [Op.like]: `${prefix}-%` } },
-    order: [["id", "DESC"]],
-    lock: true,
-    transaction: t,
-  });
-
-  let seq = 1;
-  if (lastSale && lastSale.invoiceNumber) {
-    const parts = lastSale.invoiceNumber.split("-");
-    seq = parseInt(parts[parts.length - 1]) + 1;
-  }
-
-  return `${prefix}-${String(seq).padStart(4, "0")}`;
+const errorResponse = (res, err) => {
+  const status = err.statusCode || 500;
+  return res.status(status).json({ success: false, message: err.message });
 };
 
-// POST /sales
+// POST /sells
 exports.createSale = async (req, res) => {
-  const t = await sequelize.transaction();
   try {
     const user = req.user;
-    const {
-      platform,
-      customerId: inputCustomerId,
-      customerName,
-      customerNumber,
-      paymentMethod,
-      city,
-      fromAddress,
-      pincode,
-      sellingAmount,
-      collectedAmount,
-      notes,
-      items, // Array of { productId, quantity, sellingPrice }
-    } = req.body || {};
-
-    // ── Validation ────────────────────────────────────────────
-    if (!customerName || !customerName.trim()) {
-      await t.rollback();
-      return res.status(400).json({ success: false, message: "Customer name is required" });
-    }
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      await t.rollback();
-      return res.status(400).json({ success: false, message: "At least one sale item is required" });
-    }
-    for (const item of items) {
-      if (!item.productId || !item.quantity || item.quantity < 1) {
-        await t.rollback();
-        return res.status(400).json({ success: false, message: "Each item must have a valid productId and quantity ≥ 1" });
-      }
-    }
-
-    const selling = parseFloat(sellingAmount) || 0;
-    const collected = parseFloat(collectedAmount) || 0;
-    // Backend-enforced: never trust frontend for pendingAmount
-    const pending = Math.max(0, selling - collected);
-
-    // ── Customer Resolution / Creation (Transactional) ────────
-    let finalCustomerId = inputCustomerId || null;
-    const trimmedPhone = customerNumber ? customerNumber.trim() : null;
-
-    if (finalCustomerId) {
-      // Validate provided customerId
-      const existingCustomer = await Customer.findByPk(finalCustomerId, { transaction: t, lock: true });
-      if (!existingCustomer) {
-        finalCustomerId = null;
-      }
-    }
-
-    if (!finalCustomerId && trimmedPhone) {
-      // Find existing customer by phone within transaction
-      let customer = await Customer.findOne({
-        where: {
-          [Op.or]: [
-            { phone: trimmedPhone },
-            { phone: { [Op.like]: `%${trimmedPhone.slice(-10)}` } },
-          ],
-        },
-        transaction: t,
-        lock: true,
-      });
-
-      if (customer) {
-        finalCustomerId = customer.id;
-        // Optionally update any missing fields on existing customer
-        let needsUpdate = false;
-        if (!customer.address && fromAddress) {
-          customer.address = fromAddress.trim();
-          needsUpdate = true;
-        }
-        if (!customer.city && city) {
-          customer.city = city.trim();
-          needsUpdate = true;
-        }
-        if (!customer.pincode && pincode) {
-          customer.pincode = pincode.trim();
-          needsUpdate = true;
-        }
-        if (needsUpdate) {
-          await customer.save({ transaction: t });
-        }
-      } else {
-        // Create new Customer record within transaction
-        const newCustomer = await Customer.create(
-          {
-            name: customerName.trim(),
-            phone: trimmedPhone,
-            address: fromAddress ? fromAddress.trim() : null,
-            city: city ? city.trim() : null,
-            pincode: pincode ? pincode.trim() : null,
-            createdBy: user.id,
-          },
-          { transaction: t }
-        );
-        finalCustomerId = newCustomer.id;
-      }
-    }
-
-    // ── Generate invoice number ────────────────────────────────
-    const invoiceNumber = await generateInvoiceNumber(t);
-
-    // ── Create Sale ────────────────────────────────────────────
-    const sale = await Sale.create(
-      {
-        invoiceNumber,
-        platform: platform || null,
-        customerId: finalCustomerId,
-        customerName: customerName.trim(),
-        customerNumber: trimmedPhone,
-        paymentMethod: paymentMethod || null,
-        city: city || null,
-        fromAddress: fromAddress || null,
-        pincode: pincode || null,
-        sellingAmount: selling,
-        collectedAmount: collected,
-        pendingAmount: pending,
-        status: "PENDING",
-        notes: notes || null,
-        createdBy: user.id,
-      },
-      { transaction: t }
-    );
-
-    // ── Process each sale item ─────────────────────────────────
-    const saleItemsResult = [];
-
-    for (const item of items) {
-      // Verify product exists
-      const product = await Product.findByPk(item.productId, { transaction: t });
-      if (!product) {
-        await t.rollback();
-        return res.status(404).json({
-          success: false,
-          message: `Product ID ${item.productId} not found`,
-        });
-      }
-
-      // Find or create stock record for this product
-      let [stock] = await Stock.findOrCreate({
-        where: { productId: item.productId },
-        defaults: { productId: item.productId, quantity: 0 },
-        transaction: t,
-        lock: true,
-      });
-
-      const requested = parseInt(item.quantity);
-      const available = stock.quantity;
-
-      // Determine how much can be fulfilled
-      const canFulfill = Math.min(available, requested);
-      const shortage = requested - canFulfill;
-
-      let fulfillmentStatus = "FULFILLED";
-      if (canFulfill === 0) {
-        fulfillmentStatus = "OUT_OF_STOCK";
-      } else if (shortage > 0) {
-        fulfillmentStatus = "PARTIAL";
-      }
-
-      // Create SaleItem — shortageQuantity records the gap
-      const saleItem = await SaleItem.create(
-        {
-          saleId: sale.id,
-          productId: item.productId,
-          quantity: requested,
-          sellingPrice: parseFloat(item.sellingPrice) || 0,
-          fulfillmentStatus,
-          shortageQuantity: shortage,
-        },
-        { transaction: t }
-      );
-
-      // Deduct only the available stock (never go negative)
-      if (canFulfill > 0) {
-        stock.quantity = available - canFulfill;
-        await stock.save({ transaction: t });
-      }
-
-      // Create StockMovement audit record
-      await StockMovement.create(
-        {
-          productId: item.productId,
-          type: "SALE",
-          quantity: -canFulfill, // negative = stock out
-          referenceType: "sale",
-          referenceId: sale.id,
-          createdBy: user.id,
-          notes: `Sale ${invoiceNumber} — ${product.name} × ${requested}${shortage > 0 ? ` (shortage: ${shortage})` : ""}`,
-        },
-        { transaction: t }
-      );
-
-      saleItemsResult.push({
-        ...saleItem.toJSON(),
-        productName: product.name,
-        availableWas: available,
-        fulfilled: canFulfill,
-        shortage,
-        fulfillmentStatus,
-      });
-    }
-
-    // ── COMMIT ─────────────────────────────────────────────────
-    await t.commit();
-
-    // ── Build notification payload (after commit) ──────────────
-    const creatorName = user ? (user.name || user.email || `User #${user.id}`) : "Sells Member";
-    const dateFormatted = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-    const productSummary = saleItemsResult
-      .map((i) => `${i.productName} × ${i.quantity}`)
-      .join(", ");
-
-    const adminNotifData = {
-      recipientModule: "admin",
-      type: "NEW_SALE",
-      title: "New Sells Entry",
-      message: `Customer: ${customerName}\nAmount: ₹${selling.toFixed(2)}\nCreated by: ${creatorName}\nDate: ${dateFormatted}`,
-      referenceType: "sale",
-      referenceId: sale.id,
-    };
-
-    const accountNotifData = {
-      recipientModule: "account",
-      type: "NEW_SALE",
-      title: "New Sells Entry",
-      message: `Customer: ${customerName}\nAmount: ₹${selling.toFixed(2)}\nCreated by: ${creatorName}\nDate: ${dateFormatted}`,
-      referenceType: "sale",
-      referenceId: sale.id,
-    };
-
-    const courierNotifData = {
-      recipientModule: "couriers",
-      type: "NEW_SALE",
-      title: "New Sales Entry",
-      message: `Customer: ${customerName}\nCity: ${city || "—"}\nProducts: ${productSummary}\nAmount: ₹${selling.toFixed(2)}\nPayment: ${paymentMethod || "—"}`,
-      referenceType: "sale",
-      referenceId: sale.id,
-    };
-
-    // Fail-safe notification persistence & socket emits
-    try {
-      const [adminNotif, accountNotif, courierNotif] = await Promise.all([
-        Notification.create(adminNotifData),
-        Notification.create(accountNotifData),
-        Notification.create(courierNotifData),
-      ]);
-
-      try {
-        const io = getIO();
-        io.to("admin").emit("new_sale", {
-          notification: adminNotif,
-          sale: { id: sale.id, invoiceNumber, customerName, sellingAmount: selling, createdBy: user.id, creatorName },
-        });
-        io.to("account").emit("new_sale", {
-          notification: accountNotif,
-          sale: { id: sale.id, invoiceNumber, customerName, sellingAmount: selling, collectedAmount: collected, pendingAmount: pending },
-        });
-        io.to("couriers").emit("new_sale", {
-          notification: courierNotif,
-          sale: { id: sale.id, invoiceNumber, customerName, city },
-        });
-      } catch (socketErr) {
-        console.warn("WebSocket emit failed:", socketErr.message);
-      }
-    } catch (notifErr) {
-      console.warn("Sale creation notification failed:", notifErr.message);
-    }
-
-    return res.status(201).json({
-      success: true,
-      message: "Sale created successfully",
-      data: {
-        ...sale.toJSON(),
-        items: saleItemsResult,
-      },
-    });
+    const sale = await orderService.createOrder({ ...req.body, userId: user.id });
+    return res.status(201).json({ success: true, message: "Sale created successfully", data: sale });
   } catch (err) {
-    if (!t.finished) await t.rollback();
-    return res.status(500).json({ success: false, message: err.message });
+    return errorResponse(res, err);
   }
 };
 
-// GET /sales
+// GET /sells
 exports.getSales = async (req, res) => {
   try {
     const user = req.user;
     const isAdmin = user && user.roleName === "Admin";
 
-    const {
-      platform,
-      paymentMethod,
-      status,
-      city,
-      startDate,
-      endDate,
-      customerName,
-      userId,
-      createdBy,
-    } = req.query;
+    const { platform, paymentMethod, status, city, startDate, endDate, customerName, userId, createdBy } = req.query;
 
     const where = {};
 
@@ -363,32 +57,24 @@ exports.getSales = async (req, res) => {
     const sales = await Sale.findAll({
       where,
       include: [
-        {
-          model: Customer,
-          as: "customer",
-          attributes: ["id", "name", "phone", "email", "address", "city", "pincode"],
-        },
+        { model: Customer, as: "customer", attributes: ["id", "name", "phone", "email", "address", "city", "pincode"] },
         {
           model: SaleItem,
           as: "items",
-          include: [{ model: Product, attributes: ["id", "name"] }],
+          include: [{ model: Product, attributes: ["id", "name", "productType"] }],
         },
-        {
-          model: User,
-          as: "creator",
-          attributes: ["id", "name", "email"],
-        },
+        { model: User, as: "creator", attributes: ["id", "name", "email"] },
       ],
       order: [["createdAt", "DESC"]],
     });
 
     return res.status(200).json({ success: true, data: sales });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return errorResponse(res, err);
   }
 };
 
-// GET /sales/totals
+// GET /sells/totals
 exports.getSellsTotals = async (req, res) => {
   try {
     const user = req.user;
@@ -431,11 +117,11 @@ exports.getSellsTotals = async (req, res) => {
       },
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return errorResponse(res, err);
   }
 };
 
-// GET /sales/:id
+// GET /sells/:id
 exports.getSaleById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -444,22 +130,24 @@ exports.getSaleById = async (req, res) => {
 
     const sale = await Sale.findByPk(id, {
       include: [
-        {
-          model: Customer,
-          as: "customer",
-          attributes: ["id", "name", "phone", "email", "address", "city", "pincode"],
-        },
+        { model: Customer, as: "customer", attributes: ["id", "name", "phone", "email", "address", "city", "pincode"] },
         {
           model: SaleItem,
           as: "items",
-          include: [{ model: Product, attributes: ["id", "name", "description"] }],
+          include: [
+            { model: Product, attributes: ["id", "name", "description", "productType"] },
+            { model: SerialUnit, attributes: ["id", "serialNumber", "status"] },
+            { model: Courier, attributes: ["id", "courierName", "trackId", "pending", "completedDate", "quantity"] },
+          ],
         },
+        { model: User, as: "creator", attributes: ["id", "name", "email"] },
         {
-          model: User,
-          as: "creator",
-          attributes: ["id", "name", "email"],
+          model: Payment,
+          as: "payments",
+          include: [{ model: User, as: "creator", attributes: ["id", "name"] }],
         },
       ],
+      order: [[{ model: Payment, as: "payments" }, "createdAt", "ASC"]],
     });
 
     if (!sale) {
@@ -472,11 +160,11 @@ exports.getSaleById = async (req, res) => {
 
     return res.status(200).json({ success: true, data: sale });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return errorResponse(res, err);
   }
 };
 
-// PUT /sales/:id
+// PUT /sells/:id — header edits only, never touches items/stock/fulfillment
 exports.updateSale = async (req, res) => {
   try {
     const { id } = req.params;
@@ -518,24 +206,24 @@ exports.updateSale = async (req, res) => {
     if (status !== undefined) sale.status = status;
     if (notes !== undefined) sale.notes = notes;
 
-    // Recompute pending if amounts changed
     if (sellingAmount !== undefined) sale.sellingAmount = parseFloat(sellingAmount);
     if (collectedAmount !== undefined) sale.collectedAmount = parseFloat(collectedAmount);
     sale.pendingAmount = Math.max(0, parseFloat(sale.sellingAmount) - parseFloat(sale.collectedAmount));
+    sale.paymentStatus = orderService.computePaymentStatus({
+      sellingAmount: parseFloat(sale.sellingAmount),
+      collectedAmount: parseFloat(sale.collectedAmount),
+      refundedAmount: parseFloat(sale.refundedAmount),
+    });
 
     await sale.save();
 
-    return res.status(200).json({
-      success: true,
-      message: "Sale updated successfully",
-      data: sale,
-    });
+    return res.status(200).json({ success: true, message: "Sale updated successfully", data: sale });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return errorResponse(res, err);
   }
 };
 
-// DELETE /sales/:id
+// DELETE /sells/:id — cancels the order, releasing any unfulfilled reservations
 exports.deleteSale = async (req, res) => {
   try {
     const { id } = req.params;
@@ -546,20 +234,169 @@ exports.deleteSale = async (req, res) => {
     if (!sale) {
       return res.status(404).json({ success: false, message: "Sale not found" });
     }
-
     if (!isAdmin && sale.createdBy !== user.id) {
-      return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to delete this sale" });
+      return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to cancel this sale" });
     }
 
-    // Soft-delete: mark as CANCELLED to preserve audit trail
-    sale.status = "CANCELLED";
-    await sale.save();
+    await orderService.cancelOrder({ saleId: id, userId: user.id });
+
+    return res.status(200).json({ success: true, message: "Sale cancelled successfully" });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// GET /sells/:id/payments
+exports.getPayments = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = req.user;
+    const isAdmin = user && user.roleName === "Admin";
+
+    const sale = await Sale.findByPk(id);
+    if (!sale) {
+      return res.status(404).json({ success: false, message: "Sale not found" });
+    }
+    if (!isAdmin && sale.createdBy !== user.id) {
+      return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to view this sale's payments" });
+    }
+
+    const payments = await Payment.findAll({
+      where: { saleId: id },
+      include: [{ model: User, as: "creator", attributes: ["id", "name"] }],
+      order: [["createdAt", "ASC"]],
+    });
+
+    return res.status(200).json({ success: true, data: payments });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// GET /sells/payments?search=&start_date=&end_date=&page=&limit=
+// Cross-sale ledger of every payment collected (Account section). Non-admin users only see
+// payments on sales they created, matching the ownership scoping used by getSales/getPayments.
+exports.getAllPayments = async (req, res) => {
+  try {
+    const user = req.user;
+    const isAdmin = user && user.roleName === "Admin";
+    const { search, start_date, end_date, page, limit } = req.query;
+
+    const where = {};
+    if (start_date || end_date) {
+      where.createdAt = {};
+      if (start_date) where.createdAt[Op.gte] = new Date(start_date);
+      if (end_date) {
+        const end = new Date(end_date);
+        end.setHours(23, 59, 59, 999);
+        where.createdAt[Op.lte] = end;
+      }
+    }
+
+    const saleWhere = {};
+    if (!isAdmin) saleWhere.createdBy = user.id;
+    if (search && search.trim()) {
+      saleWhere.customerName = { [Op.like]: `%${search.trim()}%` };
+    }
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
+    const offset = (pageNum - 1) * limitNum;
+
+    const { count, rows } = await Payment.findAndCountAll({
+      where,
+      include: [
+        { model: Sale, where: saleWhere, attributes: ["id", "customerName", "sellingAmount", "paymentStatus"] },
+        { model: User, as: "creator", attributes: ["id", "name"] },
+      ],
+      order: [["createdAt", "DESC"]],
+      limit: limitNum,
+      offset,
+      distinct: true,
+    });
 
     return res.status(200).json({
       success: true,
-      message: "Sale cancelled successfully",
+      data: rows,
+      meta: {
+        page: pageNum,
+        limit: limitNum,
+        total: count,
+        totalPages: Math.ceil(count / limitNum) || 1,
+      },
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return errorResponse(res, err);
+  }
+};
+
+// POST /sells/:id/payments
+exports.recordPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = req.user;
+    const { amount, method, notes } = req.body || {};
+
+    const sale = await orderService.recordPayment({ saleId: id, amount, method, userId: user.id, notes });
+    return res.status(200).json({ success: true, message: "Payment recorded successfully", data: sale });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// POST /sells/:id/items/:itemId/fulfill
+exports.fulfillOrderItem = async (req, res) => {
+  try {
+    const { id, itemId } = req.params;
+    const user = req.user;
+    const { quantity, serialNumbers, courierName, trackId } = req.body || {};
+
+    const result = await orderService.fulfillOrderItem({
+      saleId: id,
+      saleItemId: itemId,
+      quantity,
+      serialNumbers,
+      courierName,
+      trackId,
+      userId: user.id,
+    });
+    return res.status(200).json({ success: true, message: "Order item fulfilled successfully", data: result });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// POST /sells/:id/items/:itemId/return
+exports.returnOrderItem = async (req, res) => {
+  try {
+    const { itemId } = req.params;
+    const user = req.user;
+    const { quantity, reason, refundAmount, serialNumbers } = req.body || {};
+
+    const item = await orderService.returnItem({
+      saleItemId: itemId,
+      quantity,
+      reason,
+      refundAmount,
+      serialNumbers,
+      userId: user.id,
+    });
+    return res.status(200).json({ success: true, message: "Return recorded successfully", data: item });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// POST /sells/:id/items/:itemId/cancel
+exports.cancelOrderItem = async (req, res) => {
+  try {
+    const { id, itemId } = req.params;
+    const user = req.user;
+    const { reason } = req.body || {};
+
+    const item = await orderService.cancelOrderItem({ saleId: id, saleItemId: itemId, reason, userId: user.id });
+    return res.status(200).json({ success: true, message: "Order item cancelled successfully", data: item });
+  } catch (err) {
+    return errorResponse(res, err);
   }
 };

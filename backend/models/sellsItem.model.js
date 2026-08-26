@@ -37,16 +37,43 @@ const SaleItem = sequelize.define(
       allowNull: true,
       defaultValue: 0,
     },
-    // FULFILLED = all stock available
-    // PARTIAL   = some stock available, shortage recorded
-    // OUT_OF_STOCK = no stock available at all
+    // PENDING              = not yet allocated
+    // PARTIALLY_FULFILLED  = some units shipped/delivered, some still allocated/backordered
+    // FULFILLED            = all requested units shipped/delivered
+    // BACKORDERED          = some/all units awaiting stock, none shipped yet
+    // CANCELLED            = line was cancelled before fulfillment
     fulfillmentStatus: {
-      type: DataTypes.ENUM("FULFILLED", "PARTIAL", "OUT_OF_STOCK"),
-      defaultValue: "FULFILLED",
+      type: DataTypes.ENUM("PENDING", "PARTIALLY_FULFILLED", "FULFILLED", "BACKORDERED", "CANCELLED"),
+      defaultValue: "PENDING",
     },
-    // How many units could NOT be fulfilled from available stock
+    // Deprecated — superseded by allocatedQuantity/fulfilledQuantity/backorderedQuantity below.
+    // Kept (not renamed) because Sequelize sync(alter:true) cannot safely rename columns.
     shortageQuantity: {
       type: DataTypes.INTEGER,
+      defaultValue: 0,
+    },
+    // Reserved for this order, not yet shipped/delivered
+    allocatedQuantity: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
+    // Actually shipped / license delivered — immutable historical fact, never decremented by returns
+    fulfilledQuantity: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
+    // Requested but no stock exists yet — pending a future receiveStock's FIFO sweep
+    backorderedQuantity: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
+    // Informational counter — does not decrement fulfilledQuantity
+    returnedQuantity: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
       defaultValue: 0,
     },
   },

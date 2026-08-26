@@ -17,6 +17,11 @@ const Product = sequelize.define(
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    productType: {
+      type: DataTypes.ENUM("NON_SERIAL", "SERIALIZED"),
+      allowNull: false,
+      defaultValue: "NON_SERIAL",
+    },
     isActive: {
       type: DataTypes.BOOLEAN,
       defaultValue: true,

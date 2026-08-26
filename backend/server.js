@@ -11,6 +11,13 @@ const sequelize = require("./config/db");
 const { init: initSocket } = require("./socket");
 
 const app = express();
+// This is a JSON API, not a static file server — responses must never be cached or
+// conditionally revalidated (e.g. a create/update request coming back as 304).
+app.set("etag", false);
+app.use((req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -22,7 +29,10 @@ const customers = require("./routes/customer.routes");
 const sells = require("./routes/sells.routes");
 const products = require("./routes/product.routes");
 const stocks = require("./routes/stock.routes");
+const inventory = require("./routes/inventory.routes");
+const dealers = require("./routes/dealer.routes");
 const notifications = require("./routes/notification.routes");
+const users = require("./routes/user.routes");
 
 app.get("/", (req, res) => res.send("API running"));
 app.use("/auth", auth);
@@ -34,7 +44,10 @@ app.use("/sells", sells);
 app.use("/sales", sells);
 app.use("/products", products);
 app.use("/stock", stocks);
+app.use("/inventory", inventory);
+app.use("/dealers", dealers);
 app.use("/notifications", notifications);
+app.use("/users", users);
 
 
 const PORT = process.env.PORT || 3000;
@@ -53,6 +66,8 @@ const ensureAllRoutesAndPermissions = async () => {
       { name: "Sells", path: "/sells" },
       { name: "Products", path: "/products" },
       { name: "Stock", path: "/stock" },
+      { name: "Inventory", path: "/inventory" },
+      { name: "Dealers", path: "/dealers" },
       { name: "Users", path: "/users" },
       { name: "Reports", path: "/reports" },
       { name: "Account", path: "/account" },
@@ -92,12 +107,13 @@ const ensureAllRoutesAndPermissions = async () => {
           canDelete = true;
         } else {
           // Sales / User Role
-          if (["/sells", "/customers", "/products", "/stock", "/couriers"].includes(path)) {
+          if (["/sells", "/customers", "/products", "/stock", "/inventory", "/dealers", "/couriers"].includes(path)) {
             canRead = true;
             canCreate = true;
             canUpdate = true;
             canDelete = false; // NO delete permission for Sales
-          } else if (path === "/dashboard" || path === "/account" || path === "/account/sells") {
+          } else if (path === "/dashboard" || path === "/account" || path === "/account/sells" || path === "/users") {
+            // Users module: non-admin gets read-only access (view list/details), no create/update/delete
             canRead = true;
             canCreate = false;
             canUpdate = false;

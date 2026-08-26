@@ -1,8 +1,10 @@
 import { useNavigate, useRouteError } from "react-router-dom";
+import { useDocumentTitle } from "@/hook/useDocumentTitle";
 
 const Error = () => {
     const navigate = useNavigate();
     const error: any = useRouteError();
+    useDocumentTitle("Error");
 
     const isChunkLoadError =
         error?.message?.includes(
@@ -197,7 +199,7 @@ const Error = () => {
                                     onClick={handleDashboard}
                                     className="inline-flex items-center justify-center gap-2 rounded-lg border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 px-5 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-300 transition hover:bg-black/10 dark:hover:bg-white/10 hover:text-slate-900 dark:hover:text-white active:scale-[0.98]"
                                 >
-                                    Back to Dashboard
+                                    Back to Home
                                 </button>
                             </div>
                         </div>

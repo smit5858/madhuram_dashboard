@@ -18,13 +18,47 @@ const StockMovement = sequelize.define(
       },
     },
     type: {
-      type: DataTypes.ENUM("PURCHASE", "SALE", "RETURN", "ADJUSTMENT"),
+      type: DataTypes.ENUM(
+        "PURCHASE",
+        "SALE",
+        "RESERVATION",
+        "RELEASE",
+        "RETURN",
+        "ADJUSTMENT",
+        "DAMAGE",
+        "TRANSFER"
+      ),
       allowNull: false,
     },
-    // Positive = stock added, Negative = stock deducted
+    // On-hand quantity delta. Positive = stock added, Negative = stock deducted.
+    // Always 0 for RESERVATION/RELEASE, which only move the `reserved` sub-counter.
     quantity: {
       type: DataTypes.INTEGER,
       allowNull: false,
+      defaultValue: 0,
+    },
+    // Reserved-counter delta. Always 0 except for RESERVATION (positive) and RELEASE (negative).
+    reservedDelta: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
+    // PURCHASE rows only — cost/dealer/date for this specific batch. Null on every other type.
+    purchasePrice: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+    },
+    dealerId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: "dealers",
+        key: "id",
+      },
+    },
+    purchaseDate: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
     },
     referenceType: {
       type: DataTypes.STRING,

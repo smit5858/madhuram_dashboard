@@ -22,8 +22,13 @@ export interface CourierData {
     pending?: boolean;
     note?: string;
     completedDate?: string;
+    quantity?: number | string | null;
+    /** OUT = we ship to the customer (outbound). IN = customer/vendor ships to us (inbound). */
+    direction?: "IN" | "OUT";
 
     userId?: number;
+    saleId?: number | null;
+    saleItemId?: number | null;
     User?: {
         id: number;
         name: string;
@@ -34,7 +39,7 @@ export interface CourierData {
 }
 
 /** Fetch couriers — backend applies city scope automatically for non-Admin users. */
-const getCouriers = (params?: { productName?: string }) =>
+const getCouriers = (params?: { productName?: string; direction?: "IN" | "OUT" }) =>
     httpService.get<{ success: boolean; data: CourierData[] }>("/couriers", { params });
 
 const getCourierById = (id: number) =>

@@ -12,10 +12,12 @@ import FormikInput from '../../shared/components/formik-fields/FormikInput';
 import { loginSchema, type LoginFormValues } from '@/validation/login.validation';
 import { useNavigate } from 'react-router-dom';
 import { login, setPermissions } from '@/store/slices/authSlice';
+import { useDocumentTitle } from '@/hook/useDocumentTitle';
 
 const Login = () => {
     const navigate = useNavigate();
     const dispatch = useDispatch();
+    useDocumentTitle("Login");
 
     const { mutate: loginMutation, isPending: loginLoading } = useMutation({
         mutationFn: (values: { email: string; password: string }) =>

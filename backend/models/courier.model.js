@@ -86,6 +86,39 @@ const Courier = sequelize.define(
         key: "id",
       },
     },
+
+    // Link back to the order this courier record was auto-created for
+    // (nullable: manually-created courier entries have no linked sale)
+    saleId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: "sells",
+        key: "id",
+      },
+    },
+    saleItemId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: "sells_items",
+        key: "id",
+      },
+    },
+    // Units covered by this courier record. Set for sale-linked rows created by
+    // orderService.fulfillOrderItem (one row per shipment batch); null for manual entries.
+    quantity: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+
+    // OUT = we ship to the customer (outbound; auto-created on order fulfillment).
+    // IN = a customer or vendor ships something to us (inbound; manual entries only).
+    direction: {
+      type: DataTypes.ENUM("IN", "OUT"),
+      allowNull: false,
+      defaultValue: "OUT",
+    },
   },
   {
     tableName: "couriers",

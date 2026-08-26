@@ -16,12 +16,13 @@ const Route = sequelize.define(
     path: {
       type: DataTypes.STRING,
       allowNull: false,
-      unique: true,
     },
   },
   {
     tableName: "routes",
     timestamps: true,
+    // Named index, not inline unique:true — see role.model.js for why.
+    indexes: [{ unique: true, fields: ["path"] }],
   }
 );
 

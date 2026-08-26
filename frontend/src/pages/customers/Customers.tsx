@@ -537,10 +537,14 @@ const Customers = () => {
                     Phone Number *
                   </label>
                   <input
-                    type="text"
+                    type="tel"
                     required
                     value={formPhone}
-                    onChange={(e) => setFormPhone(e.target.value)}
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/\D/g, "").slice(0, 10);
+                      setFormPhone(value);
+                    }}
+                    maxLength={10}
                     placeholder="9876543210"
                     className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                   />
@@ -630,8 +634,8 @@ const Customers = () => {
                   {createCustomerMutation.isPending || updateCustomerMutation.isPending
                     ? "Saving..."
                     : selectedCustomer
-                    ? "Update Customer"
-                    : "Save Customer"}
+                      ? "Update Customer"
+                      : "Save Customer"}
                 </button>
               </div>
             </form>

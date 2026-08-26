@@ -10,6 +10,8 @@ const Dashboard = lazy(() => import('../pages/dashboard/Dashboard'));
 const Couriers = lazy(() => import('../pages/couriers/Couriers'));
 const Customers = lazy(() => import('../pages/customers/Customers'));
 const Sells = lazy(() => import('../pages/sells/Sells'));
+const Users = lazy(() => import('../pages/users/Users'));
+const Products = lazy(() => import('../pages/products/Products'));
 const AccountSells = lazy(() => import('../pages/account/Sells'));
 const Expense = lazy(() => import('../pages/account/Expense'));
 const Debited = lazy(() => import('../pages/account/Debited'));
@@ -93,7 +95,7 @@ const routesConfig = [
             <PermissionGuard requiredPath="/products">
               <Suspense fallback={<LoadingFallback />}>
                 <MainLayout>
-                  <Sells />
+                  <Products />
                 </MainLayout>
               </Suspense>
             </PermissionGuard>
@@ -108,6 +110,20 @@ const routesConfig = [
               <Suspense fallback={<LoadingFallback />}>
                 <MainLayout>
                   <Sells />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.Users,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/users">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <Users />
                 </MainLayout>
               </Suspense>
             </PermissionGuard>

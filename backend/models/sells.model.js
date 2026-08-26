@@ -12,7 +12,6 @@ const Sale = sequelize.define(
     invoiceNumber: {
       type: DataTypes.STRING,
       allowNull: true,
-      unique: true,
     },
     platform: {
       type: DataTypes.STRING,
@@ -66,6 +65,24 @@ const Sale = sequelize.define(
       allowNull: false,
       defaultValue: 0,
     },
+    // Backend-computed, refunded portion of collectedAmount
+    refundedAmount: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0,
+    },
+    // Backend-derived from sellingAmount/collectedAmount/refundedAmount — never set directly
+    paymentStatus: {
+      type: DataTypes.ENUM("UNPAID", "PARTIALLY_PAID", "PAID", "REFUNDED", "PARTIALLY_REFUNDED"),
+      allowNull: false,
+      defaultValue: "UNPAID",
+    },
+    // Backend-derived aggregate of item.fulfillmentStatus — independent of paymentStatus
+    fulfillmentStatus: {
+      type: DataTypes.ENUM("PENDING", "PARTIALLY_FULFILLED", "FULFILLED", "BACKORDERED", "CANCELLED"),
+      allowNull: false,
+      defaultValue: "PENDING",
+    },
     status: {
       type: DataTypes.ENUM("PENDING", "CONFIRMED", "FULFILLED", "CANCELLED"),
       defaultValue: "PENDING",
@@ -86,6 +103,8 @@ const Sale = sequelize.define(
   {
     tableName: "sells",
     timestamps: true,
+    // Named index, not inline unique:true — see role.model.js for why.
+    indexes: [{ unique: true, fields: ["invoiceNumber"] }],
   }
 );
 

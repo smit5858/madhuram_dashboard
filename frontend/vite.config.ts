@@ -5,9 +5,12 @@ import path from "path";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  resolve: {                              
-    alias: {                              
-      "@": path.resolve(__dirname, "./src"), 
-    },                                     
+  // Vite only exposes VITE_-prefixed env vars to the client by default;
+  // GOOGLE_ADDRESS_API_KEY is opted in explicitly here rather than renamed.
+  envPrefix: ["VITE_", "GOOGLE_ADDRESS_API_KEY"],
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
   },
 })

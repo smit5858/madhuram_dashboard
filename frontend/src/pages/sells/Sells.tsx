@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
+import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
-import { Plus, RotateCcw, Trash2, Eye, Edit2, AlertTriangle, CheckCircle2, XCircle, Package, IndianRupee, ShoppingBag, Search as SearchIcon, Download, ChevronDown, UserCheck, Loader2 } from "lucide-react";
+import { Plus, RotateCcw, Trash2, Eye, Edit2, AlertTriangle, CheckCircle2, XCircle, Package, IndianRupee, ShoppingBag, Search as SearchIcon, Download, ChevronDown, UserCheck, Loader2, X } from "lucide-react";
 import { Formik, Form, Field, useFormikContext } from "formik";
 import { useDebounce } from "@/hook/useDebounce";
 import { type RootState } from "../../store/store";
 import saleService, {
   type SaleData,
+  type SaleItemData,
   type CreateSalePayload,
   type SalesFilters,
   type SellsTotalsData,
@@ -16,11 +18,13 @@ import productService, {
   type ProductData,
 } from "../../services/product.service";
 import customerService, { type CustomerData } from "../../services/customer.service";
+import inventoryService from "../../services/inventory.service";
 
 interface FormItem {
   productId: number | "";
   quantity: number | "";
   sellingPrice: number | "";
+  serialNumbers: string[];
 }
 
 const PAYMENT_METHODS = [
@@ -68,8 +72,139 @@ const FilterSync = ({
   return null;
 };
 
+/** Autocomplete for picking exact serial-tracked units on a SERIALIZED product's order line.
+ *  Only AVAILABLE units for this product are offered, units already picked on another row
+ *  of the same sale are excluded so the same unit can't be added twice in one order, and
+ *  selection stops once `maxSelectable` (the line's quantity) is reached. */
+const SerialNumberPicker = ({
+  productId,
+  selected,
+  onChange,
+  excludeSerialNumbers = [],
+  maxSelectable,
+}: {
+  productId: number;
+  selected: string[];
+  onChange: (serials: string[]) => void;
+  excludeSerialNumbers?: string[];
+  maxSelectable: number;
+}) => {
+  const [query, setQuery] = useState("");
+  const [isOpen, setIsOpen] = useState(false);
+  const debouncedQuery = useDebounce(query, 300);
+  const isFull = selected.length >= maxSelectable;
+
+  const { data, isFetching } = useQuery({
+    queryKey: ["available-serials", productId, debouncedQuery],
+    queryFn: ({ signal }) =>
+      inventoryService.getSerials(
+        { productId, status: "AVAILABLE", serialNumber: debouncedQuery || undefined },
+        { signal }
+      ),
+    enabled: !!productId && isOpen && !isFull,
+  });
+
+  const results = (data?.data?.data || []).filter(
+    (s) => !selected.includes(s.serialNumber) && !excludeSerialNumbers.includes(s.serialNumber)
+  );
+
+  const handleSelect = (serialNumber: string) => {
+    if (isFull) return;
+    onChange([...selected, serialNumber]);
+    setQuery("");
+  };
+
+  const handleRemove = (serialNumber: string) => {
+    onChange(selected.filter((s) => s !== serialNumber));
+  };
+
+  return (
+    <div className="relative w-full">
+      <div className="flex items-center justify-between mb-0.5">
+        <label className="block text-[10px] font-semibold text-slate-500">
+          Serial Number{maxSelectable > 1 ? "s" : ""} *
+        </label>
+        <span
+          className={`text-[10px] font-bold ${isFull ? "text-emerald-600" : "text-slate-400"}`}
+        >
+          {selected.length} / {maxSelectable} selected
+        </span>
+      </div>
+
+      {selected.length > 0 && (
+        <div className="mb-1 flex flex-wrap gap-1">
+          {selected.map((s) => (
+            <span
+              key={s}
+              className="inline-flex items-center gap-1 rounded bg-blue-50 border border-blue-200 px-1.5 py-0.5 text-[10px] font-mono font-bold text-blue-700"
+            >
+              {s}
+              <button
+                type="button"
+                onClick={() => handleRemove(s)}
+                className="text-blue-400 hover:text-rose-600"
+                title="Remove"
+              >
+                <X className="h-2.5 w-2.5" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {isFull ? (
+        <p className="text-[11px] font-medium text-emerald-600">
+          All {maxSelectable} unit{maxSelectable > 1 ? "s" : ""} selected. Increase quantity above to add more.
+        </p>
+      ) : (
+      <div className="relative">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setIsOpen(true);
+          }}
+          onFocus={() => setIsOpen(true)}
+          onBlur={() => setTimeout(() => setIsOpen(false), 150)}
+          placeholder="Type to search, e.g. TC832"
+          className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-mono text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+        />
+
+        {isOpen && (
+          <div className="absolute z-40 left-0 right-0 top-full mt-1 max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-xl">
+            {isFetching ? (
+              <div className="flex items-center gap-1.5 px-2 py-2 text-[11px] text-slate-400">
+                <Loader2 className="h-3 w-3 animate-spin" /> Searching...
+              </div>
+            ) : results.length === 0 ? (
+              <div className="px-2 py-2 text-[11px] text-slate-400">
+                No available serial number{query ? ` matching "${query}"` : "s"} for this product.
+              </div>
+            ) : (
+              results.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => handleSelect(r.serialNumber)}
+                  className="block w-full rounded px-2 py-1.5 text-left text-xs font-mono font-semibold text-slate-800 hover:bg-blue-50"
+                >
+                  {r.serialNumber}
+                </button>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+      )}
+    </div>
+  );
+};
+
 const Sells = () => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const auth = useSelector((state: RootState) => state.auth);
   const { permissions } = auth;
   const isAdmin = auth.role === "Admin";
@@ -132,10 +267,11 @@ const Sells = () => {
     enabled: pagePermission.canRead,
   });
 
-  // Query: Products List (for dropdowns and stock display)
+  // Query: Products List (for dropdowns and stock display) — only active/sellable products,
+  // and the max page size since this dropdown needs the full catalog, not one page of it.
   const { data: productsResponse } = useQuery({
-    queryKey: ["products"],
-    queryFn: () => productService.getProducts(),
+    queryKey: ["products", "active-catalog"],
+    queryFn: () => productService.getProducts({ status: "active", limit: 100 }),
   });
 
   const productsList: ProductData[] = productsResponse?.data?.data || [];
@@ -177,7 +313,7 @@ const Sells = () => {
   const [manualSellingAmount, setManualSellingAmount] = useState<string>("");
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<FormItem[]>([
-    { productId: "", quantity: 1, sellingPrice: "" },
+    { productId: "", quantity: 1, sellingPrice: "", serialNumbers: [] },
   ]);
 
   // Debounced Customer Phone Lookup & Autocomplete for Sells Entry
@@ -273,10 +409,10 @@ const Sells = () => {
     effectiveSellingAmount - (Number(collectedAmount) || 0)
   );
 
-  // Mutation: Create Product (Quick Add)
+  // Mutation: Create Product (Quick Add) — always NON_SERIAL, this quick-add flow has no type selector
   const createProductMutation = useMutation({
     mutationFn: (data: { name: string; description?: string }) =>
-      productService.createProduct(data),
+      productService.createProduct({ ...data, productType: "NON_SERIAL" }),
     onSuccess: (res) => {
       toast.success("Product created successfully");
       queryClient.invalidateQueries({ queryKey: ["products"] });
@@ -312,6 +448,10 @@ const Sells = () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["customers"] });
       closeModal();
+      // Fulfillment (line items, shipping, courier history) happens on the
+      // Couriers page's "Pending Fulfillment" list — send the user there,
+      // but don't auto-open anything; they pick the entry themselves.
+      navigate("/couriers");
     },
     onError: (err: any) => {
       toast.error(
@@ -355,6 +495,39 @@ const Sells = () => {
     },
   });
 
+  // Query: full sale detail (items with fulfillment/courier breakdown + payment history) —
+  // the list query above only returns summary fields, so the detail modal fetches by id.
+  const { data: saleDetailResponse, isFetching: isDetailLoading } = useQuery({
+    queryKey: ["sale-detail", selectedSale?.id],
+    queryFn: () => saleService.getSaleById(selectedSale!.id!),
+    enabled: isDetailOpen && !!selectedSale?.id,
+  });
+  const saleDetail: SaleData | null = saleDetailResponse?.data?.data || null;
+  // Prefer the freshly-fetched detail (has payments + per-item courier history);
+  // fall back to the list-row summary while the detail query is still loading.
+  const detail: SaleData | null = saleDetail ?? selectedSale;
+
+  // Payment-history "Record Payment" mini-form state (inside the detail modal)
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentMethodInput, setPaymentMethodInput] = useState<string>("Cash");
+  const [paymentNotes, setPaymentNotes] = useState("");
+
+  const recordPaymentMutation = useMutation({
+    mutationFn: ({ saleId, amount, method, notes }: { saleId: number; amount: number; method: string; notes?: string }) =>
+      saleService.recordPayment(saleId, { amount, method, notes }),
+    onSuccess: (res) => {
+      toast.success(res.data?.message || "Payment recorded successfully");
+      queryClient.invalidateQueries({ queryKey: ["sells"] });
+      queryClient.invalidateQueries({ queryKey: ["sells-totals"] });
+      queryClient.invalidateQueries({ queryKey: ["sale-detail", selectedSale?.id] });
+      setPaymentAmount("");
+      setPaymentNotes("");
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.message || err.message || "Failed to record payment");
+    },
+  });
+
   const resetForm = () => {
     setCustomerId(null);
     setCustomerLookupStatus("idle");
@@ -371,7 +544,7 @@ const Sells = () => {
     setCollectedAmount("0");
     setManualSellingAmount("");
     setNotes("");
-    setItems([{ productId: "", quantity: 1, sellingPrice: "" }]);
+    setItems([{ productId: "", quantity: 1, sellingPrice: "", serialNumbers: [] }]);
     setSelectedSale(null);
   };
 
@@ -403,10 +576,11 @@ const Sells = () => {
           productId: i.productId,
           quantity: i.quantity,
           sellingPrice: i.sellingPrice,
+          serialNumbers: [],
         }))
       );
     } else {
-      setItems([{ productId: "", quantity: 1, sellingPrice: "" }]);
+      setItems([{ productId: "", quantity: 1, sellingPrice: "", serialNumbers: [] }]);
     }
     setIsModalOpen(true);
   };
@@ -416,10 +590,18 @@ const Sells = () => {
     resetForm();
   };
 
+  const closeDetailModal = () => {
+    setIsDetailOpen(false);
+    setSelectedSale(null);
+    setPaymentAmount("");
+    setPaymentMethodInput("Cash");
+    setPaymentNotes("");
+  };
+
   const handleAddItemRow = () => {
     setItems((prev) => [
       ...prev,
-      { productId: "", quantity: 1, sellingPrice: "" },
+      { productId: "", quantity: 1, sellingPrice: "", serialNumbers: [] },
     ]);
   };
 
@@ -443,6 +625,45 @@ const Sells = () => {
     });
   };
 
+  const handleProductSelect = (index: number, productId: number | "") => {
+    const selectedProduct = productId === "" ? null : productsList.find((p) => p.id === Number(productId)) || null;
+
+    setItems((prev) => {
+      const copy = [...prev];
+      copy[index] = {
+        ...copy[index],
+        productId: productId === "" ? "" : Number(productId),
+        sellingPrice: selectedProduct?.sellingPrice != null ? Number(selectedProduct.sellingPrice) : "",
+        // Serials belong to a specific product — always clear on product change.
+        serialNumbers: [],
+        quantity: copy[index].quantity || 1,
+      };
+      return copy;
+    });
+  };
+
+  const handleSerialNumbersChange = (index: number, serialNumbers: string[]) => {
+    setItems((prev) => {
+      const copy = [...prev];
+      copy[index] = { ...copy[index], serialNumbers };
+      return copy;
+    });
+  };
+
+  // For SERIALIZED rows, shrinking quantity below the number of already-picked serials
+  // trims the excess (from the end) so the two never drift out of sync.
+  const handleQuantityChange = (index: number, quantity: number | "") => {
+    setItems((prev) => {
+      const copy = [...prev];
+      const nextSerials =
+        quantity !== "" && copy[index].serialNumbers.length > Number(quantity)
+          ? copy[index].serialNumbers.slice(0, Number(quantity))
+          : copy[index].serialNumbers;
+      copy[index] = { ...copy[index], quantity, serialNumbers: nextSerials };
+      return copy;
+    });
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -462,12 +683,20 @@ const Sells = () => {
         toast.error(`Quantity for row #${i + 1} must be at least 1`);
         return;
       }
+      const product = productsList.find((p) => p.id === Number(item.productId));
+      if (product?.productType === "SERIALIZED" && item.serialNumbers.length !== Number(item.quantity)) {
+        toast.error(
+          `Select ${item.quantity} serial number(s) for ${product.name} (row #${i + 1}) — currently ${item.serialNumbers.length} selected`
+        );
+        return;
+      }
     }
 
     const payloadItems = items.map((i) => ({
       productId: Number(i.productId),
       quantity: Number(i.quantity),
       sellingPrice: Number(i.sellingPrice) || 0,
+      ...(i.serialNumbers.length > 0 ? { serialNumbers: i.serialNumbers } : {}),
     }));
 
     if (selectedSale?.id) {
@@ -484,7 +713,6 @@ const Sells = () => {
           fromAddress: fromAddress || undefined,
           pincode: pincode || undefined,
           sellingAmount: effectiveSellingAmount,
-          collectedAmount: Number(collectedAmount) || 0,
           notes: notes || undefined,
         },
       });
@@ -571,28 +799,44 @@ const Sells = () => {
     }
   };
 
-  // Helper: Fulfillment / Stock indicator badge
-  const renderItemStockIndicator = (item: any) => {
-    if (
-      item.fulfillmentStatus === "OUT_OF_STOCK" ||
-      item.shortageQuantity === item.quantity
-    ) {
+  // Helper: Fulfillment / Stock indicator badge — reads the backend's real
+  // allocated/fulfilled/backordered counters, not the removed shortage fields.
+  const renderItemStockIndicator = (item: SaleItemData) => {
+    const status = item.fulfillmentStatus;
+    const backordered = item.backorderedQuantity || 0;
+    const fulfilled = item.fulfilledQuantity || 0;
+
+    if (status === "CANCELLED") {
       return (
-        <span
-          className="inline-flex items-center gap-1 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700"
-          title="Product is Out of Stock"
-        >
-          <AlertTriangle className="h-3 w-3 text-red-600" /> Out of Stock (-1)
+        <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
+          <XCircle className="h-3 w-3" /> Cancelled
         </span>
       );
     }
-    if (item.fulfillmentStatus === "PARTIAL" || item.shortageQuantity > 0) {
+    if (status === "FULFILLED") {
+      return (
+        <span className="inline-flex items-center gap-0.5 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+          <CheckCircle2 className="h-2.5 w-2.5" /> Fulfilled
+        </span>
+      );
+    }
+    if (status === "PARTIALLY_FULFILLED") {
       return (
         <span
-          className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800"
-          title={`Shortage of ${item.shortageQuantity} units`}
+          className="inline-flex items-center gap-1 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold text-blue-800"
+          title={`${fulfilled} of ${item.quantity} shipped`}
         >
-          <AlertTriangle className="h-3 w-3" /> Shortage: {item.shortageQuantity}
+          <AlertTriangle className="h-3 w-3" /> Shipped {fulfilled}/{item.quantity}
+        </span>
+      );
+    }
+    if (backordered > 0) {
+      return (
+        <span
+          className="inline-flex items-center gap-1 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700"
+          title={`${backordered} unit(s) awaiting stock`}
+        >
+          <AlertTriangle className="h-3 w-3 text-red-600" /> Backordered: {backordered}
         </span>
       );
     }
@@ -607,7 +851,7 @@ const Sells = () => {
     <div className="p-6 bg-white rounded-xl shadow-md flex flex-col gap-6">
       {/* Top Summary Cards Banner */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50/60 to-white p-4 shadow-sm">
+        <div className="rounded-2xl border border-blue-100 bg-linear-to-br from-blue-50/60 to-white p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-blue-700">
               {isAdmin ? "Total Sells" : "My Total Sells"}
@@ -624,7 +868,7 @@ const Sells = () => {
           </p>
         </div>
 
-        <div className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50/60 to-white p-4 shadow-sm">
+        <div className="rounded-2xl border border-emerald-100 bg-linear-to-br from-emerald-50/60 to-white p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-emerald-700">
               Collected Amount
@@ -639,7 +883,7 @@ const Sells = () => {
           <p className="mt-1 text-[11px] text-slate-500">Total payments received</p>
         </div>
 
-        <div className="rounded-2xl border border-amber-100 bg-gradient-to-br from-amber-50/60 to-white p-4 shadow-sm">
+        <div className="rounded-2xl border border-amber-100 bg-linear-to-br from-amber-50/60 to-white p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-amber-700">
               Pending Amount
@@ -654,7 +898,7 @@ const Sells = () => {
           <p className="mt-1 text-[11px] text-slate-500">Outstanding balance</p>
         </div>
 
-        <div className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50/60 to-white p-4 shadow-sm">
+        <div className="rounded-2xl border border-indigo-100 bg-linear-to-br from-indigo-50/60 to-white p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-indigo-700">
               Total Orders
@@ -840,7 +1084,7 @@ const Sells = () => {
                   <th className="px-4 py-3.5 whitespace-nowrap text-right">
                     Pending (₹)
                   </th>
-                  <th className="px-4 py-3.5 whitespace-nowrap">Status</th>
+                  {/* <th className="px-4 py-3.5 whitespace-nowrap">Status</th> */}
                   <th className="px-4 py-3.5 whitespace-nowrap">Date</th>
                   {/* {isAdmin && ( */}
                   <th className="px-4 py-3.5 text-right whitespace-nowrap">
@@ -931,9 +1175,9 @@ const Sells = () => {
                         ₹{Number(sell.pendingAmount || 0).toLocaleString("en-IN")}
                       </span>
                     </td>
-                    <td className="px-4 py-3.5 whitespace-nowrap">
+                    {/* <td className="px-4 py-3.5 whitespace-nowrap">
                       {renderStatusBadge(sell.status)}
-                    </td>
+                    </td> */}
                     <td className="px-4 py-3.5 whitespace-nowrap text-[11px] text-slate-500">
                       {sell.createdAt
                         ? new Date(sell.createdAt).toLocaleDateString()
@@ -1243,16 +1487,22 @@ const Sells = () => {
                     const selectedProd = productsList.find(
                       (p) => p.id === Number(row.productId)
                     );
-                    const stockQty = selectedProd ? selectedProd.currentStock : 0;
+                    const isSerialized = selectedProd?.productType === "SERIALIZED";
+                    const stockQty = selectedProd ? (selectedProd.available ?? 0) : 0;
                     const isShort =
                       row.productId &&
                       stockQty < (Number(row.quantity) || 1);
+                    // Serials already picked on other rows for the same product can't be picked again in this sale.
+                    const excludeSerials = items
+                      .filter((it, i) => i !== index && Number(it.productId) === Number(row.productId))
+                      .flatMap((it) => it.serialNumbers);
 
                     return (
                       <div
                         key={index}
-                        className="flex flex-col sm:flex-row items-start sm:items-center gap-2.5 rounded-lg bg-white p-3 border border-slate-200 shadow-sm"
+                        className="flex flex-col gap-2.5 rounded-lg bg-white p-3 border border-slate-200 shadow-sm"
                       >
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2.5">
                         <span className="font-mono text-xs font-bold text-slate-400 w-5">
                           #{index + 1}
                         </span>
@@ -1264,20 +1514,14 @@ const Sells = () => {
                           </label>
                           <select
                             value={row.productId}
-                            onChange={(e) =>
-                              handleItemChange(
-                                index,
-                                "productId",
-                                e.target.value ? Number(e.target.value) : ""
-                              )
-                            }
+                            onChange={(e) => handleProductSelect(index, e.target.value ? Number(e.target.value) : "")}
                             required
                             className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
                           >
                             <option value="">-- Select Product --</option>
                             {productsList.map((p) => (
                               <option key={p.id} value={p.id}>
-                                {p.name} (Available Stock: {p.currentStock})
+                                {p.name} (Available Stock: {p.available})
                               </option>
                             ))}
                           </select>
@@ -1303,7 +1547,8 @@ const Sells = () => {
                           </div>
                         )}
 
-                        {/* Quantity */}
+                        {/* Quantity — for SERIALIZED products, this sets how many serial
+                            numbers need to be picked below; shrinking it trims extra picks. */}
                         <div className="w-24">
                           <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
                             Qty *
@@ -1314,9 +1559,8 @@ const Sells = () => {
                             required
                             value={row.quantity}
                             onChange={(e) =>
-                              handleItemChange(
+                              handleQuantityChange(
                                 index,
-                                "quantity",
                                 e.target.value ? Number(e.target.value) : ""
                               )
                             }
@@ -1369,6 +1613,18 @@ const Sells = () => {
                           </button>
                         </div>
                       </div>
+
+                      {/* Serial Number autocomplete — only for serial-tracked products */}
+                      {isSerialized && row.productId && (
+                        <SerialNumberPicker
+                          productId={Number(row.productId)}
+                          selected={row.serialNumbers}
+                          onChange={(serials) => handleSerialNumbersChange(index, serials)}
+                          excludeSerialNumbers={excludeSerials}
+                          maxSelectable={Math.max(1, Number(row.quantity) || 1)}
+                        />
+                      )}
+                      </div>
                     );
                   })}
                 </div>
@@ -1407,18 +1663,29 @@ const Sells = () => {
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Collected Amount (₹) *
+                      Collected Amount (₹) {!selectedSale && "*"}
                     </label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      required
-                      value={collectedAmount}
-                      onChange={(e) => setCollectedAmount(e.target.value)}
-                      placeholder="0.00"
-                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-emerald-600 focus:border-[#3d6fe0] focus:outline-none"
-                    />
+                    {selectedSale ? (
+                      <div className="w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-bold text-emerald-600">
+                        ₹{Number(collectedAmount || 0).toLocaleString("en-IN")}
+                      </div>
+                    ) : (
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        required
+                        value={collectedAmount}
+                        onChange={(e) => setCollectedAmount(e.target.value)}
+                        placeholder="0.00"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-emerald-600 focus:border-[#3d6fe0] focus:outline-none"
+                      />
+                    )}
+                    {selectedSale && (
+                      <p className="mt-0.5 text-[10px] text-slate-400">
+                        Use "Record Payment" in the sale details to add more.
+                      </p>
+                    )}
                   </div>
 
                   <div>
@@ -1552,20 +1819,23 @@ const Sells = () => {
       )}
 
       {/* DETAIL MODAL */}
-      {isDetailOpen && selectedSale && (
+      {isDetailOpen && selectedSale && detail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm">
           <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
                 <span className="text-xs font-mono font-bold text-blue-600 uppercase">
-                  {selectedSale.invoiceNumber}
+                  {detail.invoiceNumber}
                 </span>
                 <h3 className="text-lg font-bold text-slate-900 mt-0.5">
-                  Sale Details — {selectedSale.customerName}
+                  Sale Details — {detail.customerName}
+                  {isDetailLoading && (
+                    <Loader2 className="inline-block h-3.5 w-3.5 ml-2 animate-spin text-slate-400" />
+                  )}
                 </h3>
               </div>
               <button
-                onClick={() => setIsDetailOpen(false)}
+                onClick={closeDetailModal}
                 className="text-slate-400 hover:text-slate-600"
               >
                 <XCircle className="h-5 w-5" />
@@ -1579,7 +1849,7 @@ const Sells = () => {
                     Platform
                   </span>
                   <span className="font-semibold text-slate-800">
-                    {selectedSale.platform || "—"}
+                    {detail.platform || "—"}
                   </span>
                 </div>
                 <div>
@@ -1587,7 +1857,7 @@ const Sells = () => {
                     Payment Method
                   </span>
                   <span className="font-semibold text-slate-800">
-                    {selectedSale.paymentMethod || "—"}
+                    {detail.paymentMethod || "—"}
                   </span>
                 </div>
                 <div>
@@ -1595,7 +1865,7 @@ const Sells = () => {
                     City
                   </span>
                   <span className="font-semibold text-slate-800">
-                    {selectedSale.city || "—"}
+                    {detail.city || "—"}
                   </span>
                 </div>
                 <div>
@@ -1603,7 +1873,7 @@ const Sells = () => {
                     Customer Phone
                   </span>
                   <span className="font-semibold text-slate-800">
-                    {selectedSale.customerNumber || "—"}
+                    {detail.customerNumber || "—"}
                   </span>
                 </div>
                 <div>
@@ -1611,7 +1881,7 @@ const Sells = () => {
                     From Address
                   </span>
                   <span className="font-semibold text-slate-800">
-                    {selectedSale.fromAddress || "—"}
+                    {detail.fromAddress || "—"}
                   </span>
                 </div>
                 <div>
@@ -1619,55 +1889,18 @@ const Sells = () => {
                     Pincode
                   </span>
                   <span className="font-semibold text-slate-800">
-                    {selectedSale.pincode || "—"}
+                    {detail.pincode || "—"}
                   </span>
                 </div>
               </div>
 
-              <div>
-                <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px] mb-2">
-                  Line Items & Inventory Impact
-                </h4>
-                <div className="rounded-xl border border-slate-200 overflow-hidden">
-                  <table className="w-full text-left">
-                    <thead className="bg-slate-100 text-[10px] font-bold uppercase text-slate-600">
-                      <tr>
-                        <th className="p-2.5">Product</th>
-                        <th className="p-2.5 text-center">Qty</th>
-                        <th className="p-2.5 text-right">Price</th>
-                        <th className="p-2.5 text-right">Subtotal</th>
-                        <th className="p-2.5 text-center">Fulfillment / Stock</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {selectedSale.items?.map((item, idx) => (
-                        <tr key={idx} className="hover:bg-slate-50">
-                          <td className="p-2.5 font-medium text-slate-900">
-                            {item.Product?.name ||
-                              item.productName ||
-                              `Product #${item.productId}`}
-                          </td>
-                          <td className="p-2.5 text-center font-bold">
-                            {item.quantity}
-                          </td>
-                          <td className="p-2.5 text-right">
-                            ₹{Number(item.sellingPrice).toLocaleString("en-IN")}
-                          </td>
-                          <td className="p-2.5 text-right font-bold text-slate-900">
-                            ₹
-                            {(
-                              item.quantity * Number(item.sellingPrice)
-                            ).toLocaleString("en-IN")}
-                          </td>
-                          <td className="p-2.5 text-center">
-                            {renderItemStockIndicator(item)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <button
+                type="button"
+                onClick={() => navigate("/couriers")}
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#3d6fe0] px-3 py-2 text-xs font-bold text-white hover:bg-[#3162d2]"
+              >
+                Manage Line Items, Fulfillment & Courier History in Couriers →
+              </button>
 
               <div className="grid grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
                 <div>
@@ -1675,7 +1908,7 @@ const Sells = () => {
                     Selling Amount
                   </span>
                   <span className="text-sm font-bold text-slate-900">
-                    ₹{Number(selectedSale.sellingAmount).toLocaleString("en-IN")}
+                    ₹{Number(detail.sellingAmount).toLocaleString("en-IN")}
                   </span>
                 </div>
                 <div>
@@ -1683,7 +1916,7 @@ const Sells = () => {
                     Collected Amount
                   </span>
                   <span className="text-sm font-bold text-emerald-600">
-                    ₹{Number(selectedSale.collectedAmount).toLocaleString("en-IN")}
+                    ₹{Number(detail.collectedAmount).toLocaleString("en-IN")}
                   </span>
                 </div>
                 <div>
@@ -1691,29 +1924,125 @@ const Sells = () => {
                     Pending Amount
                   </span>
                   <span
-                    className={`text-sm font-bold ${Number(selectedSale.pendingAmount) > 0
+                    className={`text-sm font-bold ${Number(detail.pendingAmount) > 0
                       ? "text-rose-600"
                       : "text-slate-600"
                       }`}
                   >
-                    ₹{Number(selectedSale.pendingAmount).toLocaleString("en-IN")}
+                    ₹{Number(detail.pendingAmount).toLocaleString("en-IN")}
                   </span>
                 </div>
               </div>
 
-              {selectedSale.notes && (
+              <div>
+                <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px] mb-2">
+                  Payment History
+                </h4>
+                <div className="rounded-xl border border-slate-200 overflow-hidden">
+                  {detail.payments && detail.payments.length > 0 ? (
+                    <table className="w-full text-left">
+                      <thead className="bg-slate-100 text-[10px] font-bold uppercase text-slate-600">
+                        <tr>
+                          <th className="p-2.5">Date</th>
+                          <th className="p-2.5">Method</th>
+                          <th className="p-2.5">Recorded By</th>
+                          <th className="p-2.5 text-right">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {detail.payments.map((p) => (
+                          <tr key={p.id}>
+                            <td className="p-2.5 text-slate-600">
+                              {p.createdAt ? new Date(p.createdAt).toLocaleDateString() : "—"}
+                            </td>
+                            <td className="p-2.5 text-slate-600">{p.method || "—"}</td>
+                            <td className="p-2.5 text-slate-600">{p.creator?.name || "—"}</td>
+                            <td className="p-2.5 text-right font-bold text-emerald-600">
+                              ₹{Number(p.amount).toLocaleString("en-IN")}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <p className="p-3 text-slate-400">No payments recorded yet.</p>
+                  )}
+                </div>
+
+                {pagePermission.canUpdate && Number(detail.pendingAmount) > 0 && (
+                  <div className="mt-2.5 flex flex-wrap items-end gap-2 rounded-lg bg-emerald-50/60 border border-emerald-100 p-2.5">
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-0.5">Amount (₹)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        max={Number(detail.pendingAmount)}
+                        value={paymentAmount}
+                        onChange={(e) => setPaymentAmount(e.target.value)}
+                        placeholder="0.00"
+                        className="w-24 rounded-md border border-emerald-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-0.5">Method</label>
+                      <select
+                        value={paymentMethodInput}
+                        onChange={(e) => setPaymentMethodInput(e.target.value)}
+                        className="rounded-md border border-emerald-200 bg-white px-2 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                      >
+                        {PAYMENT_METHODS.map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex-1 min-w-[120px]">
+                      <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-0.5">Note (optional)</label>
+                      <input
+                        type="text"
+                        value={paymentNotes}
+                        onChange={(e) => setPaymentNotes(e.target.value)}
+                        placeholder="e.g. remaining balance"
+                        className="w-full rounded-md border border-emerald-200 bg-white px-2 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      disabled={recordPaymentMutation.isPending || !detail.id}
+                      onClick={() => {
+                        const amt = Number(paymentAmount);
+                        if (!detail.id || !amt || amt <= 0) {
+                          toast.error("Enter a valid payment amount");
+                          return;
+                        }
+                        recordPaymentMutation.mutate({
+                          saleId: detail.id,
+                          amount: amt,
+                          method: paymentMethodInput,
+                          notes: paymentNotes || undefined,
+                        });
+                      }}
+                      className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      {recordPaymentMutation.isPending ? "Recording..." : "Record Payment"}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {detail.notes && (
                 <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100">
                   <span className="text-blue-700 font-bold block text-[10px] uppercase">
                     Notes
                   </span>
-                  <p className="text-slate-700 mt-0.5">{selectedSale.notes}</p>
+                  <p className="text-slate-700 mt-0.5">{detail.notes}</p>
                 </div>
               )}
             </div>
 
             <div className="mt-5 flex justify-end">
               <button
-                onClick={() => setIsDetailOpen(false)}
+                onClick={closeDetailModal}
                 className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800"
               >
                 Close

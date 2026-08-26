@@ -16,24 +16,40 @@ import {
     Contact,
     ChevronDown,
     LogOut,
+    Package,
+    Settings,
+    ArrowUpRight,
+    ArrowDownLeft,
+    Banknote,
+    CreditCard,
+    FileClock,
     type LucideIcon,
 } from "lucide-react";
 
+// Keyed by exact `path` (or `path + search` for children that share a path,
+// e.g. the couriers Outgoing/Incoming tabs) so each sidebar entry gets its
+// own icon instead of falling back to a substring match.
 const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
-    dashboard: LayoutDashboard,
-    couriers: Truck,
-    customers: Contact,
-    users: Users,
-    account: UserCircle2,
-    sells: TrendingUp,
-    expense: Receipt,
-    debited: Wallet,
+    "/dashboard": LayoutDashboard,
+    "/products": Package,
+    "/sells": TrendingUp,
+    "/couriers": Truck,
+    "/couriers?direction=out": ArrowUpRight,
+    "/couriers?direction=in": ArrowDownLeft,
+    "/customers": Contact,
+    "/users": Users,
+    "/account": UserCircle2,
+    "/account/income": Banknote,
+    "/account/expense": Receipt,
+    "/account/credit": CreditCard,
+    "/account/pending-bills": FileClock,
+    "/account/account": Wallet,
+    "/setting": Settings,
 };
 
-const getIconForRoute = (path: string, className = "h-5 w-5") => {
-    const p = path.toLowerCase();
-    const matchedKey = Object.keys(ROUTE_ICON_MAP).find((key) => p.includes(key));
-    const Icon = matchedKey ? ROUTE_ICON_MAP[matchedKey] : LayoutDashboard;
+const getIconForRoute = (path: string, search?: string, className = "h-5 w-5") => {
+    const key = `${path}${search ?? ""}`.toLowerCase();
+    const Icon = ROUTE_ICON_MAP[key] ?? ROUTE_ICON_MAP[path.toLowerCase()] ?? LayoutDashboard;
     return <Icon className={className} strokeWidth={1.5} />;
 };
 
@@ -45,7 +61,16 @@ const Sidebar = () => {
     const { allowedRoutes, permissions, name, role } = useSelector(
         (state: RootState) => state.auth
     );
-    const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+    // Only one parent group can be expanded at a time. Defaults to whichever
+    // group contains the currently active route.
+    const [openGroupPath, setOpenGroupPath] = useState<string | null>(() => {
+        const activeGroup = ALL_SIDEBAR_ITEMS.find((item) =>
+            item.children?.some(
+                (child) => location.pathname.toLowerCase() === child.path.toLowerCase()
+            )
+        );
+        return activeGroup?.path ?? null;
+    });
 
     const canReadRoutePaths = new Set(
         (permissions ?? [])
@@ -80,7 +105,7 @@ const Sidebar = () => {
 
             return {
                 ...item,
-                children: visibleChildren,
+                // children: visibleChildren,
             };
         })
         .filter((item): item is SidebarItem => item !== null);
@@ -90,11 +115,8 @@ const Sidebar = () => {
         navigate("/");
     };
 
-    const toggleGroup = (path: string, defaultOpen: boolean) => {
-        setOpenGroups((prev) => ({
-            ...prev,
-            [path]: !(prev[path] ?? defaultOpen),
-        }));
+    const toggleGroup = (path: string) => {
+        setOpenGroupPath((prev) => (prev === path ? null : path));
     };
 
     return (
@@ -125,13 +147,13 @@ const Sidebar = () => {
                                 const hasActiveChild = item.children.some(
                                     (child) => location.pathname.toLowerCase() === child.path.toLowerCase()
                                 );
-                                const isOpen = openGroups[item.path] ?? hasActiveChild;
+                                const isOpen = openGroupPath === item.path;
 
                                 return (
                                     <div key={item.path}>
                                         <button
                                             type="button"
-                                            onClick={() => toggleGroup(item.path, hasActiveChild)}
+                                            onClick={() => toggleGroup(item.path)}
                                             className="flex w-full items-center justify-between rounded-lg px-4 py-3 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
                                         >
                                             <span className={`flex items-center gap-3 ${hasActiveChild ? "text-blue-400" : ""}`}>
@@ -146,20 +168,23 @@ const Sidebar = () => {
 
                                         <div className={`${isOpen ? "block" : "hidden"} space-y-1 pt-1`}>
                                             {item.children.map((child) => {
-                                                const isChildActive =
-                                                    location.pathname.toLowerCase() === child.path.toLowerCase();
+                                                const childHref = child.search ? `${child.path}${child.search}` : child.path;
+                                                const currentHref = `${location.pathname}${location.search}`;
+                                                const isChildActive = child.search
+                                                    ? currentHref.toLowerCase() === childHref.toLowerCase()
+                                                    : location.pathname.toLowerCase() === child.path.toLowerCase();
 
                                                 return (
                                                     <NavLink
-                                                        key={child.path}
-                                                        to={child.path}
+                                                        key={childHref}
+                                                        to={childHref}
                                                         className={`ml-3 flex items-center gap-3 rounded-lg px-4 py-3 text-sm font-medium transition-all duration-150 ${
                                                             isChildActive
                                                                 ? "bg-[#3d6fe0] text-white shadow-md shadow-blue-500/20"
                                                                 : "hover:bg-slate-800 hover:text-white"
                                                         }`}
                                                     >
-                                                        {getIconForRoute(child.path)}
+                                                        {getIconForRoute(child.path, child.search)}
                                                         <span>{child.name}</span>
                                                     </NavLink>
                                                 );

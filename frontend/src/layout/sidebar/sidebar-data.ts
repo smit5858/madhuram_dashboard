@@ -14,6 +14,12 @@ export interface SidebarItem {
     path: string;
     /** Display label */
     name: string;
+    /**
+     * Optional query string appended to `path` when navigating (e.g. "?direction=IN").
+     * Permission checks and icon lookup still key off `path` alone — this is purely
+     * for distinguishing children that share one underlying permission-guarded route.
+     */
+    search?: string;
     /** Optional child routes for grouped modules */
     children?: SidebarItem[];
 }
@@ -25,19 +31,28 @@ export interface SidebarItem {
  */
 export const ALL_SIDEBAR_ITEMS: SidebarItem[] = [
     { path: "/dashboard", name: "Dashboard" },
-    { path: "/couriers",  name: "Couriers"  },
-    { path: "/customers", name: "Customers" },
-    { path: "/sells",     name: "Sells"     },
     { path: "/products",  name: "Products"  },
-    { path: "/stock",     name: "Stock"     },
+    { path: "/sells",     name: "Sells"     },
+    {
+        path: "/couriers",
+        name: "Couriers",
+        children: [
+            { path: "/couriers", name: "Outgoing Couriers", search: "?direction=OUT" },
+            { path: "/couriers", name: "Incoming Couriers", search: "?direction=IN" },
+        ],
+    },
+    { path: "/customers", name: "Customers" },
     { path: "/users",     name: "Users"     },
     {
         path: "/account",
         name: "Account",
         children: [
-            { path: "/account/sells", name: "Sells" },
+            { path: "/account/income", name: "Income" }, 
             { path: "/account/expense", name: "Expense" },
-            { path: "/account/debited", name: "Debited" },
+            { path: "/account/credit", name: "Credit" },
+            { path: "/account/pending-bills", name: "Pending Bills" },
+            { path: "/account/account", name: "Account" },
         ],
     },
+    { path: "/setting",     name: "Setting"     },
 ];

@@ -69,6 +69,12 @@ axios.interceptors.response.use(
         return response;
     },
     async (error: AxiosError) => {
+        if (error.response?.status === 304) {
+            return Promise.reject(Object.assign(new Error("The server returned a 304 Not Modified response."), {
+                response: error.response,
+            }));
+        }
+
         const originalRequest = error.config as any;
 
         if (error.response?.status === HttpStatusCode.Unauthorized && originalRequest && !originalRequest._retry) {
@@ -122,8 +128,8 @@ axios.interceptors.response.use(
             } catch (refreshErr) {
                 processQueue(refreshErr, null);
                 sessionStorage.removeItem("auth");
-                if (window.location.pathname !== "/login") {
-                    window.location.href = "/login";
+                if (window.location.pathname !== "/") {
+                    window.location.href = "/";
                 }
                 return Promise.reject(refreshErr);
             } finally {

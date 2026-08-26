@@ -55,6 +55,11 @@ exports.getCouriers = async (req, res) => {
       scopeWhere.productName = { [Op.like]: `%${req.query.productName}%` };
     }
 
+    // Optional direction filter (IN = inbound to us, OUT = outbound to customer)
+    if (req.query.direction === "IN" || req.query.direction === "OUT") {
+      scopeWhere.direction = req.query.direction;
+    }
+
     const couriers = await Courier.findAll({
       where: scopeWhere,
       include: {
@@ -110,8 +115,13 @@ exports.createCourier = async (req, res) => {
       name, email, phone,
       customerName, address, city, mobileNo,
       productName, charge, freePickup,
-      courierName, trackId, kg, pending, note, completedDate,
+      courierName, trackId, kg, pending, note, completedDate, quantity,
+      direction,
     } = req.body || {};
+
+    if (direction !== undefined && direction !== "IN" && direction !== "OUT") {
+      return res.status(400).json({ success: false, message: "direction must be either \"IN\" or \"OUT\"" });
+    }
 
     // Determine which userId to assign
     let targetUserId = user.id;
@@ -145,6 +155,8 @@ exports.createCourier = async (req, res) => {
       pending: pending !== undefined ? pending : true,
       note: note || null,
       completedDate: completedDate || null,
+      quantity: quantity !== undefined && quantity !== "" ? quantity : null,
+      direction: direction || "OUT",
       userId: targetUserId,
     });
 
@@ -167,8 +179,13 @@ exports.updateCourier = async (req, res) => {
       name, email, phone,
       customerName, address, city, mobileNo,
       productName, charge, freePickup,
-      courierName, trackId, kg, pending, note, completedDate,
+      courierName, trackId, kg, pending, note, completedDate, quantity,
+      direction,
     } = req.body || {};
+
+    if (direction !== undefined && direction !== "IN" && direction !== "OUT") {
+      return res.status(400).json({ success: false, message: "direction must be either \"IN\" or \"OUT\"" });
+    }
 
     const courier = await Courier.findByPk(id);
     if (!courier) {
@@ -197,6 +214,8 @@ exports.updateCourier = async (req, res) => {
     if (pending !== undefined) courier.pending = pending;
     if (note !== undefined) courier.note = note;
     if (completedDate !== undefined) courier.completedDate = completedDate;
+    if (quantity !== undefined) courier.quantity = quantity !== "" ? quantity : null;
+    if (direction !== undefined) courier.direction = direction;
 
     // City: Admin can update city; non-Admin city is locked to their allowedCity
     if (user.roleName === "Admin") {

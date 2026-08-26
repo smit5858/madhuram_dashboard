@@ -1,5 +1,5 @@
 const { Stock, StockMovement, Product } = require("../models");
-const { Op } = require("sequelize");
+const inventoryService = require("../services/inventory.service");
 
 // GET /stock
 exports.getStock = async (req, res) => {
@@ -7,7 +7,7 @@ exports.getStock = async (req, res) => {
     const stocks = await Stock.findAll({
       include: {
         model: Product,
-        attributes: ["id", "name", "description", "isActive"],
+        attributes: ["id", "name", "description", "isActive", "productType"],
       },
       order: [[Product, "name", "ASC"]],
     });
@@ -16,8 +16,11 @@ exports.getStock = async (req, res) => {
       id: s.id,
       productId: s.productId,
       productName: s.Product ? s.Product.name : null,
+      productType: s.Product ? s.Product.productType : null,
       productActive: s.Product ? s.Product.isActive : null,
       quantity: s.quantity,
+      reserved: s.reserved,
+      available: s.quantity - s.reserved,
       updatedAt: s.updatedAt,
     }));
 
@@ -28,17 +31,16 @@ exports.getStock = async (req, res) => {
 };
 
 // PUT /stock/:productId/adjust
-// Admin-only manual adjustment — creates StockMovement of type ADJUSTMENT
+// Manual adjustment — creates StockMovement of type ADJUSTMENT (or DAMAGE)
 exports.adjustStock = async (req, res) => {
   try {
     const user = req.user;
     const { productId } = req.params;
-    const { quantity, notes } = req.body || {};
+    const { quantity, notes, reason } = req.body || {};
 
     if (quantity === undefined || quantity === null) {
       return res.status(400).json({ success: false, message: "quantity is required" });
     }
-
     const delta = parseInt(quantity);
     if (isNaN(delta)) {
       return res.status(400).json({ success: false, message: "quantity must be an integer" });
@@ -49,32 +51,16 @@ exports.adjustStock = async (req, res) => {
       return res.status(404).json({ success: false, message: "Product not found" });
     }
 
-    let [stock] = await Stock.findOrCreate({
-      where: { productId },
-      defaults: { productId, quantity: 0 },
-    });
-
-    const newQty = Math.max(0, stock.quantity + delta);
-    stock.quantity = newQty;
-    await stock.save();
-
-    await StockMovement.create({
-      productId,
-      type: "ADJUSTMENT",
-      quantity: delta,
-      referenceType: "manual",
-      referenceId: null,
-      createdBy: user.id,
-      notes: notes || `Manual adjustment: ${delta > 0 ? "+" : ""}${delta}`,
-    });
+    const result = await inventoryService.adjustStock({ productId, delta, userId: user.id, notes, reason });
 
     return res.status(200).json({
       success: true,
       message: "Stock adjusted successfully",
-      data: { productId: parseInt(productId), productName: product.name, newQuantity: newQty },
+      data: { ...result, productName: product.name },
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    const status = err.statusCode || (err.message && /negative|reserved|not carry/.test(err.message) ? 400 : 500);
+    return res.status(status).json({ success: false, message: err.message });
   }
 };
 

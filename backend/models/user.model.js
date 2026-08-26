@@ -16,7 +16,6 @@ const User = sequelize.define(
         email: {
             type: DataTypes.STRING,
             allowNull: false,
-            unique: true,
             validate: { isEmail: true },
         },
         password: {
@@ -51,6 +50,8 @@ const User = sequelize.define(
     {
         tableName: "users",
         timestamps: true, // adds createdAt / updatedAt
+        // Named index, not inline unique:true — see role.model.js for why.
+        indexes: [{ unique: true, fields: ["email"] }],
     },
 );
 

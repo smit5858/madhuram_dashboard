@@ -1,5 +1,17 @@
 import httpService from "./http-service";
 
+export interface CourierRecord {
+  id: number;
+  courierName?: string | null;
+  trackId?: string | null;
+  pending: boolean;
+  completedDate?: string | null;
+  quantity?: number | null;
+  customerName?: string | null;
+  mobileNo?: string | null;
+  productName?: string | null;
+}
+
 export interface SaleItemData {
   id?: number;
   saleId?: number;
@@ -12,11 +24,31 @@ export interface SaleItemData {
   };
   quantity: number;
   sellingPrice: number;
-  fulfillmentStatus?: "FULFILLED" | "PARTIAL" | "OUT_OF_STOCK";
-  shortageQuantity?: number;
-  availableWas?: number;
-  fulfilled?: number;
-  shortage?: number;
+  fulfillmentStatus?: "PENDING" | "PARTIALLY_FULFILLED" | "FULFILLED" | "BACKORDERED" | "CANCELLED";
+  allocatedQuantity?: number;
+  fulfilledQuantity?: number;
+  backorderedQuantity?: number;
+  returnedQuantity?: number;
+  Couriers?: CourierRecord[];
+}
+
+export interface PaymentData {
+  id: number;
+  saleId: number;
+  amount: number;
+  method?: "Cash" | "UPI" | "Card" | "COD" | "BankTransfer" | "Other" | null;
+  notes?: string | null;
+  createdAt?: string;
+  creator?: { id: number; name: string };
+  Sale?: { id: number; customerName: string; sellingAmount: number; paymentStatus?: string };
+}
+
+export interface PaymentsFilters {
+  search?: string;
+  start_date?: string;
+  end_date?: string;
+  page?: number;
+  limit?: number;
 }
 
 export interface SaleData {
@@ -33,10 +65,14 @@ export interface SaleData {
   sellingAmount: number;
   collectedAmount: number;
   pendingAmount?: number;
+  refundedAmount?: number;
   status?: "PENDING" | "CONFIRMED" | "FULFILLED" | "CANCELLED";
+  paymentStatus?: "UNPAID" | "PARTIALLY_PAID" | "PAID" | "REFUNDED" | "PARTIALLY_REFUNDED";
+  fulfillmentStatus?: "PENDING" | "PARTIALLY_FULFILLED" | "FULFILLED" | "BACKORDERED" | "CANCELLED";
   notes?: string;
   createdBy?: number;
   items?: SaleItemData[];
+  payments?: PaymentData[];
   creator?: { id: number; name: string; email: string };
   customer?: {
     id: number;
@@ -67,6 +103,7 @@ export interface CreateSalePayload {
     productId: number;
     quantity: number;
     sellingPrice: number;
+    serialNumbers?: string[];
   }>;
 }
 
@@ -115,6 +152,28 @@ const deleteSale = (id: number) =>
 const exportSales = (format: "pdf" | "excel", filters?: SalesFilters) =>
   httpService.get(`/sells/export`, { params: { ...filters, format }, responseType: "blob",});
 
+const getPayments = (saleId: number) =>
+  httpService.get<{ success: boolean; data: PaymentData[] }>(`/sells/${saleId}/payments`);
+
+const getAllPayments = (filters?: PaymentsFilters) =>
+  httpService.get<{ success: boolean; data: PaymentData[]; meta: { page: number; limit: number; total: number; totalPages: number } }>(
+    "/sells/payments",
+    { params: filters }
+  );
+
+const recordPayment = (saleId: number, data: { amount: number; method?: string; notes?: string }) =>
+  httpService.post<{ success: boolean; message: string; data: SaleData }>(`/sells/${saleId}/payments`, data);
+
+const fulfillOrderItem = (
+  saleId: number,
+  itemId: number,
+  data: { quantity: number; serialNumbers?: string[]; courierName?: string; trackId?: string }
+) =>
+  httpService.post<{ success: boolean; message: string; data: { item: SaleItemData; courier: CourierRecord } }>(
+    `/sells/${saleId}/items/${itemId}/fulfill`,
+    data
+  );
+
 export default {
   getSales,
   getSellsTotals,
@@ -122,5 +181,9 @@ export default {
   createSale,
   updateSale,
   deleteSale,
-  exportSales
+  exportSales,
+  getPayments,
+  getAllPayments,
+  recordPayment,
+  fulfillOrderItem,
 };

@@ -1,12 +1,18 @@
 import * as React from 'react';
+import { useLocation } from 'react-router-dom';
 import Header from '../header/Header';
 import SidebarMain from '../sidebar/Sidebar';
+import { RouteTitles } from '@/routes/routing';
+import { useDocumentTitle } from '@/hook/useDocumentTitle';
 
 interface IMainLayoutProps {
     children: React.ReactElement | React.ReactElement[];
 }
 
 const MainLayout = React.memo(({ children }: IMainLayoutProps) => {
+    const { pathname } = useLocation();
+    useDocumentTitle(RouteTitles[pathname] ?? "Dashboard");
+
     return (
         <div className='main-layout'>
             <div className="flex">
