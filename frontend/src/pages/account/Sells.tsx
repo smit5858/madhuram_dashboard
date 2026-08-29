@@ -2,10 +2,12 @@ import FormikInput from "@/shared/components/formik-fields/FormikInput";
 import FormikDate from "@/shared/components/formik-fields/FormikDate";
 import type { RootState } from "@/store/store";
 import salesService, { type PaymentData, type PaymentsFilters } from "@/services/sells.service";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Field, Form, Formik } from "formik";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSelector } from "react-redux";
+import toast from "react-hot-toast";
+import { initSocket } from "@/services/socket.service";
 
 interface ApiErrorLike {
     response?: { data?: { message?: string } };
@@ -18,7 +20,9 @@ const formatCurrency = (amount: number) =>
     new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(amount || 0);
 
 const Sells = () => {
+    const queryClient = useQueryClient();
     const permission = useSelector((state: RootState) => state.auth.permissions);
+    const { userId } = useSelector((state: RootState) => state.auth);
     const sellsPermission = permission?.find(
         (item) => item.routeName === "Account Sells" || item.routePath === "/account/sells"
     );
@@ -26,6 +30,10 @@ const Sells = () => {
 
     const [appliedFilters, setAppliedFilters] = useState<PaymentsFilters>({});
     const [pageSize, setPageSize] = useState(10);
+    // A sale just landed live via socket (new_sale) — highlights its row for a while if/once
+    // it appears here (a brand-new unpaid sale has no Payment row yet, so it may not show up
+    // until its first payment is recorded).
+    const [highlightedSaleIds, setHighlightedSaleIds] = useState<Set<number>>(new Set());
 
     const queryFilters = useMemo<PaymentsFilters>(
         () => ({ ...appliedFilters, page: appliedFilters.page ?? 1, limit: pageSize }),
@@ -46,6 +54,33 @@ const Sells = () => {
 
     const paymentsList: PaymentData[] = paymentsResponse?.data?.data || [];
     const paginationMeta = paymentsResponse?.data?.meta || { page: 1, limit: pageSize, total: 0, totalPages: 1 };
+
+    useEffect(() => {
+        if (!canRead) return;
+
+        const socket = initSocket("account", userId);
+        const handleNewSale = (payload: { sale?: { id: number; customerName?: string } }) => {
+            if (!payload?.sale?.id) return;
+            const { id: saleId, customerName } = payload.sale;
+
+            queryClient.invalidateQueries({ queryKey: ["account-payments"] });
+            toast.success(`New sale entry — ${customerName || `Sale #${saleId}`}`);
+
+            setHighlightedSaleIds((prev) => new Set(prev).add(saleId));
+            setTimeout(() => {
+                setHighlightedSaleIds((prev) => {
+                    const next = new Set(prev);
+                    next.delete(saleId);
+                    return next;
+                });
+            }, 20000);
+        };
+
+        socket.on("new_sale", handleNewSale);
+        return () => {
+            socket.off("new_sale", handleNewSale);
+        };
+    }, [canRead, userId, queryClient]);
 
     const handleSubmit = (values: { search: string; start_date: string; end_date: string }) => {
         setAppliedFilters({
@@ -129,8 +164,13 @@ const Sells = () => {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100">
-                                {paymentsList.map((payment) => (
-                                    <tr key={payment.id} className="hover:bg-gray-50">
+                                {paymentsList.map((payment) => {
+                                    const isHighlighted = !!payment.Sale?.id && highlightedSaleIds.has(payment.Sale.id);
+                                    return (
+                                    <tr
+                                        key={payment.id}
+                                        className={`transition-colors ${isHighlighted ? "bg-emerald-50 hover:bg-emerald-100/70 border-l-4 border-emerald-500" : "hover:bg-gray-50"}`}
+                                    >
                                         <td className="px-4 py-3 whitespace-nowrap text-gray-500">
                                             {payment.createdAt ? new Date(payment.createdAt).toLocaleDateString() : "—"}
                                         </td>
@@ -146,7 +186,8 @@ const Sells = () => {
                                         </td>
                                         <td className="px-4 py-3 whitespace-nowrap text-gray-500">{payment.creator?.name || "—"}</td>
                                     </tr>
-                                ))}
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>

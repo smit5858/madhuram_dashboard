@@ -25,6 +25,7 @@ app.use(morgan("dev", { stream: { write: (msg) => logger.info(msg.trim()) } }));
 
 const permissions = require("./routes/permission.routes");
 const couriers = require("./routes/courier.routes");
+const courierCompanies = require("./routes/courierCompany.routes");
 const customers = require("./routes/customer.routes");
 const sells = require("./routes/sells.routes");
 const products = require("./routes/product.routes");
@@ -38,6 +39,7 @@ app.get("/", (req, res) => res.send("API running"));
 app.use("/auth", auth);
 app.use("/permissions", permissions);
 app.use("/couriers", couriers);
+app.use("/couriers-companies", courierCompanies);
 app.use("/customers", customers);
 app.use("/sells", sells);
 // Keep the old API path working for existing clients.
@@ -62,6 +64,7 @@ const ensureAllRoutesAndPermissions = async () => {
     const SYSTEM_ROUTES = [
       { name: "Dashboard", path: "/dashboard" },
       { name: "Couriers", path: "/couriers" },
+      { name: "Courier Companies", path: "/couriers-companies" },
       { name: "Customers", path: "/customers" },
       { name: "Sells", path: "/sells" },
       { name: "Products", path: "/products" },
@@ -112,8 +115,15 @@ const ensureAllRoutesAndPermissions = async () => {
             canCreate = true;
             canUpdate = true;
             canDelete = false; // NO delete permission for Sales
-          } else if (path === "/dashboard" || path === "/account" || path === "/account/sells" || path === "/users") {
-            // Users module: non-admin gets read-only access (view list/details), no create/update/delete
+          } else if (
+            path === "/dashboard" ||
+            path === "/account" ||
+            path === "/account/sells" ||
+            path === "/users" ||
+            path === "/couriers-companies"
+          ) {
+            // Users / Courier Companies: non-admin gets read-only access (view list/details;
+            // needed to populate the courier-company dropdown), no create/update/delete.
             canRead = true;
             canCreate = false;
             canUpdate = false;

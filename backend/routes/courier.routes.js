@@ -9,6 +9,7 @@ router.get("/", authenticate, authorize("/couriers", "read"), courierController.
 router.get("/:id", authenticate, authorize("/couriers", "read"), courierController.getCourierById);
 router.post("/", authenticate, authorize("/couriers", "create"), courierController.createCourier);
 router.put("/:id", authenticate, authorize("/couriers", "update"), courierController.updateCourier);
+router.put("/:id/shipment-type", authenticate, authorize("/couriers", "update"), courierController.updateShipmentType);
 router.delete("/:id", authenticate, authorize("/couriers", "delete"), courierController.deleteCourier);
 
 module.exports = router;

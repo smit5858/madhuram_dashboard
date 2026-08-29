@@ -496,7 +496,10 @@ const Customers = () => {
 
       {/* CREATE / EDIT CUSTOMER MODAL */}
       {isFormModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) closeFormModal(); }}
+        >
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
@@ -645,7 +648,10 @@ const Customers = () => {
 
       {/* CUSTOMER DETAILS MODAL */}
       {isDetailModalOpen && selectedCustomer && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) closeDetailModal(); }}
+        >
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>

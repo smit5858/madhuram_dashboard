@@ -1,8 +1,8 @@
 const { Op } = require("sequelize");
 const sequelize = require("../config/db");
-const { Sale, SaleItem, Product, Stock, StockMovement, SerialUnit, Customer, Courier, Notification, Payment } = require("../models");
-const { getIO } = require("../socket");
+const { Sale, SaleItem, Product, Stock, StockMovement, SerialUnit, Customer, Courier, Payment } = require("../models");
 const inventoryService = require("./inventory.service");
+const { notify } = require("./notification.service");
 
 // Sequential per-month invoice numbers, e.g. MM-202608-0001. Row-locked read of the last
 // invoice in the current month prevents two concurrent creates from colliding.
@@ -34,39 +34,6 @@ const computePaymentStatus = ({ sellingAmount, collectedAmount, refundedAmount }
   if (collectedAmount <= 0) return "UNPAID";
   if (collectedAmount < sellingAmount) return "PARTIALLY_PAID";
   return "PAID";
-};
-
-// Fire-and-forget notification + socket emit — mirrors the existing sells.controller.js
-// pattern exactly: created after commit, wrapped so a failure here never affects the
-// already-committed order.
-const notify = async (events) => {
-  let created = [];
-  try {
-    created = await Promise.all(
-      events.map((evt) =>
-        Notification.create({
-          recipientModule: evt.recipientModule,
-          type: evt.type,
-          title: evt.title,
-          message: evt.message,
-          referenceType: evt.referenceType,
-          referenceId: evt.referenceId,
-        }).then((notif) => ({ evt, notif }))
-      )
-    );
-  } catch (notifErr) {
-    console.warn("Notification creation failed:", notifErr.message);
-    return;
-  }
-
-  try {
-    const io = getIO();
-    for (const { evt, notif } of created) {
-      io.to(evt.recipientModule).emit(evt.event, { notification: notif, ...evt.payload });
-    }
-  } catch (socketErr) {
-    console.warn("WebSocket emit failed:", socketErr.message);
-  }
 };
 
 // Supersedes the item loop that used to live directly in sells.controller.createSale.
@@ -202,7 +169,8 @@ const createOrder = async ({
     // Sort by productId ASC so two concurrent multi-line orders touching overlapping
     // products always acquire Stock row locks in the same relative order (deadlock avoidance).
     const sortedItems = [...items].sort((a, b) => a.productId - b.productId);
-    const itemsResult = [];
+    const createdLines = [];
+    const shipmentGroupId = `SALE-${sale.id}`;
 
     for (const item of sortedItems) {
       const product = await Product.findByPk(item.productId, { transaction: t });
@@ -252,7 +220,45 @@ const createOrder = async ({
       saleItem.fulfillmentStatus = inventoryService.computeItemFulfillmentStatus(saleItem);
       await saleItem.save({ transaction: t });
 
-      itemsResult.push({ ...saleItem.toJSON(), productName: product.name, productType: product.productType });
+      // Every order line gets a Courier record immediately — no separate acceptance step.
+      // Fully-allocated lines start Pending; anything still backordered starts Waiting for
+      // Stock. All lines from this sale share one shipment group (defaulting to "wait for the
+      // complete order") until the Courier Employee splits it via updateShipmentType.
+      const courier = await Courier.create(
+        {
+          customerName: customerName.trim(),
+          name: customerName.trim(),
+          address: fromAddress || null,
+          city: city || null,
+          mobileNo: trimmedPhone,
+          phone: trimmedPhone,
+          productName: product.name,
+          quantity: requested,
+          pending: true,
+          status: allocated >= requested ? "PENDING" : "WAITING_FOR_STOCK",
+          courierName: null,
+          trackId: null,
+          direction: "OUT",
+          userId,
+          saleId: sale.id,
+          saleItemId: saleItem.id,
+          shipmentGroupId,
+          shipmentType: "SHIP_COMPLETE",
+        },
+        { transaction: t }
+      );
+
+      createdLines.push({ saleItem, product, courier });
+    }
+
+    // Fulfills the group immediately if every line was fully allocated (the common
+    // single/all-in-stock case) — a no-op if anything above came back backordered.
+    await inventoryService.tryFulfillReadyGroup(shipmentGroupId, { userId, transaction: t });
+
+    const itemsResult = [];
+    for (const { saleItem, product, courier } of createdLines) {
+      await saleItem.reload({ transaction: t });
+      itemsResult.push({ ...saleItem.toJSON(), productName: product.name, productType: product.productType, courierId: courier.id });
     }
 
     await inventoryService.recomputeSaleFulfillmentStatus(sale.id, { transaction: t });
@@ -379,102 +385,94 @@ const recordPayment = async ({ saleId, amount, method, userId, notes }) => {
   }
 };
 
-// Converts allocated quantity into an actual shipment (physical) or digital delivery
-// (license). Physical fulfillment creates a Courier record; license fulfillment never does.
-const fulfillOrderItem = async ({ saleId, saleItemId, quantity, userId, serialNumbers, courierName, trackId }) => {
-  const requested = parseInt(quantity);
-  if (isNaN(requested) || requested <= 0) {
-    const err = new Error("quantity must be a positive integer");
-    err.statusCode = 400;
-    throw err;
-  }
+// Core return/write-off mechanics for a quantity of a line item that was already shipped.
+// Shared by the standalone `returnItem` action and `cancelOrder`'s handling of the
+// already-fulfilled portion of a cancelled sale. `defective` writes the units off instead of
+// restocking them — use it when the returned goods aren't resellable.
+const applyReturn = async ({ item, quantity, userId, reason, defective, serialNumbers }, { transaction: t }) => {
+  const product = await Product.findByPk(item.productId, { transaction: t });
 
-  const t = await sequelize.transaction();
-  try {
-    const sale = await Sale.findByPk(saleId, { transaction: t, lock: true });
-    if (!sale) {
-      const err = new Error("Sale not found");
-      err.statusCode = 404;
-      throw err;
+  if (product.productType === "NON_SERIAL") {
+    if (!defective) {
+      const stock = await Stock.findOne({ where: { productId: item.productId }, transaction: t, lock: true });
+      if (stock) {
+        stock.quantity += quantity;
+        await stock.save({ transaction: t });
+      }
     }
-
-    const item = await SaleItem.findOne({ where: { id: saleItemId, saleId }, transaction: t, lock: true });
-    if (!item) {
-      const err = new Error("Order item not found");
-      err.statusCode = 404;
-      throw err;
+    await StockMovement.create(
+      {
+        productId: item.productId,
+        type: defective ? "DAMAGE" : "RETURN",
+        quantity: defective ? 0 : quantity,
+        reservedDelta: 0,
+        referenceType: "saleItem",
+        referenceId: item.id,
+        createdBy: userId,
+        notes:
+          reason ||
+          (defective
+            ? `${quantity} defective unit(s) written off for order item #${item.id}`
+            : `Returned ${quantity} unit(s) for order item #${item.id}`),
+      },
+      { transaction: t }
+    );
+  } else {
+    let units;
+    if (serialNumbers && serialNumbers.length) {
+      units = await SerialUnit.findAll({
+        where: { productId: item.productId, saleItemId: item.id, status: "SOLD", serialNumber: { [Op.in]: serialNumbers } },
+        transaction: t,
+        lock: true,
+      });
+    } else {
+      units = await SerialUnit.findAll({
+        where: { productId: item.productId, saleItemId: item.id, status: "SOLD" },
+        order: [["id", "ASC"]],
+        limit: quantity,
+        transaction: t,
+        lock: true,
+      });
     }
-    if (requested > item.allocatedQuantity) {
-      const err = new Error("Cannot fulfill more than is currently allocated for this order line");
+    if (units.length < quantity) {
+      const err = new Error("Not enough sold serial units matched for this return");
       err.statusCode = 400;
       throw err;
     }
-
-    const product = await Product.findByPk(item.productId, { transaction: t });
-
-    await inventoryService.fulfillStock(
-      { productId: item.productId, saleItemId: item.id, quantity: requested, userId, serialNumbers },
-      { transaction: t }
-    );
-    await item.reload({ transaction: t });
-
-    const courier = await Courier.create(
+    for (const unit of units) {
+      // Non-defective: RETURNED, pending inspection (restocked later via updateSerialStatus).
+      // Defective: DAMAGED directly — already known unsellable, no inspection step needed.
+      unit.status = defective ? "DAMAGED" : "RETURNED";
+      unit.returnedAt = new Date();
+      await unit.save({ transaction: t });
+    }
+    await StockMovement.create(
       {
-        customerName: sale.customerName,
-        address: sale.fromAddress,
-        city: sale.city,
-        mobileNo: sale.customerNumber,
-        productName: product.name,
-        quantity: requested,
-        pending: true,
-        direction: "OUT",
-        courierName: courierName || null,
-        trackId: trackId || null,
-        userId,
-        saleId: sale.id,
-        saleItemId: item.id,
+        productId: item.productId,
+        type: defective ? "DAMAGE" : "RETURN",
+        quantity: 0,
+        reservedDelta: 0,
+        referenceType: "saleItem",
+        referenceId: item.id,
+        createdBy: userId,
+        notes:
+          reason ||
+          (defective
+            ? `${units.length} defective serial unit(s) written off for order item #${item.id}`
+            : `${units.length} serial unit(s) returned for order item #${item.id}, pending inspection`),
       },
       { transaction: t }
     );
-
-    await inventoryService.recomputeSaleFulfillmentStatus(saleId, { transaction: t });
-    await sale.reload({ transaction: t });
-
-    await t.commit();
-
-    await notify([
-      {
-        recipientModule: "account",
-        type: "ORDER_FULFILLED",
-        title: "Order Shipped",
-        message: `Invoice ${sale.invoiceNumber}: ${product.name} × ${requested} shipped`,
-        referenceType: "saleItem",
-        referenceId: item.id,
-        event: "order_fulfilled",
-        payload: { sale: { id: sale.id, invoiceNumber: sale.invoiceNumber }, item: { id: item.id, productId: item.productId } },
-      },
-      {
-        recipientModule: "couriers",
-        type: "ORDER_FULFILLED",
-        title: "Order Ready for Courier",
-        message: `Invoice ${sale.invoiceNumber}: ${product.name} × ${requested} — customer: ${sale.customerName}, city: ${sale.city || "—"}`,
-        referenceType: "saleItem",
-        referenceId: item.id,
-        event: "order_fulfilled",
-        payload: { sale: { id: sale.id, invoiceNumber: sale.invoiceNumber }, courierId: courier.id },
-      },
-    ]);
-
-    return { item, courier };
-  } catch (err) {
-    if (!t.finished) await t.rollback();
-    throw err;
   }
+
+  item.returnedQuantity += quantity;
+  await item.save({ transaction: t });
 };
 
-// Cancels an entire order. Rejects (409) if any item has already been fulfilled in part —
-// use cancelOrderItem for the still-unfulfilled remainder, or returnItem for shipped goods.
-const cancelOrder = async ({ saleId, userId, reason }) => {
+// Cancels an order. Handles every line item regardless of fulfillment progress: releases (or,
+// if `defective`, writes off) any still-reserved/backordered remainder, and returns (or writes
+// off) any portion already shipped, then marks the whole order CANCELLED.
+const cancelOrder = async ({ saleId, userId, reason, defective }) => {
   const t = await sequelize.transaction();
   try {
     const sale = await Sale.findByPk(saleId, { transaction: t, lock: true });
@@ -485,23 +483,30 @@ const cancelOrder = async ({ saleId, userId, reason }) => {
     }
 
     const items = await SaleItem.findAll({ where: { saleId }, transaction: t, lock: true });
-    if (items.some((i) => i.fulfilledQuantity > 0)) {
-      const err = new Error(
-        "This order has already been partially fulfilled — cancel the remaining unfulfilled portion per line item, or use the return workflow for shipped goods"
-      );
-      err.statusCode = 409;
-      throw err;
-    }
 
     for (const item of items) {
       if (item.fulfillmentStatus === "CANCELLED") continue;
+
       const toRelease = item.allocatedQuantity;
       if (toRelease > 0) {
-        await inventoryService.releaseReservation(
-          { productId: item.productId, saleItemId: item.id, quantity: toRelease, userId, reason: reason || "Order cancelled" },
-          { transaction: t }
-        );
+        if (defective) {
+          await inventoryService.writeOffReservation(
+            { productId: item.productId, saleItemId: item.id, quantity: toRelease, userId, reason: reason || "Order cancelled — defective" },
+            { transaction: t }
+          );
+        } else {
+          await inventoryService.releaseReservation(
+            { productId: item.productId, saleItemId: item.id, quantity: toRelease, userId, reason: reason || "Order cancelled" },
+            { transaction: t }
+          );
+        }
       }
+
+      const netFulfilled = item.fulfilledQuantity - item.returnedQuantity;
+      if (netFulfilled > 0) {
+        await applyReturn({ item, quantity: netFulfilled, userId, reason: reason || "Order cancelled", defective }, { transaction: t });
+      }
+
       item.allocatedQuantity = 0;
       item.backorderedQuantity = 0;
       item.fulfillmentStatus = "CANCELLED";
@@ -520,9 +525,9 @@ const cancelOrder = async ({ saleId, userId, reason }) => {
   }
 };
 
-// Narrower cancellation of a single unfulfilled (or partially-fulfilled) order line —
-// releases only that line's still-allocated/backordered remainder.
-const cancelOrderItem = async ({ saleId, saleItemId, userId, reason }) => {
+// Narrower cancellation of a single order line — same defective-aware release/return handling
+// as cancelOrder, scoped to one line item.
+const cancelOrderItem = async ({ saleId, saleItemId, userId, reason, defective }) => {
   const t = await sequelize.transaction();
   try {
     const item = await SaleItem.findOne({ where: { id: saleItemId, saleId }, transaction: t, lock: true });
@@ -535,15 +540,27 @@ const cancelOrderItem = async ({ saleId, saleItemId, userId, reason }) => {
 
     const toRelease = item.allocatedQuantity;
     if (toRelease > 0) {
-      await inventoryService.releaseReservation(
-        { productId: item.productId, saleItemId: item.id, quantity: toRelease, userId, reason: reason || "Order item cancelled" },
-        { transaction: t }
-      );
+      if (defective) {
+        await inventoryService.writeOffReservation(
+          { productId: item.productId, saleItemId: item.id, quantity: toRelease, userId, reason: reason || "Order item cancelled — defective" },
+          { transaction: t }
+        );
+      } else {
+        await inventoryService.releaseReservation(
+          { productId: item.productId, saleItemId: item.id, quantity: toRelease, userId, reason: reason || "Order item cancelled" },
+          { transaction: t }
+        );
+      }
+    }
+
+    const netFulfilled = item.fulfilledQuantity - item.returnedQuantity;
+    if (netFulfilled > 0) {
+      await applyReturn({ item, quantity: netFulfilled, userId, reason: reason || "Order item cancelled", defective }, { transaction: t });
     }
 
     item.allocatedQuantity = 0;
     item.backorderedQuantity = 0;
-    item.fulfillmentStatus = item.fulfilledQuantity > 0 ? "PARTIALLY_FULFILLED" : "CANCELLED";
+    item.fulfillmentStatus = "CANCELLED";
     await item.save({ transaction: t });
 
     await inventoryService.recomputeSaleFulfillmentStatus(saleId, { transaction: t });
@@ -557,7 +574,7 @@ const cancelOrderItem = async ({ saleId, saleItemId, userId, reason }) => {
 };
 
 // Records a return of previously-fulfilled (shipped/delivered) quantity.
-const returnItem = async ({ saleItemId, quantity, userId, reason, refundAmount, serialNumbers }) => {
+const returnItem = async ({ saleItemId, quantity, userId, reason, refundAmount, serialNumbers, defective }) => {
   const requested = parseInt(quantity);
   if (isNaN(requested) || requested <= 0) {
     const err = new Error("quantity must be a positive integer");
@@ -581,73 +598,7 @@ const returnItem = async ({ saleItemId, quantity, userId, reason, refundAmount, 
       throw err;
     }
 
-    const product = await Product.findByPk(item.productId, { transaction: t });
-
-    if (product.productType === "NON_SERIAL") {
-      const stock = await Stock.findOne({ where: { productId: item.productId }, transaction: t, lock: true });
-      if (stock) {
-        stock.quantity += requested;
-        await stock.save({ transaction: t });
-      }
-      await StockMovement.create(
-        {
-          productId: item.productId,
-          type: "RETURN",
-          quantity: requested,
-          reservedDelta: 0,
-          referenceType: "saleItem",
-          referenceId: item.id,
-          createdBy: userId,
-          notes: reason || `Returned ${requested} unit(s) for order item #${item.id}`,
-        },
-        { transaction: t }
-      );
-    } else {
-      let units;
-      if (serialNumbers && serialNumbers.length) {
-        units = await SerialUnit.findAll({
-          where: { productId: item.productId, saleItemId: item.id, status: "SOLD", serialNumber: { [Op.in]: serialNumbers } },
-          transaction: t,
-          lock: true,
-        });
-      } else {
-        units = await SerialUnit.findAll({
-          where: { productId: item.productId, saleItemId: item.id, status: "SOLD" },
-          order: [["id", "ASC"]],
-          limit: requested,
-          transaction: t,
-          lock: true,
-        });
-      }
-      if (units.length < requested) {
-        const err = new Error("Not enough sold serial units matched for this return");
-        err.statusCode = 400;
-        throw err;
-      }
-      for (const unit of units) {
-        unit.status = "RETURNED";
-        unit.returnedAt = new Date();
-        await unit.save({ transaction: t });
-      }
-      // Not auto-restocked — Stock.quantity only increases once a returned serial unit
-      // is inspected and accepted via inventoryService.updateSerialStatus.
-      await StockMovement.create(
-        {
-          productId: item.productId,
-          type: "RETURN",
-          quantity: 0,
-          reservedDelta: 0,
-          referenceType: "saleItem",
-          referenceId: item.id,
-          createdBy: userId,
-          notes: reason || `${requested} serial unit(s) returned for order item #${item.id}, pending inspection`,
-        },
-        { transaction: t }
-      );
-    }
-
-    item.returnedQuantity += requested;
-    await item.save({ transaction: t });
+    await applyReturn({ item, quantity: requested, userId, reason, defective, serialNumbers }, { transaction: t });
 
     const sale = await Sale.findByPk(item.saleId, { transaction: t, lock: true });
     if (refundAmount && parseFloat(refundAmount) > 0) {
@@ -673,7 +624,6 @@ module.exports = {
   computePaymentStatus,
   createOrder,
   recordPayment,
-  fulfillOrderItem,
   cancelOrder,
   cancelOrderItem,
   returnItem,

@@ -23,6 +23,7 @@ import {
     Banknote,
     CreditCard,
     FileClock,
+    Building2,
     type LucideIcon,
 } from "lucide-react";
 
@@ -36,6 +37,7 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
     "/couriers": Truck,
     "/couriers?direction=out": ArrowUpRight,
     "/couriers?direction=in": ArrowDownLeft,
+    "/couriers-companies": Building2,
     "/customers": Contact,
     "/users": Users,
     "/account": UserCircle2,
@@ -105,7 +107,7 @@ const Sidebar = () => {
 
             return {
                 ...item,
-                // children: visibleChildren,
+                children: visibleChildren,
             };
         })
         .filter((item): item is SidebarItem => item !== null);

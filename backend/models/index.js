@@ -3,6 +3,7 @@ const Role = require("./role.model");
 const Route = require("./route.model");
 const Permission = require("./permission.model");
 const Courier = require("./courier.model");
+const CourierCompany = require("./courierCompany.model");
 const Product = require("./product.model");
 const Stock = require("./stock.model");
 const StockMovement = require("./stockMovement.model");
@@ -90,12 +91,17 @@ Payment.belongsTo(Sale, { foreignKey: "saleId" });
 User.hasMany(Payment, { foreignKey: "createdBy" });
 Payment.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
 
+// User ↔ Notification (personal, per-user notifications)
+User.hasMany(Notification, { foreignKey: "recipientUserId" });
+Notification.belongsTo(User, { foreignKey: "recipientUserId", as: "recipient" });
+
 module.exports = {
   User,
   Role,
   Route,
   Permission,
   Courier,
+  CourierCompany,
   Customer,
   Product,
   Stock,

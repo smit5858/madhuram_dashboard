@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
-import { Plus, RotateCcw, Trash2, Eye, Edit2, AlertTriangle, CheckCircle2, XCircle, Package, IndianRupee, ShoppingBag, Search as SearchIcon, Download, ChevronDown, UserCheck, Loader2, X } from "lucide-react";
+import { Plus, RotateCcw, Trash2, Eye, Edit2, AlertTriangle, CheckCircle2, XCircle, Package, IndianRupee, ShoppingBag, Search as SearchIcon, Download, ChevronDown, UserCheck, Loader2 } from "lucide-react";
 import { Formik, Form, Field, useFormikContext } from "formik";
 import { useDebounce } from "@/hook/useDebounce";
 import { type RootState } from "../../store/store";
@@ -18,13 +18,13 @@ import productService, {
   type ProductData,
 } from "../../services/product.service";
 import customerService, { type CustomerData } from "../../services/customer.service";
-import inventoryService from "../../services/inventory.service";
+import CancelSaleModal from "@/shared/components/CancelSaleModal";
+import { blurNumberInputOnWheel } from "@/shared/utils/input";
 
 interface FormItem {
   productId: number | "";
   quantity: number | "";
   sellingPrice: number | "";
-  serialNumbers: string[];
 }
 
 const PAYMENT_METHODS = [
@@ -70,136 +70,6 @@ const FilterSync = ({
   }, [values.startDate, values.endDate]);
 
   return null;
-};
-
-/** Autocomplete for picking exact serial-tracked units on a SERIALIZED product's order line.
- *  Only AVAILABLE units for this product are offered, units already picked on another row
- *  of the same sale are excluded so the same unit can't be added twice in one order, and
- *  selection stops once `maxSelectable` (the line's quantity) is reached. */
-const SerialNumberPicker = ({
-  productId,
-  selected,
-  onChange,
-  excludeSerialNumbers = [],
-  maxSelectable,
-}: {
-  productId: number;
-  selected: string[];
-  onChange: (serials: string[]) => void;
-  excludeSerialNumbers?: string[];
-  maxSelectable: number;
-}) => {
-  const [query, setQuery] = useState("");
-  const [isOpen, setIsOpen] = useState(false);
-  const debouncedQuery = useDebounce(query, 300);
-  const isFull = selected.length >= maxSelectable;
-
-  const { data, isFetching } = useQuery({
-    queryKey: ["available-serials", productId, debouncedQuery],
-    queryFn: ({ signal }) =>
-      inventoryService.getSerials(
-        { productId, status: "AVAILABLE", serialNumber: debouncedQuery || undefined },
-        { signal }
-      ),
-    enabled: !!productId && isOpen && !isFull,
-  });
-
-  const results = (data?.data?.data || []).filter(
-    (s) => !selected.includes(s.serialNumber) && !excludeSerialNumbers.includes(s.serialNumber)
-  );
-
-  const handleSelect = (serialNumber: string) => {
-    if (isFull) return;
-    onChange([...selected, serialNumber]);
-    setQuery("");
-  };
-
-  const handleRemove = (serialNumber: string) => {
-    onChange(selected.filter((s) => s !== serialNumber));
-  };
-
-  return (
-    <div className="relative w-full">
-      <div className="flex items-center justify-between mb-0.5">
-        <label className="block text-[10px] font-semibold text-slate-500">
-          Serial Number{maxSelectable > 1 ? "s" : ""} *
-        </label>
-        <span
-          className={`text-[10px] font-bold ${isFull ? "text-emerald-600" : "text-slate-400"}`}
-        >
-          {selected.length} / {maxSelectable} selected
-        </span>
-      </div>
-
-      {selected.length > 0 && (
-        <div className="mb-1 flex flex-wrap gap-1">
-          {selected.map((s) => (
-            <span
-              key={s}
-              className="inline-flex items-center gap-1 rounded bg-blue-50 border border-blue-200 px-1.5 py-0.5 text-[10px] font-mono font-bold text-blue-700"
-            >
-              {s}
-              <button
-                type="button"
-                onClick={() => handleRemove(s)}
-                className="text-blue-400 hover:text-rose-600"
-                title="Remove"
-              >
-                <X className="h-2.5 w-2.5" />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {isFull ? (
-        <p className="text-[11px] font-medium text-emerald-600">
-          All {maxSelectable} unit{maxSelectable > 1 ? "s" : ""} selected. Increase quantity above to add more.
-        </p>
-      ) : (
-      <div className="relative">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setIsOpen(true);
-          }}
-          onFocus={() => setIsOpen(true)}
-          onBlur={() => setTimeout(() => setIsOpen(false), 150)}
-          placeholder="Type to search, e.g. TC832"
-          className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-mono text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
-        />
-
-        {isOpen && (
-          <div className="absolute z-40 left-0 right-0 top-full mt-1 max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-xl">
-            {isFetching ? (
-              <div className="flex items-center gap-1.5 px-2 py-2 text-[11px] text-slate-400">
-                <Loader2 className="h-3 w-3 animate-spin" /> Searching...
-              </div>
-            ) : results.length === 0 ? (
-              <div className="px-2 py-2 text-[11px] text-slate-400">
-                No available serial number{query ? ` matching "${query}"` : "s"} for this product.
-              </div>
-            ) : (
-              results.map((r) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => handleSelect(r.serialNumber)}
-                  className="block w-full rounded px-2 py-1.5 text-left text-xs font-mono font-semibold text-slate-800 hover:bg-blue-50"
-                >
-                  {r.serialNumber}
-                </button>
-              ))
-            )}
-          </div>
-        )}
-      </div>
-      )}
-    </div>
-  );
 };
 
 const Sells = () => {
@@ -292,6 +162,7 @@ const Sells = () => {
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [newProductName, setNewProductName] = useState("");
   const [newProductDesc, setNewProductDesc] = useState("");
+  const [saveAsNewProduct, setSaveAsNewProduct] = useState(false);
 
   // Form State
   const [customerId, setCustomerId] = useState<number | null>(null);
@@ -312,8 +183,11 @@ const Sells = () => {
   const [collectedAmount, setCollectedAmount] = useState<string>("0");
   const [manualSellingAmount, setManualSellingAmount] = useState<string>("");
   const [notes, setNotes] = useState("");
+
+  // Cancel-sale confirmation (with the defective/write-off option) — id of the sale awaiting confirmation.
+  const [cancelSaleId, setCancelSaleId] = useState<number | null>(null);
   const [items, setItems] = useState<FormItem[]>([
-    { productId: "", quantity: 1, sellingPrice: "", serialNumbers: [] },
+    { productId: "", quantity: 1, sellingPrice: "" },
   ]);
 
   // Debounced Customer Phone Lookup & Autocomplete for Sells Entry
@@ -419,6 +293,7 @@ const Sells = () => {
       setIsProductModalOpen(false);
       setNewProductName("");
       setNewProductDesc("");
+      setSaveAsNewProduct(false);
       // Automatically select in the latest item row if empty
       if (res.data?.data?.id) {
         setItems((prev) => {
@@ -451,7 +326,7 @@ const Sells = () => {
       // Fulfillment (line items, shipping, courier history) happens on the
       // Couriers page's "Pending Fulfillment" list — send the user there,
       // but don't auto-open anything; they pick the entry themselves.
-      navigate("/couriers");
+      navigate("/sells");
     },
     onError: (err: any) => {
       toast.error(
@@ -482,11 +357,16 @@ const Sells = () => {
 
   // Mutation: Delete Sale
   const deleteSaleMutation = useMutation({
-    mutationFn: (id: number) => saleService.deleteSale(id),
+    mutationFn: ({ id, defective, reason }: { id: number; defective?: boolean; reason?: string }) =>
+      saleService.deleteSale(id, { defective, reason }),
     onSuccess: (res) => {
       toast.success(res.data?.message || "Sale cancelled successfully");
       queryClient.invalidateQueries({ queryKey: ["sells"] });
       queryClient.invalidateQueries({ queryKey: ["sells-totals"] });
+      // Cancelling releases/returns stock — the products catalog (available counts shown in
+      // the item picker) must be refetched or it keeps showing the stale reserved/sold figure.
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      setCancelSaleId(null);
     },
     onError: (err: any) => {
       toast.error(
@@ -544,7 +424,7 @@ const Sells = () => {
     setCollectedAmount("0");
     setManualSellingAmount("");
     setNotes("");
-    setItems([{ productId: "", quantity: 1, sellingPrice: "", serialNumbers: [] }]);
+    setItems([{ productId: "", quantity: 1, sellingPrice: "" }]);
     setSelectedSale(null);
   };
 
@@ -576,11 +456,10 @@ const Sells = () => {
           productId: i.productId,
           quantity: i.quantity,
           sellingPrice: i.sellingPrice,
-          serialNumbers: [],
         }))
       );
     } else {
-      setItems([{ productId: "", quantity: 1, sellingPrice: "", serialNumbers: [] }]);
+      setItems([{ productId: "", quantity: 1, sellingPrice: "" }]);
     }
     setIsModalOpen(true);
   };
@@ -601,7 +480,7 @@ const Sells = () => {
   const handleAddItemRow = () => {
     setItems((prev) => [
       ...prev,
-      { productId: "", quantity: 1, sellingPrice: "", serialNumbers: [] },
+      { productId: "", quantity: 1, sellingPrice: "" },
     ]);
   };
 
@@ -634,32 +513,16 @@ const Sells = () => {
         ...copy[index],
         productId: productId === "" ? "" : Number(productId),
         sellingPrice: selectedProduct?.sellingPrice != null ? Number(selectedProduct.sellingPrice) : "",
-        // Serials belong to a specific product — always clear on product change.
-        serialNumbers: [],
         quantity: copy[index].quantity || 1,
       };
       return copy;
     });
   };
 
-  const handleSerialNumbersChange = (index: number, serialNumbers: string[]) => {
-    setItems((prev) => {
-      const copy = [...prev];
-      copy[index] = { ...copy[index], serialNumbers };
-      return copy;
-    });
-  };
-
-  // For SERIALIZED rows, shrinking quantity below the number of already-picked serials
-  // trims the excess (from the end) so the two never drift out of sync.
   const handleQuantityChange = (index: number, quantity: number | "") => {
     setItems((prev) => {
       const copy = [...prev];
-      const nextSerials =
-        quantity !== "" && copy[index].serialNumbers.length > Number(quantity)
-          ? copy[index].serialNumbers.slice(0, Number(quantity))
-          : copy[index].serialNumbers;
-      copy[index] = { ...copy[index], quantity, serialNumbers: nextSerials };
+      copy[index] = { ...copy[index], quantity };
       return copy;
     });
   };
@@ -683,20 +546,12 @@ const Sells = () => {
         toast.error(`Quantity for row #${i + 1} must be at least 1`);
         return;
       }
-      const product = productsList.find((p) => p.id === Number(item.productId));
-      if (product?.productType === "SERIALIZED" && item.serialNumbers.length !== Number(item.quantity)) {
-        toast.error(
-          `Select ${item.quantity} serial number(s) for ${product.name} (row #${i + 1}) — currently ${item.serialNumbers.length} selected`
-        );
-        return;
-      }
     }
 
     const payloadItems = items.map((i) => ({
       productId: Number(i.productId),
       quantity: Number(i.quantity),
       sellingPrice: Number(i.sellingPrice) || 0,
-      ...(i.serialNumbers.length > 0 ? { serialNumbers: i.serialNumbers } : {}),
     }));
 
     if (selectedSale?.id) {
@@ -738,13 +593,7 @@ const Sells = () => {
   };
 
   const handleDelete = (id: number) => {
-    if (
-      window.confirm(
-        "Are you sure you want to cancel this sale? This action will mark it as CANCELLED."
-      )
-    ) {
-      deleteSaleMutation.mutate(id);
-    }
+    setCancelSaleId(id);
   };
 
   const handleExport = async (format: "pdf" | "excel") => {
@@ -766,36 +615,6 @@ const Sells = () => {
       window.URL.revokeObjectURL(url);
     } catch (err: any) {
       toast.error(err.response?.data?.message || "Export failed");
-    }
-  };
-
-  // Helper: Status badge
-  const renderStatusBadge = (status?: string) => {
-    switch (status) {
-      case "FULFILLED":
-        return (
-          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 border border-emerald-200">
-            <CheckCircle2 className="h-3 w-3" /> Fulfilled
-          </span>
-        );
-      case "CONFIRMED":
-        return (
-          <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 border border-blue-200">
-            Confirmed
-          </span>
-        );
-      case "CANCELLED":
-        return (
-          <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700 border border-rose-200">
-            <XCircle className="h-3 w-3" /> Cancelled
-          </span>
-        );
-      default:
-        return (
-          <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700 border border-amber-200">
-            Pending
-          </span>
-        );
     }
   };
 
@@ -1260,7 +1079,10 @@ const Sells = () => {
 
       {/* CREATE / EDIT SALE MODAL */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}
+        >
           <div className="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
@@ -1455,6 +1277,7 @@ const Sells = () => {
                     </select>
                   </div>
                 </div>
+
               </div>
 
               {/* Section 3: Products Multi-Row Section */}
@@ -1487,15 +1310,10 @@ const Sells = () => {
                     const selectedProd = productsList.find(
                       (p) => p.id === Number(row.productId)
                     );
-                    const isSerialized = selectedProd?.productType === "SERIALIZED";
                     const stockQty = selectedProd ? (selectedProd.available ?? 0) : 0;
                     const isShort =
                       row.productId &&
                       stockQty < (Number(row.quantity) || 1);
-                    // Serials already picked on other rows for the same product can't be picked again in this sale.
-                    const excludeSerials = items
-                      .filter((it, i) => i !== index && Number(it.productId) === Number(row.productId))
-                      .flatMap((it) => it.serialNumbers);
 
                     return (
                       <div
@@ -1547,8 +1365,7 @@ const Sells = () => {
                           </div>
                         )}
 
-                        {/* Quantity — for SERIALIZED products, this sets how many serial
-                            numbers need to be picked below; shrinking it trims extra picks. */}
+                        {/* Quantity */}
                         <div className="w-24">
                           <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
                             Qty *
@@ -1564,6 +1381,7 @@ const Sells = () => {
                                 e.target.value ? Number(e.target.value) : ""
                               )
                             }
+                            onWheel={blurNumberInputOnWheel}
                             className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
                           />
                         </div>
@@ -1585,6 +1403,7 @@ const Sells = () => {
                                 e.target.value ? Number(e.target.value) : ""
                               )
                             }
+                            onWheel={blurNumberInputOnWheel}
                             placeholder="0.00"
                             className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
                           />
@@ -1613,17 +1432,6 @@ const Sells = () => {
                           </button>
                         </div>
                       </div>
-
-                      {/* Serial Number autocomplete — only for serial-tracked products */}
-                      {isSerialized && row.productId && (
-                        <SerialNumberPicker
-                          productId={Number(row.productId)}
-                          selected={row.serialNumbers}
-                          onChange={(serials) => handleSerialNumbersChange(index, serials)}
-                          excludeSerialNumbers={excludeSerials}
-                          maxSelectable={Math.max(1, Number(row.quantity) || 1)}
-                        />
-                      )}
                       </div>
                     );
                   })}
@@ -1652,6 +1460,7 @@ const Sells = () => {
                           : calculatedItemsTotal
                       }
                       onChange={(e) => setManualSellingAmount(e.target.value)}
+                      onWheel={blurNumberInputOnWheel}
                       placeholder={calculatedItemsTotal.toString()}
                       className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
                     />
@@ -1676,7 +1485,16 @@ const Sells = () => {
                         step="0.01"
                         required
                         value={collectedAmount}
+                        onFocus={(e) => {
+                          // Typing into the default "0" appends after it (e.g. "0" + "5" = "05")
+                          // instead of replacing it — clear it on focus so the first keystroke starts fresh.
+                          if (e.target.value === "0") setCollectedAmount("");
+                        }}
+                        onBlur={() => {
+                          if (collectedAmount.trim() === "") setCollectedAmount("0");
+                        }}
                         onChange={(e) => setCollectedAmount(e.target.value)}
+                        onWheel={blurNumberInputOnWheel}
                         placeholder="0.00"
                         className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-emerald-600 focus:border-[#3d6fe0] focus:outline-none"
                       />
@@ -1750,7 +1568,15 @@ const Sells = () => {
 
       {/* QUICK ADD PRODUCT MODAL */}
       {isProductModalOpen && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-sm">
+        <div
+          className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-sm"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setIsProductModalOpen(false);
+              setSaveAsNewProduct(false);
+            }
+          }}
+        >
           <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl border border-slate-200">
             <h3 className="text-sm font-bold text-slate-900 mb-1">
               Add New Master Product
@@ -1763,6 +1589,10 @@ const Sells = () => {
               onSubmit={(e) => {
                 e.preventDefault();
                 if (!newProductName.trim()) return;
+                if (!saveAsNewProduct) {
+                  toast.error("Check \"Save as New Product\" to save this product");
+                  return;
+                }
                 createProductMutation.mutate({
                   name: newProductName.trim(),
                   description: newProductDesc.trim() || undefined,
@@ -1797,21 +1627,36 @@ const Sells = () => {
                 />
               </div>
 
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsProductModalOpen(false)}
-                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={createProductMutation.isPending}
-                  className="rounded-lg bg-[#3d6fe0] px-4 py-1.5 text-xs font-bold text-white hover:bg-[#3162d2]"
-                >
-                  {createProductMutation.isPending ? "Creating..." : "Save Product"}
-                </button>
+              <div className="flex items-center justify-between gap-2 pt-2">
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={saveAsNewProduct}
+                    onChange={(e) => setSaveAsNewProduct(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-slate-300 text-[#3d6fe0] focus:ring-[#3d6fe0]"
+                  />
+                  Save as New Product
+                </label>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsProductModalOpen(false);
+                      setSaveAsNewProduct(false);
+                    }}
+                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={createProductMutation.isPending}
+                    className="rounded-lg bg-[#3d6fe0] px-4 py-1.5 text-xs font-bold text-white hover:bg-[#3162d2] disabled:opacity-50"
+                  >
+                    {createProductMutation.isPending ? "Creating..." : "Save Product"}
+                  </button>
+                </div>
               </div>
             </form>
           </div>
@@ -1820,7 +1665,10 @@ const Sells = () => {
 
       {/* DETAIL MODAL */}
       {isDetailOpen && selectedSale && detail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) closeDetailModal(); }}
+        >
           <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
@@ -1980,6 +1828,7 @@ const Sells = () => {
                         max={Number(detail.pendingAmount)}
                         value={paymentAmount}
                         onChange={(e) => setPaymentAmount(e.target.value)}
+                        onWheel={blurNumberInputOnWheel}
                         placeholder="0.00"
                         className="w-24 rounded-md border border-emerald-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
                       />
@@ -2050,6 +1899,16 @@ const Sells = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {cancelSaleId !== null && (
+        <CancelSaleModal
+          onClose={() => setCancelSaleId(null)}
+          isSubmitting={deleteSaleMutation.isPending}
+          onConfirm={({ defective, reason }) =>
+            deleteSaleMutation.mutate({ id: cancelSaleId, defective, reason })
+          }
+        />
       )}
     </div>
   );

@@ -1,5 +1,6 @@
 import _ from 'lodash';
 import React, { useState } from 'react';
+import { blurNumberInputOnWheel } from '@/shared/utils/input';
 import './custom.css'
 
 interface FormikInputProps {
@@ -10,6 +11,7 @@ interface FormikInputProps {
     };
     label?: string;
     type?: string;
+    inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'];
     placeholder?: string;
     className?: string;
     id?: string;
@@ -24,6 +26,7 @@ const FormikInput = ({
     form,
     label,
     type = 'text',
+    inputMode,
     placeholder,
     className = '',
     id,
@@ -73,6 +76,7 @@ const FormikInput = ({
                         {...field}
                         id={id || field.name}
                         type={inputType}
+                        inputMode={inputMode}
                         placeholder={placeholder}
                         maxLength={maxLength}
                         className={`form-input ${hasError ? 'form-input-error' : ''} ${className}`}
@@ -81,6 +85,7 @@ const FormikInput = ({
                                 ? 'current-password'
                                 : 'email'
                         }
+                        onWheel={type === 'number' ? blurNumberInputOnWheel : undefined}
                     />
                 )}
 

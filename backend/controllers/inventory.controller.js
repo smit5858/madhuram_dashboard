@@ -1,10 +1,47 @@
 const { SerialUnit, Product, SaleItem, Sale, Dealer } = require("../models");
 const { Op } = require("sequelize");
 const inventoryService = require("../services/inventory.service");
+const { notify } = require("../services/notification.service");
 
 const errorResponse = (res, err) => {
   const status = err.statusCode || (err.message && /not found/i.test(err.message) ? 404 : 400);
   return res.status(status).json({ success: false, message: err.message });
+};
+
+// Fires after a stock receipt's FIFO sweep (inventoryService.allocateBackorders) clears one or
+// more previously-backordered sale items — lets the Couriers page surface + highlight those
+// shipments live instead of the user having to notice on next refresh. Called after the
+// receiving transaction has already committed, so this is best-effort only (notify() swallows
+// its own errors).
+const notifyBackorderAllocations = async (allocations, product) => {
+  if (!allocations || allocations.length === 0) return;
+
+  const allocatedBySale = {};
+  for (const a of allocations) {
+    allocatedBySale[a.saleId] = (allocatedBySale[a.saleId] || 0) + a.allocatedQty;
+  }
+  const saleIds = Object.keys(allocatedBySale).map(Number);
+
+  const sales = await Sale.findAll({ where: { id: { [Op.in]: saleIds } }, attributes: ["id", "invoiceNumber", "customerName"] });
+
+  await notify(
+    sales.map((sale) => ({
+      recipientModule: "couriers",
+      type: "BACKORDER_ALLOCATED",
+      title: "Backordered Item Now In Stock",
+      message: `Invoice ${sale.invoiceNumber}: ${product.name} × ${allocatedBySale[sale.id]} unit(s) received and ready to fulfill`,
+      referenceType: "sale",
+      referenceId: sale.id,
+      event: "backorder_allocated",
+      payload: {
+        saleId: sale.id,
+        invoiceNumber: sale.invoiceNumber,
+        customerName: sale.customerName,
+        productName: product.name,
+        allocatedQty: allocatedBySale[sale.id],
+      },
+    }))
+  );
 };
 
 // POST /inventory/receive
@@ -45,6 +82,8 @@ exports.receiveStock = async (req, res) => {
       units,
       userId: user.id,
     });
+
+    await notifyBackorderAllocations(result.allocations, product);
 
     return res.status(200).json({ success: true, message: "Stock received successfully", data: result });
   } catch (err) {

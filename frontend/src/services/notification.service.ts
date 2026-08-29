@@ -2,8 +2,15 @@ import httpService from "./http-service";
 
 export interface NotificationData {
   id: number;
-  recipientModule: "couriers" | "account" | "all";
-  type: "NEW_SALE" | "STOCK_LOW" | "PAYMENT_RECEIVED";
+  recipientModule: "couriers" | "account" | "admin" | "all";
+  recipientUserId?: number | null;
+  type:
+    | "NEW_SALE"
+    | "NEW_CUSTOMER"
+    | "STOCK_LOW"
+    | "PAYMENT_RECEIVED"
+    | "ORDER_FULFILLED"
+    | "BACKORDER_ALLOCATED";
   title: string;
   message?: string;
   referenceType?: string;

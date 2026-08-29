@@ -223,12 +223,14 @@ exports.updateSale = async (req, res) => {
   }
 };
 
-// DELETE /sells/:id — cancels the order, releasing any unfulfilled reservations
+// DELETE /sells/:id — cancels the order, releasing/writing-off any reservation and
+// returning/writing-off any already-shipped portion. body: { defective?, reason? }
 exports.deleteSale = async (req, res) => {
   try {
     const { id } = req.params;
     const user = req.user;
     const isAdmin = user && user.roleName === "Admin";
+    const { defective, reason } = req.body || {};
 
     const sale = await Sale.findByPk(id);
     if (!sale) {
@@ -238,7 +240,7 @@ exports.deleteSale = async (req, res) => {
       return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to cancel this sale" });
     }
 
-    await orderService.cancelOrder({ saleId: id, userId: user.id });
+    await orderService.cancelOrder({ saleId: id, userId: user.id, defective: !!defective, reason });
 
     return res.status(200).json({ success: true, message: "Sale cancelled successfully" });
   } catch (err) {
@@ -344,34 +346,12 @@ exports.recordPayment = async (req, res) => {
   }
 };
 
-// POST /sells/:id/items/:itemId/fulfill
-exports.fulfillOrderItem = async (req, res) => {
-  try {
-    const { id, itemId } = req.params;
-    const user = req.user;
-    const { quantity, serialNumbers, courierName, trackId } = req.body || {};
-
-    const result = await orderService.fulfillOrderItem({
-      saleId: id,
-      saleItemId: itemId,
-      quantity,
-      serialNumbers,
-      courierName,
-      trackId,
-      userId: user.id,
-    });
-    return res.status(200).json({ success: true, message: "Order item fulfilled successfully", data: result });
-  } catch (err) {
-    return errorResponse(res, err);
-  }
-};
-
 // POST /sells/:id/items/:itemId/return
 exports.returnOrderItem = async (req, res) => {
   try {
     const { itemId } = req.params;
     const user = req.user;
-    const { quantity, reason, refundAmount, serialNumbers } = req.body || {};
+    const { quantity, reason, refundAmount, serialNumbers, defective } = req.body || {};
 
     const item = await orderService.returnItem({
       saleItemId: itemId,
@@ -379,6 +359,7 @@ exports.returnOrderItem = async (req, res) => {
       reason,
       refundAmount,
       serialNumbers,
+      defective: !!defective,
       userId: user.id,
     });
     return res.status(200).json({ success: true, message: "Return recorded successfully", data: item });
@@ -392,9 +373,9 @@ exports.cancelOrderItem = async (req, res) => {
   try {
     const { id, itemId } = req.params;
     const user = req.user;
-    const { reason } = req.body || {};
+    const { reason, defective } = req.body || {};
 
-    const item = await orderService.cancelOrderItem({ saleId: id, saleItemId: itemId, reason, userId: user.id });
+    const item = await orderService.cancelOrderItem({ saleId: id, saleItemId: itemId, reason, defective: !!defective, userId: user.id });
     return res.status(200).json({ success: true, message: "Order item cancelled successfully", data: item });
   } catch (err) {
     return errorResponse(res, err);

@@ -8,6 +8,7 @@ const Error = lazy(() => import('../pages/error/Error'));
 const Login = lazy(() => import('../pages/login/Login'));
 const Dashboard = lazy(() => import('../pages/dashboard/Dashboard'));
 const Couriers = lazy(() => import('../pages/couriers/Couriers'));
+const CourierCompanies = lazy(() => import('../pages/couriers/CourierCompanies'));
 const Customers = lazy(() => import('../pages/customers/Customers'));
 const Sells = lazy(() => import('../pages/sells/Sells'));
 const Users = lazy(() => import('../pages/users/Users'));
@@ -60,8 +61,22 @@ const routesConfig = [
           </AuthGuard>
         ) 
       },
-      { 
-        path: Routing.Customers, 
+      {
+        path: Routing.CourierCompanies,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/couriers-companies">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <CourierCompanies />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.Customers,
         element: (
           <AuthGuard>
             <PermissionGuard requiredPath="/customers">

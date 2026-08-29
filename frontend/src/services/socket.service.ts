@@ -7,26 +7,35 @@ let socket: Socket | null = null;
 /**
  * Initialize and return the singleton socket connection.
  * Call once on app mount. Pass a module name so the server places
- * this client in the correct Socket.io room for targeted notifications.
+ * this client in the correct Socket.io room for targeted notifications,
+ * and/or a userId to also join that user's personal notification room.
  *
  * @param moduleName - "couriers" | "account" | "all" (optional, defaults to "all")
+ * @param userId - logged-in user's id (optional) — joins room "user-{id}"
  */
-export const initSocket = (moduleName?: string): Socket => {
-  if (socket && socket.connected) return socket;
+export const initSocket = (moduleName?: string, userId?: number | string | null): Socket => {
+  const desiredRooms = [moduleName, userId ? `user-${userId}` : undefined, "all"].filter(
+    (room): room is string => !!room
+  );
+  const joinRooms = () => desiredRooms.forEach((room) => socket!.emit("join_module", room));
+
+  if (socket) {
+    // Re-joining on an already-connected socket used to silently no-op, so a later
+    // caller's rooms (e.g. a per-user room) could never actually get joined.
+    if (socket.connected) {
+      joinRooms();
+    } else {
+      socket.once("connect", joinRooms);
+    }
+    return socket;
+  }
 
   socket = io(BACKEND_URL, {
     transports: ["websocket"],
     autoConnect: true,
   });
 
-  socket.on("connect", () => {
-    // Join the module room so we only receive relevant notifications
-    if (moduleName) {
-      socket!.emit("join_module", moduleName);
-    }
-    // Always join the "all" room to receive broadcasts
-    socket!.emit("join_module", "all");
-  });
+  socket.on("connect", joinRooms);
 
   socket.on("disconnect", () => {
     console.info("[socket] disconnected");

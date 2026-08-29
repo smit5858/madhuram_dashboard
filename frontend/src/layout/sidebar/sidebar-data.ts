@@ -15,7 +15,7 @@ export interface SidebarItem {
     /** Display label */
     name: string;
     /**
-     * Optional query string appended to `path` when navigating (e.g. "?direction=IN").
+     * Optional query string appended to `path` when navigating (e.g. "?tab=foo").
      * Permission checks and icon lookup still key off `path` alone — this is purely
      * for distinguishing children that share one underlying permission-guarded route.
      */
@@ -39,6 +39,7 @@ export const ALL_SIDEBAR_ITEMS: SidebarItem[] = [
         children: [
             { path: "/couriers", name: "Outgoing Couriers", search: "?direction=OUT" },
             { path: "/couriers", name: "Incoming Couriers", search: "?direction=IN" },
+            { path: "/couriers-companies", name: "Courier Companies" },
         ],
     },
     { path: "/customers", name: "Customers" },

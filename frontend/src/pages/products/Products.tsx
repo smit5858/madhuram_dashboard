@@ -33,6 +33,7 @@ import productService, {
 import dealerService, { type DealerData, type DealerListResponse } from "../../services/dealer.service";
 import inventoryService, { type ReceiveNonSerialPayload, type ReceiveSerializedPayload } from "../../services/inventory.service";
 import AddressAutocompleteInput from "@/shared/components/AddressAutocompleteInput";
+import { getTodayISODate } from "@/shared/utils/date";
 import {
   productFilterSchema,
   createNonSerialSchema,
@@ -71,7 +72,7 @@ interface ProductFormValues {
   units: UnitRowValues[];
 }
 
-const EMPTY_UNIT_ROW: UnitRowValues = { serialNumber: "", purchasePrice: "", sellingPrice: "", purchaseDate: "", dealerId: "" };
+const EMPTY_UNIT_ROW: UnitRowValues = { serialNumber: "", purchasePrice: "", sellingPrice: "", purchaseDate: getTodayISODate(), dealerId: "" };
 
 const EMPTY_FORM_VALUES: ProductFormValues = {
   name: "",
@@ -82,7 +83,7 @@ const EMPTY_FORM_VALUES: ProductFormValues = {
   purchasePrice: "",
   sellingPrice: "",
   dealerId: "",
-  purchaseDate: "",
+  purchaseDate: getTodayISODate(),
   units: [{ ...EMPTY_UNIT_ROW }],
 };
 
@@ -216,7 +217,10 @@ const QuickAddDealerModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-sm">
+    <div
+      className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
         <h3 className="text-sm font-bold text-slate-900 mb-1">{mode === "edit" ? "Edit Dealer" : "Add New Dealer"}</h3>
         <p className="text-xs text-slate-500 mb-4">
@@ -298,7 +302,7 @@ const EMPTY_RECEIVE_NON_SERIAL_VALUES: ReceiveNonSerialFormValues = {
   quantity: "",
   purchasePrice: "",
   dealerId: "",
-  purchaseDate: "",
+  purchaseDate: getTodayISODate(),
 };
 
 interface ReceiveSerializedFormValues {
@@ -351,7 +355,10 @@ const ReceiveStockModal = ({
   if (!product) return null;
 
   return (
-    <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-sm">
+    <div
+      className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
           <div>
@@ -592,7 +599,10 @@ const SerialLookupModal = ({ onClose }: { onClose: () => void }) => {
   const detail = detailResponse?.data?.data;
 
   return (
-    <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-sm">
+    <div
+      className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
           <div>
@@ -1296,7 +1306,10 @@ const Products = () => {
 
       {/* CREATE / EDIT PRODUCT MODAL */}
       {isFormModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) closeFormModal(); }}
+        >
           <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
@@ -1602,7 +1615,10 @@ const Products = () => {
 
       {/* PRODUCT DETAILS MODAL */}
       {detailProductId !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) closeDetailModal(); }}
+        >
           <div className="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
             {isDetailLoading || !detailProduct ? (
               <div className="flex h-40 items-center justify-center">

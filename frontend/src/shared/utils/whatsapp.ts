@@ -11,6 +11,8 @@ interface CourierMessageInfo {
     quantity?: number | string | null;
     courierName?: string | null;
     trackId?: string | null;
+    invoiceNumber?: string | null;
+    amount?: number | string | null;
 }
 
 const buildCourierWhatsAppMessage = (info: CourierMessageInfo): string => {
@@ -18,6 +20,10 @@ const buildCourierWhatsAppMessage = (info: CourierMessageInfo): string => {
         `Hi ${info.customerName || "there"},`,
         info.productName
             ? `your order for ${info.productName}${info.quantity ? ` (Qty: ${info.quantity})` : ""} has been shipped${info.courierName ? ` via ${info.courierName}` : ""}.`
+            : undefined,
+        info.invoiceNumber ? `Invoice: ${info.invoiceNumber}.` : undefined,
+        info.amount !== undefined && info.amount !== null && info.amount !== ""
+            ? `Amount: ₹${Number(info.amount).toFixed(2)}.`
             : undefined,
         info.trackId ? `Tracking ID: ${info.trackId}.` : undefined,
         "Track your parcel for updates.",

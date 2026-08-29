@@ -64,9 +64,30 @@ const Courier = sequelize.define(
       type: DataTypes.DECIMAL(10, 3),
       allowNull: true,
     },
+    // Derived by the controller from `status` (status !== "DONE") — kept for
+    // backward-compat reads (e.g. the Pending/Completed list split); not
+    // meant to be set directly by clients anymore.
     pending: {
       type: DataTypes.BOOLEAN,
       defaultValue: true,
+    },
+    // Courier workflow pipeline: Pending -> Waiting for Stock -> In Progress -> Out for Delivery -> Done.
+    // Waiting for Stock is a system-driven state (set/cleared by the shipment-group readiness
+    // logic in inventory.service.js) — not one a Courier Employee picks manually.
+    status: {
+      type: DataTypes.ENUM("PENDING", "WAITING_FOR_STOCK", "IN_PROGRESS", "OUT_FOR_DELIVERY", "DONE"),
+      allowNull: false,
+      defaultValue: "PENDING",
+    },
+    pincode: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    // The date the parcel was created/handed to the courier company — distinct from
+    // `completedDate` (when it was actually delivered).
+    entryDate: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
     },
     note: {
       type: DataTypes.TEXT,
@@ -105,8 +126,10 @@ const Courier = sequelize.define(
         key: "id",
       },
     },
-    // Units covered by this courier record. Set for sale-linked rows created by
-    // orderService.fulfillOrderItem (one row per shipment batch); null for manual entries.
+    // Requested quantity for this order line. Set for sale-linked rows created by
+    // orderService.createOrder (one row per SaleItem); null for manual entries.
+    // How much of it is actually available/shipped is read from the linked SaleItem's
+    // allocatedQuantity/fulfilledQuantity, not from this field.
     quantity: {
       type: DataTypes.INTEGER,
       allowNull: true,
@@ -118,6 +141,21 @@ const Courier = sequelize.define(
       type: DataTypes.ENUM("IN", "OUT"),
       allowNull: false,
       defaultValue: "OUT",
+    },
+
+    // Groups Courier rows created together for one physical parcel/shipment decision.
+    // Deterministic "SALE-{saleId}" at sale creation; a shipment-type split produces new
+    // suffixed values (e.g. "SALE-{saleId}-A"/"-B"). Null for manual (non-sale) entries.
+    shipmentGroupId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    // Replicated across every row sharing a shipmentGroupId. SHIP_COMPLETE = wait for every
+    // product in the group before any of it can move past Waiting for Stock. SHIP_AVAILABLE =
+    // this group only ever contains already-fully-allocated rows (see updateShipmentType).
+    shipmentType: {
+      type: DataTypes.ENUM("SHIP_COMPLETE", "SHIP_AVAILABLE"),
+      allowNull: true,
     },
   },
   {

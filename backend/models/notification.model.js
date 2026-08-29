@@ -14,8 +14,18 @@ const Notification = sequelize.define(
       type: DataTypes.ENUM("couriers", "account", "admin", "all"),
       allowNull: false,
     },
+    // Set for a personal notification targeted at one specific user (e.g. the
+    // salesperson whose sale was just delivered); null = module-wide broadcast.
+    recipientUserId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: "users",
+        key: "id",
+      },
+    },
     type: {
-      type: DataTypes.ENUM("NEW_SALE", "NEW_CUSTOMER", "STOCK_LOW", "PAYMENT_RECEIVED", "ORDER_FULFILLED"),
+      type: DataTypes.ENUM("NEW_SALE", "NEW_CUSTOMER", "STOCK_LOW", "PAYMENT_RECEIVED", "ORDER_FULFILLED", "BACKORDER_ALLOCATED"),
       allowNull: false,
     },
     title: {

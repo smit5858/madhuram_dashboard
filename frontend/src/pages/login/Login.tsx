@@ -34,6 +34,7 @@ const Login = () => {
             // 1. Store user identity + token in Redux
             dispatch(
                 login({
+                    userId: user.id,
                     name: user.name,
                     role: user.roleName,
                     mail: user.email,

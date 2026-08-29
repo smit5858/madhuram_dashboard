@@ -17,11 +17,20 @@ interface NotificationBellProps {
   moduleName?: "couriers" | "account" | "all";
 }
 
+const LIVE_NOTIFICATION_EVENTS = [
+  "new_sale",
+  "payment_received",
+  "order_fulfilled",
+  "backorder_allocated",
+  "order_delivered",
+] as const;
+
 const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
   const dispatch = useDispatch();
   const { items, unreadCount } = useSelector(
     (state: RootState) => state.notifications
   );
+  const { userId } = useSelector((state: RootState) => state.auth);
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -44,25 +53,23 @@ const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
       });
   }, [dispatch, moduleName]);
 
-  // Connect socket and listen for real-time notifications
+  // Connect socket (joining the module room + this user's personal room) and
+  // listen for every live notification event, not just "new_sale".
   useEffect(() => {
-    const socket = initSocket(moduleName);
+    const socket = initSocket(moduleName, userId);
 
-    const handleNewSale = (payload: {
-      notification: NotificationData;
-      sale: any;
-    }) => {
+    const handleNotification = (payload: { notification: NotificationData }) => {
       if (payload?.notification) {
         dispatch(addNotification(payload.notification));
       }
     };
 
-    socket.on("new_sale", handleNewSale);
+    LIVE_NOTIFICATION_EVENTS.forEach((event) => socket.on(event, handleNotification));
 
     return () => {
-      socket.off("new_sale", handleNewSale);
+      LIVE_NOTIFICATION_EVENTS.forEach((event) => socket.off(event, handleNotification));
     };
-  }, [dispatch, moduleName]);
+  }, [dispatch, moduleName, userId]);
 
   // Click outside to close dropdown
   useEffect(() => {

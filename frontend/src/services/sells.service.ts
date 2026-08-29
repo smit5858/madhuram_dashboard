@@ -1,17 +1,5 @@
 import httpService from "./http-service";
 
-export interface CourierRecord {
-  id: number;
-  courierName?: string | null;
-  trackId?: string | null;
-  pending: boolean;
-  completedDate?: string | null;
-  quantity?: number | null;
-  customerName?: string | null;
-  mobileNo?: string | null;
-  productName?: string | null;
-}
-
 export interface SaleItemData {
   id?: number;
   saleId?: number;
@@ -21,6 +9,7 @@ export interface SaleItemData {
     id: number;
     name: string;
     description?: string;
+    productType?: "NON_SERIAL" | "SERIALIZED";
   };
   quantity: number;
   sellingPrice: number;
@@ -29,7 +18,9 @@ export interface SaleItemData {
   fulfilledQuantity?: number;
   backorderedQuantity?: number;
   returnedQuantity?: number;
-  Couriers?: CourierRecord[];
+  /** SerialUnit rows tied to this line item (SaleItem.hasMany(SerialUnit)) — RESERVED/SOLD
+   *  units are the ones currently assigned to this order's shipment. */
+  SerialUnits?: { id: number; serialNumber: string; status: string }[];
 }
 
 export interface PaymentData {
@@ -107,6 +98,12 @@ export interface CreateSalePayload {
   }>;
 }
 
+export interface CancelSaleOptions {
+  /** Skips restocking/releasing the units back to available — use when they're not resellable. */
+  defective?: boolean;
+  reason?: string;
+}
+
 export interface SellsTotalsData {
   totalSellingAmount: number;
   totalCollectedAmount: number;
@@ -146,8 +143,8 @@ const createSale = (data: CreateSalePayload) =>
 const updateSale = (id: number, data: Partial<SaleData>) =>
   httpService.put<{ success: boolean; message: string; data: SaleData }>(`/sells/${id}`, data);
 
-const deleteSale = (id: number) =>
-  httpService.delete<{ success: boolean; message: string }>(`/sells/${id}`);
+const deleteSale = (id: number, options?: CancelSaleOptions) =>
+  httpService.delete<{ success: boolean; message: string }>(`/sells/${id}`, { data: options });
 
 const exportSales = (format: "pdf" | "excel", filters?: SalesFilters) =>
   httpService.get(`/sells/export`, { params: { ...filters, format }, responseType: "blob",});
@@ -164,16 +161,6 @@ const getAllPayments = (filters?: PaymentsFilters) =>
 const recordPayment = (saleId: number, data: { amount: number; method?: string; notes?: string }) =>
   httpService.post<{ success: boolean; message: string; data: SaleData }>(`/sells/${saleId}/payments`, data);
 
-const fulfillOrderItem = (
-  saleId: number,
-  itemId: number,
-  data: { quantity: number; serialNumbers?: string[]; courierName?: string; trackId?: string }
-) =>
-  httpService.post<{ success: boolean; message: string; data: { item: SaleItemData; courier: CourierRecord } }>(
-    `/sells/${saleId}/items/${itemId}/fulfill`,
-    data
-  );
-
 export default {
   getSales,
   getSellsTotals,
@@ -185,5 +172,4 @@ export default {
   getPayments,
   getAllPayments,
   recordPayment,
-  fulfillOrderItem,
 };

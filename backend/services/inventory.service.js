@@ -1,6 +1,6 @@
 const { Op } = require("sequelize");
 const sequelize = require("../config/db");
-const { Product, Stock, StockMovement, SerialUnit, SaleItem, Sale } = require("../models");
+const { Product, Stock, StockMovement, SerialUnit, SaleItem, Sale, Courier } = require("../models");
 
 // No per-product threshold field exists yet — a single constant is enough for now,
 // trivial to promote to a Product column later if the business wants it configurable.
@@ -309,6 +309,69 @@ const releaseReservation = async ({ productId, saleItemId, quantity, userId, rea
   });
 };
 
+// Same intent as releaseReservation, but for a reservation that turned out to be defective —
+// permanently removes the unit(s) from stock (write-off) instead of returning them to
+// available. NON_SERIAL: decrements on-hand quantity, not just reserved. SERIALIZED: marks
+// the unit DAMAGED instead of AVAILABLE, keeping saleItemId for audit lineage.
+const writeOffReservation = async ({ productId, saleItemId, quantity, userId, reason }, { transaction } = {}) => {
+  return withTransaction(transaction, async (t) => {
+    if (!quantity || quantity <= 0) return;
+    const product = await Product.findByPk(productId, { transaction: t });
+    assertProduct(product);
+
+    if (product.productType === "NON_SERIAL") {
+      const stock = await Stock.findOne({ where: { productId }, transaction: t, lock: true });
+      if (!stock) return;
+
+      stock.reserved = Math.max(0, stock.reserved - quantity);
+      stock.quantity = Math.max(0, stock.quantity - quantity);
+      await stock.save({ transaction: t });
+
+      await StockMovement.create(
+        {
+          productId,
+          type: "DAMAGE",
+          quantity: -quantity,
+          reservedDelta: -quantity,
+          referenceType: "saleItem",
+          referenceId: saleItemId,
+          createdBy: userId,
+          notes: reason || `Wrote off ${quantity} defective unit(s) reserved for sale item #${saleItemId}`,
+        },
+        { transaction: t }
+      );
+      return;
+    }
+
+    const units = await SerialUnit.findAll({
+      where: { saleItemId, status: "RESERVED" },
+      order: [["id", "ASC"]],
+      limit: quantity,
+      transaction: t,
+      lock: true,
+    });
+    for (const unit of units) {
+      unit.status = "DAMAGED";
+      unit.notes = reason || unit.notes;
+      await unit.save({ transaction: t });
+    }
+
+    await StockMovement.create(
+      {
+        productId,
+        type: "DAMAGE",
+        quantity: 0,
+        reservedDelta: -units.length,
+        referenceType: "saleItem",
+        referenceId: saleItemId,
+        createdBy: userId,
+        notes: reason || `Wrote off ${units.length} defective serial unit(s) reserved for sale item #${saleItemId}`,
+      },
+      { transaction: t }
+    );
+  });
+};
+
 // Converts previously-reserved quantity into an actual shipment/fulfillment. On-hand
 // quantity only decreases here, not at reservation time.
 const fulfillStock = async ({ productId, saleItemId, quantity, userId, serialNumbers }, { transaction } = {}) => {
@@ -406,6 +469,164 @@ const fulfillStock = async ({ productId, saleItemId, quantity, userId, serialNum
   });
 };
 
+// Re-picks the serial numbers reserved for a courier's line item, before it has been
+// fulfilled (units still RESERVED, not yet SOLD). Releases the units currently held for this
+// saleItemId and reserves the newly chosen ones, validating count and AVAILABLE status the same
+// way reserveStock's explicit-serials path does, so a unit can never be double-assigned.
+const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId }, { transaction } = {}) => {
+  return withTransaction(transaction, async (t) => {
+    if (!Array.isArray(serialNumbers) || serialNumbers.length === 0) {
+      const err = new Error("serialNumbers must be a non-empty array");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const item = await SaleItem.findByPk(saleItemId, { transaction: t, lock: true });
+    if (!item) {
+      const err = new Error("Order item not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const currentlyReserved = await SerialUnit.findAll({
+      where: { productId, saleItemId, status: "RESERVED" },
+      transaction: t,
+      lock: true,
+    });
+    if (currentlyReserved.length !== item.allocatedQuantity) {
+      const err = new Error("Serial numbers can only be reassigned before this shipment has been fulfilled");
+      err.statusCode = 400;
+      throw err;
+    }
+    if (serialNumbers.length !== currentlyReserved.length) {
+      const err = new Error(
+        `Number of selected serial numbers (${serialNumbers.length}) must match the reserved quantity (${currentlyReserved.length})`
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const currentNumbers = currentlyReserved.map((u) => u.serialNumber);
+    const unchanged =
+      serialNumbers.length === currentNumbers.length && serialNumbers.every((s) => currentNumbers.includes(s));
+    if (unchanged) {
+      return { serialUnitIds: currentlyReserved.map((u) => u.id) };
+    }
+
+    const candidates = await SerialUnit.findAll({
+      where: { productId, serialNumber: { [Op.in]: serialNumbers } },
+      transaction: t,
+      lock: true,
+    });
+
+    const foundNumbers = candidates.map((u) => u.serialNumber);
+    const missing = serialNumbers.filter((s) => !foundNumbers.includes(s));
+    if (missing.length > 0) {
+      const err = new Error(`Serial number(s) not found for this product: ${missing.join(", ")}`);
+      err.statusCode = 404;
+      throw err;
+    }
+
+    // A candidate is fine if it's AVAILABLE, or if it's already ours (part of currentlyReserved,
+    // re-selected as-is) — anything else (reserved/sold for a different line) is a conflict.
+    const unavailable = candidates.filter((u) => u.status !== "AVAILABLE" && u.saleItemId !== saleItemId);
+    if (unavailable.length > 0) {
+      const err = new Error(
+        `Serial number(s) already reserved/sold, pick a different unit: ${unavailable.map((u) => u.serialNumber).join(", ")}`
+      );
+      err.statusCode = 409;
+      throw err;
+    }
+
+    for (const unit of currentlyReserved) {
+      unit.status = "AVAILABLE";
+      unit.saleItemId = null;
+      await unit.save({ transaction: t });
+    }
+    for (const unit of candidates) {
+      unit.status = "RESERVED";
+      unit.saleItemId = saleItemId;
+      await unit.save({ transaction: t });
+    }
+
+    await StockMovement.create(
+      {
+        productId,
+        type: "RESERVATION",
+        quantity: 0,
+        reservedDelta: 0,
+        referenceType: "saleItem",
+        referenceId: saleItemId,
+        createdBy: userId,
+        notes: `Reassigned serial numbers for sale item #${saleItemId}: ${candidates.map((u) => u.serialNumber).join(", ")}`,
+      },
+      { transaction: t }
+    );
+
+    return { serialUnitIds: candidates.map((u) => u.id) };
+  });
+};
+
+// Loads every Courier row sharing a shipmentGroupId together with each row's linked SaleItem.
+const loadShipmentGroupRows = async (shipmentGroupId, { transaction } = {}) => {
+  const couriers = await Courier.findAll({ where: { shipmentGroupId }, transaction, lock: true });
+  const saleItemIds = couriers.map((c) => c.saleItemId).filter(Boolean);
+  const items = saleItemIds.length
+    ? await SaleItem.findAll({ where: { id: saleItemIds }, transaction, lock: true })
+    : [];
+  const itemsById = new Map(items.map((i) => [i.id, i]));
+  return couriers.map((courier) => ({
+    courier,
+    item: courier.saleItemId ? itemsById.get(courier.saleItemId) : null,
+  }));
+};
+
+// A shipment group is "ready" once every member row's underlying SaleItem has nothing left
+// backordered — i.e. every product in the group is now fully allocated.
+const isShipmentGroupReady = async (shipmentGroupId, { transaction } = {}) => {
+  if (!shipmentGroupId) return false;
+  const rows = await loadShipmentGroupRows(shipmentGroupId, { transaction });
+  if (rows.length === 0) return false;
+  return rows.every(({ item }) => item && item.backorderedQuantity === 0);
+};
+
+// If every product in the shipment group is now fully allocated, converts each member row's
+// outstanding allocation into an actual fulfillment (RESERVED->SOLD / stock decrement — the
+// point where inventory is actually committed, deliberately deferred until the whole group is
+// ready rather than done item-by-item as stock trickles in) and clears any WAITING_FOR_STOCK
+// status back to PENDING. Idempotent: a row whose SaleItem is already fully fulfilled
+// (allocatedQuantity === 0) is skipped, so calling this again on an already-fulfilled group is
+// a no-op — safe to call speculatively from order creation, the backorder sweep, and a
+// shipment-type split.
+const tryFulfillReadyGroup = async (shipmentGroupId, { userId, transaction } = {}) => {
+  return withTransaction(transaction, async (t) => {
+    if (!shipmentGroupId) return { becameReady: false, courierIds: [] };
+
+    const rows = await loadShipmentGroupRows(shipmentGroupId, { transaction: t });
+    if (rows.length === 0 || !rows.every(({ item }) => item && item.backorderedQuantity === 0)) {
+      return { becameReady: false, courierIds: [] };
+    }
+
+    const courierIds = [];
+    for (const { courier, item } of rows) {
+      if (item.allocatedQuantity > 0) {
+        await fulfillStock(
+          { productId: item.productId, saleItemId: item.id, quantity: item.allocatedQuantity, userId },
+          { transaction: t }
+        );
+      }
+      if (courier.status === "WAITING_FOR_STOCK") {
+        courier.status = "PENDING";
+        courier.pending = true;
+        await courier.save({ transaction: t });
+      }
+      courierIds.push(courier.id);
+    }
+
+    return { becameReady: true, courierIds };
+  });
+};
+
 // New stock arriving. NON_SERIAL takes a quantity + this batch's purchase price/dealer/date.
 // SERIALIZED takes an array of individual units, each with its own purchase price/dealer/date.
 // Always finishes by sweeping pending backorders for the same product (FIFO by SaleItem
@@ -452,10 +673,10 @@ const receiveStock = async (
         { transaction: t }
       );
 
-      const allocations = await allocateBackorders(productId, { transaction: t });
+      const { allocations, readyShipmentGroupIds } = await allocateBackorders(productId, { transaction: t });
       const available = stock.quantity - stock.reserved;
 
-      return { stock, allocations, available, lowStock: available <= LOW_STOCK_THRESHOLD };
+      return { stock, allocations, readyShipmentGroupIds, available, lowStock: available <= LOW_STOCK_THRESHOLD };
     }
 
     // SERIALIZED
@@ -499,10 +720,10 @@ const receiveStock = async (
       { transaction: t }
     );
 
-    const allocations = await allocateBackorders(productId, { transaction: t });
+    const { allocations, readyShipmentGroupIds } = await allocateBackorders(productId, { transaction: t });
     const { available } = await getSerialAvailability(productId, { transaction: t });
 
-    return { units: created, allocations, available, lowStock: available <= LOW_STOCK_THRESHOLD };
+    return { units: created, allocations, readyShipmentGroupIds, available, lowStock: available <= LOW_STOCK_THRESHOLD };
   });
 };
 
@@ -529,10 +750,20 @@ const allocateBackorders = async (productId, { transaction } = {}) => {
     });
 
     const allocations = [];
+    const readyShipmentGroupIds = new Set();
+
+    // After an item's allocation changes, re-check whether its linked courier shipment (and the
+    // whole shipment group it belongs to, for SHIP_COMPLETE orders) is now ready to fulfill.
+    const recheckCourierForItem = async (item) => {
+      const courier = await Courier.findOne({ where: { saleItemId: item.id }, transaction: t, lock: true });
+      if (!courier || !courier.shipmentGroupId) return;
+      const result = await tryFulfillReadyGroup(courier.shipmentGroupId, { userId: null, transaction: t });
+      if (result.becameReady) readyShipmentGroupIds.add(courier.shipmentGroupId);
+    };
 
     if (product.productType === "NON_SERIAL") {
       const stock = await Stock.findOne({ where: { productId }, transaction: t, lock: true });
-      if (!stock) return [];
+      if (!stock) return { allocations: [], readyShipmentGroupIds: [] };
 
       for (const item of items) {
         const available = stock.quantity - stock.reserved;
@@ -563,9 +794,10 @@ const allocateBackorders = async (productId, { transaction } = {}) => {
         );
 
         await recomputeItemAndSaleStatus(item, { transaction: t });
+        await recheckCourierForItem(item);
         allocations.push({ saleId: item.saleId, saleItemId: item.id, allocatedQty: toAllocate, serialUnitIds: [] });
       }
-      return allocations;
+      return { allocations, readyShipmentGroupIds: Array.from(readyShipmentGroupIds) };
     }
 
     // SERIALIZED
@@ -605,6 +837,7 @@ const allocateBackorders = async (productId, { transaction } = {}) => {
       );
 
       await recomputeItemAndSaleStatus(item, { transaction: t });
+      await recheckCourierForItem(item);
       allocations.push({
         saleId: item.saleId,
         saleItemId: item.id,
@@ -613,7 +846,7 @@ const allocateBackorders = async (productId, { transaction } = {}) => {
       });
     }
 
-    return allocations;
+    return { allocations, readyShipmentGroupIds: Array.from(readyShipmentGroupIds) };
   });
 };
 
@@ -706,7 +939,11 @@ module.exports = {
   getSerialAvailability,
   reserveStock,
   releaseReservation,
+  writeOffReservation,
   fulfillStock,
+  reassignSerials,
+  isShipmentGroupReady,
+  tryFulfillReadyGroup,
   receiveStock,
   allocateBackorders,
   adjustStock,

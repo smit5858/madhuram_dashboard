@@ -18,6 +18,7 @@ export interface RoutePermission {
 }
 
 export interface AuthState {
+    userId: number | null;
     name: string | null;
     role: string | null;
     mail: string | null;
@@ -33,6 +34,7 @@ export interface AuthState {
 }
 
 const defaultAuthState: AuthState = {
+    userId: null,
     name: null,
     role: null,
     mail: null,
@@ -57,6 +59,7 @@ const authSlice = createSlice({
 
     reducers: {
         login: (state, action: PayloadAction<{
+            userId: number;
             name: string;
             role: string;
             mail: string;
@@ -65,6 +68,7 @@ const authSlice = createSlice({
             refreshToken?: string | null;
             allowedCity?: string | null;
         }>) => {
+            state.userId = action.payload.userId;
             state.name = action.payload.name;
             state.role = action.payload.role;
             state.mail = action.payload.mail;
@@ -80,6 +84,7 @@ const authSlice = createSlice({
         },
 
         logout: (state) => {
+            state.userId = null;
             state.name = null;
             state.role = null;
             state.mail = null;
