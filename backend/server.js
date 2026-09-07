@@ -36,6 +36,7 @@ const notifications = require("./routes/notification.routes");
 const users = require("./routes/user.routes");
 const income = require("./routes/income.routes");
 const expense = require("./routes/expense.routes");
+const pendingBills = require("./routes/pendingBill.routes");
 const bankAccounts = require("./routes/bankAccount.routes");
 const routeSettings = require("./routes/routeSetting.routes");
 const roles = require("./routes/role.routes");
@@ -57,6 +58,7 @@ app.use("/notifications", notifications);
 app.use("/users", users);
 app.use("/income", income);
 app.use("/expense", expense);
+app.use("/pending-bills", pendingBills);
 app.use("/account/bank-accounts", bankAccounts);
 app.use("/route-settings", routeSettings);
 app.use("/roles", roles);
@@ -100,6 +102,7 @@ const ensureAllRoutesAndPermissions = async () => {
       { name: "Account", path: "/account" },
       { name: "Account Income", path: "/account/income", module: "Account" },
       { name: "Expense", path: "/account/expense", module: "Account" },
+      { name: "Pending Bill", path: "/account/pending-bill", module: "Account" },
       { name: "Debited", path: "/account/debited", module: "Account" },
       { name: "Bank Accounts", path: "/account/bank-accounts", module: "Account" },
       { name: "Route Setting", path: "/setting/route-setting", module: "Setting" },
@@ -173,6 +176,38 @@ const backfillIncomingCourierPermissions = async () => {
   }
 };
 
+// Pending Bill ships with access restricted to Admin (always bypasses authorize.js) and Krina —
+// there is no role-based default, so this grants her a UserPermission row the same way an Admin
+// would via Settings → Route Setting. findOrCreate keeps this additive/idempotent: a no-op on
+// every boot after the first, and an Admin can freely change her access afterwards. Matches the
+// backfillIncomingCourierPermissions pattern above.
+const grantInitialPendingBillAccess = async () => {
+  try {
+    const route = await Route.findOne({ where: { path: "/account/pending-bill" } });
+    if (!route) return;
+
+    const { Op } = require("sequelize");
+    const { User } = require("./models");
+    const krina = await User.findOne({ where: { name: { [Op.like]: "Krina" } } });
+    if (!krina) return;
+
+    await UserPermission.findOrCreate({
+      where: { userId: krina.id, routeId: route.id },
+      defaults: {
+        userId: krina.id,
+        routeId: route.id,
+        canRead: true,
+        canCreate: true,
+        canUpdate: true,
+        canDelete: false,
+        viewAllRecords: true,
+      },
+    });
+  } catch (e) {
+    console.warn("Could not grant initial Pending Bill access:", e.message);
+  }
+};
+
 const renameSalesTables = async () => {
   const queryInterface = sequelize.getQueryInterface();
   const tables = await queryInterface.showAllTables();
@@ -238,6 +273,7 @@ sequelize
     await ensureAllRoutesAndPermissions();
     await pruneObsoleteRoutes();
     await backfillIncomingCourierPermissions();
+    await grantInitialPendingBillAccess();
 
     // Initialize Socket.io after DB is ready
     initSocket(httpServer);

@@ -19,6 +19,7 @@ const AccountEntry = require("./accountEntry.model");
 const DailyAccountBalance = require("./dailyBalance.model");
 const BankAccount = require("./bankAccount.model");
 const CustomerLedgerEntry = require("./customerLedgerEntry.model");
+const PendingBill = require("./pendingBill.model");
 
 // Role associations
 Role.hasMany(User, { foreignKey: "roleId" });
@@ -134,6 +135,11 @@ CustomerLedgerEntry.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
 BankAccount.hasMany(CustomerLedgerEntry, { foreignKey: "bankAccountId" });
 CustomerLedgerEntry.belongsTo(BankAccount, { foreignKey: "bankAccountId", as: "bankAccount" });
 
+// Pending Bill ↔ User (who created it, who approved it — see pendingBill.controller.js)
+User.hasMany(PendingBill, { foreignKey: "createdBy" });
+PendingBill.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
+PendingBill.belongsTo(User, { foreignKey: "approvedBy", as: "approver" });
+
 module.exports = {
   User,
   Role,
@@ -156,4 +162,5 @@ module.exports = {
   DailyAccountBalance,
   BankAccount,
   CustomerLedgerEntry,
+  PendingBill,
 };

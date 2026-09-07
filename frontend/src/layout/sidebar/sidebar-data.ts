@@ -50,6 +50,7 @@ export const ALL_SIDEBAR_ITEMS: SidebarItem[] = [
         children: [
             { path: "/account/income", name: "Income" },
             { path: "/account/expense", name: "Expense" },
+            { path: "/account/pending-bill", name: "Pending Bill" },
             { path: "/account/debited", name: "Debited" },
             { path: "/account/bank-accounts", name: "Manage Bank Account Details" },
         ],

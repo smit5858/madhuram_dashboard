@@ -16,6 +16,7 @@ const Users = lazy(() => import('../pages/users/Users'));
 const Products = lazy(() => import('../pages/products/Products'));
 const Income = lazy(() => import('../pages/account/Income'));
 const Expense = lazy(() => import('../pages/account/Expense'));
+const PendingBill = lazy(() => import('../pages/account/PendingBill'));
 const Debited = lazy(() => import('../pages/account/Debited'));
 const BankAccounts = lazy(() => import('../pages/account/BankAccounts'));
 const RouteSetting = lazy(() => import('../pages/settings/RouteSetting'));
@@ -171,6 +172,20 @@ const routesConfig = [
               <Suspense fallback={<LoadingFallback />}>
                 <MainLayout>
                   <Expense />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.AccountPendingBill,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/account/pending-bill">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <PendingBill />
                 </MainLayout>
               </Suspense>
             </PermissionGuard>
