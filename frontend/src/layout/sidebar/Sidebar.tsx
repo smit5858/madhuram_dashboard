@@ -25,6 +25,9 @@ import {
     Building2,
     ShieldCheck,
     UserCog,
+    UserSquare2,
+    Share2,
+    ClipboardList,
     type LucideIcon,
 } from "lucide-react";
 
@@ -40,15 +43,18 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
     "/couriers/incoming": ArrowDownLeft,
     "/couriers-companies": Building2,
     "/customers": Contact,
+    "/leads": UserSquare2,
     "/users": Users,
     "/account": UserCircle2,
     "/account/income": Banknote,
     "/account/expense": Receipt,
+    "/account/pending-bill": ClipboardList,
     "/account/debited": FileClock,
     "/account/bank-accounts": Wallet,
     "/setting": Settings,
     "/setting/route-setting": ShieldCheck,
     "/setting/role-management": UserCog,
+    "/settings/platforms": Share2,
 };
 
 const getIconForRoute = (path: string, search?: string, className = "h-5 w-5") => {

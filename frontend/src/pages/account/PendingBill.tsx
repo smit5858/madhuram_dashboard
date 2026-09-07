@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
 import toast from "react-hot-toast";
 import { Field, Form, Formik, useFormikContext, type FormikProps } from "formik";
-import { AlertTriangle, CheckCircle2, Edit2, Eye, Plus, Receipt, RotateCcw, Search as SearchIcon, Trash2 } from "lucide-react";
+import { AlertTriangle, Ban, CreditCard, Edit2, Eye, Package, Plus, Receipt, RotateCcw, Search as SearchIcon, Trash2 } from "lucide-react";
 import type { RootState } from "@/store/store";
 import pendingBillService, { type PendingBillData, type PendingBillFilters } from "@/services/pendingBill.service";
 import { pendingBillFilterSchema, type PendingBillFilterValues } from "@/validation/pendingBill.validation";
@@ -12,6 +12,7 @@ import { initSocket } from "@/services/socket.service";
 import PendingBillStatusBadge from "./components/PendingBillStatusBadge";
 import PendingBillViewModal from "./components/PendingBillViewModal";
 import PendingBillFormModal from "./components/PendingBillFormModal";
+import PendingBillPaymentFormModal from "./components/PendingBillPaymentFormModal";
 
 interface ApiErrorLike {
   response?: { data?: { message?: string } };
@@ -23,7 +24,17 @@ const PAGE_SIZE = 10;
 const STATUS_OPTIONS = [
   { value: "", label: "All Status" },
   { value: "PENDING", label: "Pending" },
-  { value: "APPROVED", label: "Approved" },
+  { value: "PARTIALLY_PAID", label: "Partially Paid" },
+  { value: "PENDING_VERIFICATION", label: "Pending Verification" },
+  { value: "APPROVED", label: "Paid" },
+  { value: "REJECTED", label: "Rejected" },
+  { value: "CANCELLED", label: "Cancelled" },
+];
+
+const BILL_TYPE_OPTIONS = [
+  { value: "", label: "All Sources" },
+  { value: "GENERAL", label: "General" },
+  { value: "RESTOCK", label: "Product Restock" },
 ];
 
 const formatCurrency = (amount: number | string | undefined) =>
@@ -54,6 +65,15 @@ const FilterSync = ({
   useEffect(() => {
     setAppliedFilters((prev) => ({
       ...prev,
+      billType: (values.billType || undefined) as PendingBillFilters["billType"],
+      page: 1,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [values.billType]);
+
+  useEffect(() => {
+    setAppliedFilters((prev) => ({
+      ...prev,
       startDate: values.startDate || undefined,
       endDate: values.endDate || undefined,
       page: 1,
@@ -71,15 +91,23 @@ const PendingBill = () => {
 
   useEffect(() => {
     const socket = initSocket("account", userId);
+    if (isAdmin) initSocket("admin", userId);
     const refresh = () => {
       queryClient.invalidateQueries({ queryKey: ["pending-bill"] });
     };
-    const events = ["pending_bill_created", "pending_bill_approved"];
+    const events = [
+      "pending_bill_created",
+      "pending_bill_approved",
+      "pending_bill_payment_submitted",
+      "pending_bill_payment_verified",
+      "pending_bill_payment_rejected",
+      "pending_bill_partially_paid",
+    ];
     events.forEach((event) => socket.on(event, refresh));
     return () => {
       events.forEach((event) => socket.off(event, refresh));
     };
-  }, [queryClient, userId]);
+  }, [queryClient, userId, isAdmin]);
 
   const pagePermission = useMemo(() => {
     const fallback = { canRead: false, canCreate: false, canUpdate: false, canDelete: false };
@@ -94,11 +122,12 @@ const PendingBill = () => {
   const [appliedFilters, setAppliedFilters] = useState<PendingBillFilters>({});
   const filterFormRef = useRef<FormikProps<PendingBillFilterValues>>(null);
 
-  const [viewBill, setViewBill] = useState<PendingBillData | null>(null);
+  const [viewBillId, setViewBillId] = useState<number | null>(null);
   const [editBill, setEditBill] = useState<PendingBillData | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [deleteBill, setDeleteBill] = useState<PendingBillData | null>(null);
-  const [approveBill, setApproveBill] = useState<PendingBillData | null>(null);
+  const [payBill, setPayBill] = useState<PendingBillData | null>(null);
+  const [cancelBill, setCancelBill] = useState<PendingBillData | null>(null);
 
   const queryFilters = useMemo<PendingBillFilters>(
     () => ({ ...appliedFilters, page: appliedFilters.page ?? 1, limit: PAGE_SIZE }),
@@ -133,21 +162,20 @@ const PendingBill = () => {
     },
   });
 
-  const approveMutation = useMutation({
-    mutationFn: (id: number) => pendingBillService.approvePendingBill(id),
+  const cancelMutation = useMutation({
+    mutationFn: (id: number) => pendingBillService.cancelPendingBill(id),
     onSuccess: (res) => {
-      toast.success(res.data?.message || "Pending bill approved successfully");
+      toast.success(res.data?.message || "Pending bill cancelled");
       queryClient.invalidateQueries({ queryKey: ["pending-bill"] });
-      queryClient.invalidateQueries({ queryKey: ["daily-balances"] });
-      setApproveBill(null);
+      setCancelBill(null);
     },
     onError: (err: ApiErrorLike) => {
-      toast.error(err.response?.data?.message || err.message || "Failed to approve pending bill");
+      toast.error(err.response?.data?.message || err.message || "Failed to cancel pending bill");
     },
   });
 
   const hasActiveFilters = Boolean(
-    appliedFilters.search || appliedFilters.status || appliedFilters.startDate || appliedFilters.endDate
+    appliedFilters.search || appliedFilters.status || appliedFilters.billType || appliedFilters.startDate || appliedFilters.endDate
   );
 
   const handleReset = () => {
@@ -170,7 +198,7 @@ const PendingBill = () => {
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <Formik
           innerRef={filterFormRef}
-          initialValues={{ search: "", status: "", startDate: "", endDate: "" } as PendingBillFilterValues}
+          initialValues={{ search: "", status: "", billType: "", startDate: "", endDate: "" } as PendingBillFilterValues}
           validate={(values) => {
             const result = pendingBillFilterSchema.safeParse(values);
             return result.success ? {} : { search: result.error.issues[0]?.message };
@@ -186,7 +214,7 @@ const PendingBill = () => {
                 <Field
                   name="search"
                   type="text"
-                  placeholder="Search name or dealer..."
+                  placeholder="Search name, dealer, bill no..."
                   className="w-full rounded-full border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-3 text-xs text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                 />
               </div>
@@ -197,6 +225,18 @@ const PendingBill = () => {
                 className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-medium text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none cursor-pointer"
               >
                 {STATUS_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </Field>
+
+              <Field
+                as="select"
+                name="billType"
+                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-medium text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none cursor-pointer"
+              >
+                {BILL_TYPE_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
                   </option>
@@ -266,7 +306,9 @@ const PendingBill = () => {
                   <th className="px-4 py-3 whitespace-nowrap">Sr No</th>
                   <th className="px-4 py-3 whitespace-nowrap">Name</th>
                   <th className="px-4 py-3 whitespace-nowrap">Dealer Name</th>
-                  <th className="px-4 py-3 whitespace-nowrap">Amount</th>
+                  <th className="px-4 py-3 whitespace-nowrap">Total</th>
+                  <th className="px-4 py-3 whitespace-nowrap">Paid</th>
+                  <th className="px-4 py-3 whitespace-nowrap">Remaining</th>
                   <th className="px-4 py-3 whitespace-nowrap">Date</th>
                   <th className="px-4 py-3 whitespace-nowrap">Status</th>
                   <th className="px-4 py-3 whitespace-nowrap">Action</th>
@@ -278,9 +320,20 @@ const PendingBill = () => {
                     <td className="px-4 py-3 whitespace-nowrap text-gray-500">
                       {(meta.page - 1) * meta.limit + idx + 1}
                     </td>
-                    <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">{bill.name}</td>
+                    <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">
+                      <div className="flex items-center gap-1.5">
+                        {bill.billType === "RESTOCK" && (
+                          <span title="Product restock">
+                            <Package className="h-3.5 w-3.5 shrink-0 text-blue-500" />
+                          </span>
+                        )}
+                        {bill.name}
+                      </div>
+                    </td>
                     <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{bill.dealerName || "—"}</td>
                     <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap">{formatCurrency(bill.amount)}</td>
+                    <td className="px-4 py-3 text-emerald-600 whitespace-nowrap">{formatCurrency(bill.paidAmount)}</td>
+                    <td className="px-4 py-3 text-rose-600 whitespace-nowrap">{formatCurrency(bill.remainingAmount)}</td>
                     <td className="px-4 py-3 whitespace-nowrap text-gray-500">{bill.billDate}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <PendingBillStatusBadge status={bill.status} />
@@ -289,13 +342,13 @@ const PendingBill = () => {
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => setViewBill(bill)}
+                          onClick={() => bill.id && setViewBillId(bill.id)}
                           className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
                           title="View"
                         >
                           <Eye className="h-4 w-4" />
                         </button>
-                        {pagePermission.canUpdate && (
+                        {pagePermission.canUpdate && !["APPROVED", "CANCELLED"].includes(bill.status || "") && (
                           <button
                             type="button"
                             onClick={() => setEditBill(bill)}
@@ -303,6 +356,16 @@ const PendingBill = () => {
                             title="Edit"
                           >
                             <Edit2 className="h-4 w-4" />
+                          </button>
+                        )}
+                        {pagePermission.canCreate && !["APPROVED", "CANCELLED", "REJECTED"].includes(bill.status || "") && (
+                          <button
+                            type="button"
+                            onClick={() => setPayBill(bill)}
+                            className="rounded-lg p-1.5 text-emerald-600 hover:bg-emerald-50"
+                            title="Record Payment"
+                          >
+                            <CreditCard className="h-4 w-4" />
                           </button>
                         )}
                         {isAdmin && (
@@ -315,14 +378,14 @@ const PendingBill = () => {
                             <Trash2 className="h-4 w-4" />
                           </button>
                         )}
-                        {isAdmin && bill.status === "PENDING" && (
+                        {isAdmin && Number(bill.paidAmount || 0) === 0 && bill.status !== "CANCELLED" && (
                           <button
                             type="button"
-                            onClick={() => setApproveBill(bill)}
-                            className="rounded-lg p-1.5 text-emerald-600 hover:bg-emerald-50"
-                            title="Approve"
+                            onClick={() => setCancelBill(bill)}
+                            className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"
+                            title="Cancel"
                           >
-                            <CheckCircle2 className="h-4 w-4" />
+                            <Ban className="h-4 w-4" />
                           </button>
                         )}
                       </div>
@@ -362,7 +425,7 @@ const PendingBill = () => {
         )}
       </div>
 
-      {viewBill && <PendingBillViewModal bill={viewBill} onClose={() => setViewBill(null)} />}
+      {viewBillId !== null && <PendingBillViewModal billId={viewBillId} onClose={() => setViewBillId(null)} />}
       {(showAddModal || editBill) && (
         <PendingBillFormModal
           bill={editBill}
@@ -372,6 +435,7 @@ const PendingBill = () => {
           }}
         />
       )}
+      {payBill && <PendingBillPaymentFormModal bill={payBill} onClose={() => setPayBill(null)} />}
 
       {deleteBill && (
         <div
@@ -405,35 +469,31 @@ const PendingBill = () => {
         </div>
       )}
 
-      {approveBill && (
+      {cancelBill && (
         <div
           className="fixed inset-0 z-70 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-sm"
-          onClick={(e) => { if (e.target === e.currentTarget) setApproveBill(null); }}
+          onClick={(e) => { if (e.target === e.currentTarget) setCancelBill(null); }}
         >
           <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl border border-slate-200">
-            <h3 className="text-sm font-bold text-slate-900 mb-2">Approve Pending Bill</h3>
-            <p className="text-xs text-slate-500 mb-1">
-              Are you sure you want to approve this bill of{" "}
-              <span className="font-semibold text-slate-800">{formatCurrency(approveBill.amount)}</span>?
-            </p>
+            <h3 className="text-sm font-bold text-slate-900 mb-2">Cancel Pending Bill</h3>
             <p className="text-xs text-slate-500 mb-4">
-              Once approved, it will be included in the Total Out Balance and cannot be reverted from this action.
+              Are you sure you want to cancel "{cancelBill.name}"? This action cannot be undone.
             </p>
             <div className="flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setApproveBill(null)}
+                onClick={() => setCancelBill(null)}
                 className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
               >
-                Cancel
+                Back
               </button>
               <button
                 type="button"
-                disabled={approveMutation.isPending}
-                onClick={() => approveBill.id && approveMutation.mutate(approveBill.id)}
-                className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+                disabled={cancelMutation.isPending}
+                onClick={() => cancelBill.id && cancelMutation.mutate(cancelBill.id)}
+                className="rounded-lg bg-rose-600 px-4 py-2 text-xs font-bold text-white hover:bg-rose-700 disabled:opacity-50"
               >
-                {approveMutation.isPending ? "Approving..." : "Approve"}
+                {cancelMutation.isPending ? "Cancelling..." : "Cancel Bill"}
               </button>
             </div>
           </div>

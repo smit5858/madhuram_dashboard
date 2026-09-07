@@ -16,6 +16,8 @@ export const Routing = {
     AccountBankAccounts: `/account/bank-accounts`,
     RouteSetting: `/setting/route-setting`,
     RoleManagement: `/setting/role-management`,
+    Leads: `/leads`,
+    PlatformManagement: `/settings/platforms`,
     Forbidden: `/forbidden`
 };
 
@@ -36,5 +38,7 @@ export const RouteTitles: Record<string, string> = {
     [Routing.AccountBankAccounts]: "Bank Accounts",
     [Routing.RouteSetting]: "Route Setting",
     [Routing.RoleManagement]: "Role Management",
+    [Routing.Leads]: "Leads",
+    [Routing.PlatformManagement]: "Platform Management",
     [Routing.Forbidden]: "Forbidden",
 };

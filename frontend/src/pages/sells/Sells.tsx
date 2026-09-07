@@ -21,6 +21,7 @@ import customerService, { type CustomerData } from "../../services/customer.serv
 import bankAccountService from "../../services/bankAccount.service";
 import CancelSaleModal from "@/shared/components/CancelSaleModal";
 import ShareStatementMenu from "@/pages/customers/components/ShareStatementMenu";
+import StockShortageModal, { type StockShortageItem } from "@/pages/sells/components/StockShortageModal";
 import { blurNumberInputOnWheel } from "@/shared/utils/input";
 
 interface FormItem {
@@ -188,6 +189,14 @@ const Sells = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [selectedSale, setSelectedSale] = useState<SaleData | null>(null);
+
+  // Stock-shortage confirm prompt (create flow only) — snapshots the items being submitted so
+  // the user's chosen resolution ("available only" / "all products") applies to exactly what
+  // triggered the prompt, even if they keep editing the form underneath it.
+  const [stockShortagePrompt, setStockShortagePrompt] = useState<{
+    shortages: StockShortageItem[];
+    snapshotItems: FormItem[];
+  } | null>(null);
 
   // Quick Product Modal State
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
@@ -592,12 +601,6 @@ const Sells = () => {
       }
     }
 
-    const payloadItems = items.map((i) => ({
-      productId: Number(i.productId),
-      quantity: Number(i.quantity),
-      sellingPrice: Number(i.sellingPrice) || 0,
-    }));
-
     if (selectedSale?.id) {
       // Update existing sale
       updateSaleMutation.mutate({
@@ -616,26 +619,85 @@ const Sells = () => {
           notes: notes || undefined,
         },
       });
-    } else {
-      // Create new sale
-      const createPayload: CreateSalePayload = {
-        customerId: customerId || undefined,
-        customerName: customerName.trim(),
-        customerNumber: customerNumber || undefined,
-        platform,
-        paymentMethod,
-        bankAccountId: paymentMethod === "BankTransfer" ? (bankAccountId || undefined) : undefined,
-        city: city || undefined,
-        fromAddress: fromAddress || undefined,
-        pincode: pincode || undefined,
-        sellingAmount: effectiveSellingAmount,
-        collectedAmount: Number(collectedAmount) || 0,
-        notes: notes || undefined,
-        items: payloadItems,
-      };
-
-      createSaleMutation.mutate(createPayload);
+      return;
     }
+
+    // Create new sale — check stock before submitting so a shortage can be resolved explicitly
+    // instead of silently backordering.
+    const shortages: StockShortageItem[] = [];
+    items.forEach((item) => {
+      const prod = productsList.find((p) => p.id === Number(item.productId));
+      const available = prod?.available ?? 0;
+      const requested = Number(item.quantity) || 0;
+      if (available < requested) {
+        shortages.push({ productName: prod?.name || "Selected product", requested, available });
+      }
+    });
+
+    if (shortages.length > 0) {
+      setStockShortagePrompt({ shortages, snapshotItems: items });
+      return;
+    }
+
+    createSaleMutation.mutate(buildCreatePayload(items));
+  };
+
+  // Builds the create-sale payload from a given items list — shared by the direct (no-shortage)
+  // submit path and both StockShortageModal resolution paths below.
+  const buildCreatePayload = (forItems: FormItem[]): CreateSalePayload => {
+    const payloadItems = forItems.map((i) => ({
+      productId: Number(i.productId),
+      quantity: Number(i.quantity),
+      sellingPrice: Number(i.sellingPrice) || 0,
+    }));
+    const itemsTotal = forItems.reduce(
+      (sum, i) => sum + (Number(i.quantity) || 0) * (Number(i.sellingPrice) || 0),
+      0
+    );
+    const sellingAmountForItems = manualSellingAmount !== "" ? Number(manualSellingAmount) || 0 : itemsTotal;
+
+    return {
+      customerId: customerId || undefined,
+      customerName: customerName.trim(),
+      customerNumber: customerNumber || undefined,
+      platform,
+      paymentMethod,
+      bankAccountId: paymentMethod === "BankTransfer" ? (bankAccountId || undefined) : undefined,
+      city: city || undefined,
+      fromAddress: fromAddress || undefined,
+      pincode: pincode || undefined,
+      sellingAmount: sellingAmountForItems,
+      collectedAmount: Number(collectedAmount) || 0,
+      notes: notes || undefined,
+      items: payloadItems,
+    };
+  };
+
+  const handleStockShortageAvailableOnly = () => {
+    if (!stockShortagePrompt) return;
+    const adjusted = stockShortagePrompt.snapshotItems
+      .map((item) => {
+        const prod = productsList.find((p) => p.id === Number(item.productId));
+        const available = prod?.available ?? 0;
+        const requested = Number(item.quantity) || 0;
+        return { ...item, quantity: Math.min(requested, available) };
+      })
+      .filter((item) => Number(item.quantity) > 0);
+
+    if (adjusted.length === 0) {
+      toast.error("None of the selected products currently have stock available");
+      return;
+    }
+
+    setItems(adjusted);
+    createSaleMutation.mutate(buildCreatePayload(adjusted));
+    setStockShortagePrompt(null);
+  };
+
+  const handleStockShortageAllProducts = () => {
+    if (!stockShortagePrompt) return;
+    createSaleMutation.mutate(buildCreatePayload(stockShortagePrompt.snapshotItems));
+    setStockShortagePrompt(null);
   };
 
   const handleDelete = (id: number) => {
@@ -2009,6 +2071,16 @@ const Sells = () => {
           onConfirm={({ defective, reason }) =>
             deleteSaleMutation.mutate({ id: cancelSaleId, defective, reason })
           }
+        />
+      )}
+
+      {stockShortagePrompt && (
+        <StockShortageModal
+          shortages={stockShortagePrompt.shortages}
+          isSubmitting={createSaleMutation.isPending}
+          onClose={() => setStockShortagePrompt(null)}
+          onAvailableOnly={handleStockShortageAvailableOnly}
+          onAllProducts={handleStockShortageAllProducts}
         />
       )}
 

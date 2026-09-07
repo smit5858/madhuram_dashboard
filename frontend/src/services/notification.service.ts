@@ -2,7 +2,7 @@ import httpService from "./http-service";
 
 export interface NotificationData {
   id: number;
-  recipientModule: "couriers" | "account" | "admin" | "all";
+  recipientModule: "couriers" | "account" | "admin" | "all" | "leads";
   recipientUserId?: number | null;
   type:
     | "NEW_SALE"
@@ -14,7 +14,16 @@ export interface NotificationData {
     | "INCOMING_COURIER_COMPLETED"
     | "EXPENSE_PENDING_APPROVAL"
     | "EXPENSE_APPROVED"
-    | "EXPENSE_REJECTED";
+    | "EXPENSE_REJECTED"
+    | "PENDING_BILL_PENDING_APPROVAL"
+    | "PENDING_BILL_APPROVED"
+    | "PENDING_BILL_PAYMENT_SUBMITTED"
+    | "PENDING_BILL_PAYMENT_VERIFIED"
+    | "PENDING_BILL_PAYMENT_REJECTED"
+    | "PENDING_BILL_PARTIALLY_PAID"
+    | "LEAD_APPROVAL_REQUIRED"
+    | "LEAD_APPROVED"
+    | "LEAD_REJECTED";
   title: string;
   message?: string;
   referenceType?: string;
@@ -24,7 +33,7 @@ export interface NotificationData {
   updatedAt?: string;
 }
 
-const getNotifications = (module?: "couriers" | "account" | "all", limit?: number) =>
+const getNotifications = (module?: "couriers" | "account" | "admin" | "all", limit?: number) =>
   httpService.get<{ success: boolean; data: NotificationData[]; unreadCount: number }>(
     "/notifications",
     { params: { module, limit } }
@@ -33,7 +42,7 @@ const getNotifications = (module?: "couriers" | "account" | "all", limit?: numbe
 const markRead = (id: number) =>
   httpService.patch<{ success: boolean; message: string }>(`/notifications/${id}/read`, {});
 
-const markAllRead = (module?: "couriers" | "account") =>
+const markAllRead = (module?: "couriers" | "account" | "admin") =>
   httpService.patch<{ success: boolean; message: string }>(
     "/notifications/read-all",
     {},

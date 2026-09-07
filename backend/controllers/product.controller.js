@@ -2,6 +2,8 @@ const { Product, Stock, SerialUnit, Dealer, SaleItem, Sale, StockMovement } = re
 const sequelize = require("../config/db");
 const { Op } = require("sequelize");
 const inventoryService = require("../services/inventory.service");
+const pendingBillService = require("../services/pendingBill.service");
+const { notify } = require("../services/notification.service");
 
 const VALID_PRODUCT_TYPES = ["NON_SERIAL", "SERIALIZED"];
 
@@ -208,8 +210,9 @@ exports.createProduct = async (req, res) => {
     }
     const resolvedType = productType || "NON_SERIAL";
 
+    let dealer = null;
     if (dealerId) {
-      const dealer = await Dealer.findByPk(dealerId, { transaction: t });
+      dealer = await Dealer.findByPk(dealerId, { transaction: t });
       if (!dealer) {
         await t.rollback();
         return res.status(400).json({ success: false, message: "Selected dealer does not exist" });
@@ -235,8 +238,9 @@ exports.createProduct = async (req, res) => {
         { transaction: t }
       );
 
+      let pendingBill = null;
       if (initialQuantity > 0) {
-        await StockMovement.create(
+        const movement = await StockMovement.create(
           {
             productId: product.id,
             type: "PURCHASE",
@@ -252,9 +256,41 @@ exports.createProduct = async (req, res) => {
           },
           { transaction: t }
         );
+
+        pendingBill = await pendingBillService.createBillForPurchase(
+          {
+            triggerType: "NEW_PRODUCT",
+            productId: product.id,
+            productNameSnapshot: product.name,
+            dealerId: dealerId ?? null,
+            dealerNameSnapshot: dealer ? dealer.name : null,
+            quantity: initialQuantity,
+            purchasePrice: purchasePrice ?? null,
+            billDate: purchaseDate ?? new Date(),
+            stockMovementId: movement.id,
+            createdBy: user.id,
+          },
+          { transaction: t }
+        );
       }
 
       await t.commit();
+
+      if (pendingBill) {
+        await notify([
+          {
+            recipientModule: "admin",
+            type: "PENDING_BILL_PENDING_APPROVAL",
+            title: "New Pending Bill Awaiting Payment",
+            message: `${user.name || "A user"} added a new product "${product.name}" with initial stock of ${initialQuantity} unit(s). A pending bill (#${pendingBill.id}) of ₹${Number(pendingBill.amount).toLocaleString("en-IN")} was generated.`,
+            referenceType: "pendingBill",
+            referenceId: pendingBill.id,
+            event: "pending_bill_created",
+            payload: { pendingBillId: pendingBill.id, productId: product.id },
+          },
+        ]);
+      }
+
       return res.status(201).json({
         success: true,
         message: "Product created successfully",
@@ -264,6 +300,7 @@ exports.createProduct = async (req, res) => {
 
     // SERIALIZED
     const createdUnits = [];
+    let pendingBill = null;
     if (Array.isArray(units) && units.length > 0) {
       for (const u of units) {
         if (!u.serialNumber || !String(u.serialNumber).trim()) {
@@ -294,7 +331,7 @@ exports.createProduct = async (req, res) => {
         createdUnits.push(unit);
       }
 
-      await StockMovement.create(
+      const movement = await StockMovement.create(
         {
           productId: product.id,
           type: "PURCHASE",
@@ -307,9 +344,48 @@ exports.createProduct = async (req, res) => {
         },
         { transaction: t }
       );
+
+      // A bill's supplier/price is a single value, but SERIALIZED units may each have their own
+      // dealer/price — sum the real total across units and use the first unit's dealer (if any)
+      // as the bill's supplier, rather than assuming a single uniform price like NON_SERIAL does.
+      const totalUnitAmount = createdUnits.reduce((sum, u) => sum + (u.purchasePrice != null ? Number(u.purchasePrice) : 0), 0);
+      const firstDealerId = createdUnits.map((u) => u.dealerId).find((id) => id != null) || null;
+      const firstDealer = firstDealerId ? await Dealer.findByPk(firstDealerId, { transaction: t }) : null;
+
+      pendingBill = await pendingBillService.createBillForPurchase(
+        {
+          triggerType: "NEW_PRODUCT",
+          productId: product.id,
+          productNameSnapshot: product.name,
+          dealerId: firstDealerId,
+          dealerNameSnapshot: firstDealer ? firstDealer.name : null,
+          quantity: createdUnits.length,
+          totalAmount: totalUnitAmount,
+          billDate: new Date(),
+          stockMovementId: movement.id,
+          createdBy: user.id,
+        },
+        { transaction: t }
+      );
     }
 
     await t.commit();
+
+    if (pendingBill) {
+      await notify([
+        {
+          recipientModule: "admin",
+          type: "PENDING_BILL_PENDING_APPROVAL",
+          title: "New Pending Bill Awaiting Payment",
+          message: `${user.name || "A user"} added a new product "${product.name}" with ${createdUnits.length} serial unit(s). A pending bill (#${pendingBill.id}) of ₹${Number(pendingBill.amount).toLocaleString("en-IN")} was generated.`,
+          referenceType: "pendingBill",
+          referenceId: pendingBill.id,
+          event: "pending_bill_created",
+          payload: { pendingBillId: pendingBill.id, productId: product.id },
+        },
+      ]);
+    }
+
     return res.status(201).json({
       success: true,
       message: "Product created successfully",

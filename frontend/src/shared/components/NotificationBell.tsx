@@ -15,7 +15,7 @@ import notificationService, {
 import { initSocket } from "@/services/socket.service";
 
 interface NotificationBellProps {
-  moduleName?: "couriers" | "account" | "all";
+  moduleName?: "couriers" | "account" | "admin" | "all";
 }
 
 const LIVE_NOTIFICATION_EVENTS = [
@@ -27,15 +27,35 @@ const LIVE_NOTIFICATION_EVENTS = [
   "expense_pending_approval",
   "expense_approved",
   "expense_rejected",
+  "pending_bill_created",
+  "pending_bill_approved",
+  "pending_bill_payment_submitted",
+  "pending_bill_payment_verified",
+  "pending_bill_payment_rejected",
+  "pending_bill_partially_paid",
+  "lead_created",
+  "lead_approved",
+  "lead_rejected",
 ] as const;
 
 // Notification types that navigate somewhere when clicked — the Admin-facing Expense approval
 // alert plus the submitter-facing approve/reject alerts (see expense.controller.js /
-// courier.controller.js#completeIncomingCourier).
+// courier.controller.js#completeIncomingCourier), plus the Pending Bill payment-flow equivalents
+// (which also cover the auto-created product restock/new-product bills — see
+// pendingBill.model.js#billType).
 const NOTIFICATION_TYPE_ROUTE: Record<string, string> = {
   EXPENSE_PENDING_APPROVAL: "/account/expense",
   EXPENSE_APPROVED: "/account/expense",
   EXPENSE_REJECTED: "/account/expense",
+  PENDING_BILL_PENDING_APPROVAL: "/account/pending-bill",
+  PENDING_BILL_APPROVED: "/account/pending-bill",
+  PENDING_BILL_PAYMENT_SUBMITTED: "/account/pending-bill",
+  PENDING_BILL_PAYMENT_VERIFIED: "/account/pending-bill",
+  PENDING_BILL_PAYMENT_REJECTED: "/account/pending-bill",
+  PENDING_BILL_PARTIALLY_PAID: "/account/pending-bill",
+  LEAD_APPROVAL_REQUIRED: "/leads",
+  LEAD_APPROVED: "/leads",
+  LEAD_REJECTED: "/leads",
 };
 
 const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
@@ -44,7 +64,7 @@ const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
   const { items, unreadCount } = useSelector(
     (state: RootState) => state.notifications
   );
-  const { userId } = useSelector((state: RootState) => state.auth);
+  const { userId, role } = useSelector((state: RootState) => state.auth);
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -71,6 +91,11 @@ const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
   // listen for every live notification event, not just "new_sale".
   useEffect(() => {
     const socket = initSocket(moduleName, userId);
+    // notify() emits to a room equal to recipientModule verbatim (e.g. "admin") — the default
+    // moduleName="all" here never joins that room on its own, so an Admin would otherwise only
+    // ever see admin-targeted notifications (payment verification requests, pending-bill/expense
+    // approvals, etc.) on next page load, never live. Join it explicitly for Admin users.
+    if (role === "Admin") initSocket("admin", userId);
 
     const handleNotification = (payload: { notification: NotificationData }) => {
       if (payload?.notification) {
@@ -83,7 +108,7 @@ const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
     return () => {
       LIVE_NOTIFICATION_EVENTS.forEach((event) => socket.off(event, handleNotification));
     };
-  }, [dispatch, moduleName, userId]);
+  }, [dispatch, moduleName, userId, role]);
 
   // Click outside to close dropdown
   useEffect(() => {

@@ -20,6 +20,9 @@ const DailyAccountBalance = require("./dailyBalance.model");
 const BankAccount = require("./bankAccount.model");
 const CustomerLedgerEntry = require("./customerLedgerEntry.model");
 const PendingBill = require("./pendingBill.model");
+const PendingBillPayment = require("./pendingBillPayment.model");
+const Platform = require("./platform.model");
+const Lead = require("./lead.model");
 
 // Role associations
 Role.hasMany(User, { foreignKey: "roleId" });
@@ -135,10 +138,41 @@ CustomerLedgerEntry.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
 BankAccount.hasMany(CustomerLedgerEntry, { foreignKey: "bankAccountId" });
 CustomerLedgerEntry.belongsTo(BankAccount, { foreignKey: "bankAccountId", as: "bankAccount" });
 
-// Pending Bill ↔ User (who created it, who approved it — see pendingBill.controller.js)
+// Pending Bill ↔ User (who created it, who it became fully-paid/approved under) + Product/Dealer/
+// StockMovement (restock-type bills only — see pendingBill.model.js#billType) + PendingBillPayment
+// (one-to-many payment history, each independently verified — see pendingBill.controller.js)
 User.hasMany(PendingBill, { foreignKey: "createdBy" });
 PendingBill.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
 PendingBill.belongsTo(User, { foreignKey: "approvedBy", as: "approver" });
+
+Product.hasMany(PendingBill, { foreignKey: "productId" });
+PendingBill.belongsTo(Product, { foreignKey: "productId" });
+
+Dealer.hasMany(PendingBill, { foreignKey: "dealerId" });
+PendingBill.belongsTo(Dealer, { foreignKey: "dealerId", as: "dealer" });
+
+StockMovement.hasOne(PendingBill, { foreignKey: "stockMovementId" });
+PendingBill.belongsTo(StockMovement, { foreignKey: "stockMovementId", as: "stockMovement" });
+
+PendingBill.hasMany(PendingBillPayment, { foreignKey: "pendingBillId", as: "payments" });
+PendingBillPayment.belongsTo(PendingBill, { foreignKey: "pendingBillId" });
+
+User.hasMany(PendingBillPayment, { foreignKey: "createdBy" });
+PendingBillPayment.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
+User.hasMany(PendingBillPayment, { foreignKey: "verifiedBy" });
+PendingBillPayment.belongsTo(User, { foreignKey: "verifiedBy", as: "verifier" });
+
+// Lead ↔ User (the owning Sales Employee who created it + the Admin who approved/rejected it) +
+// Platform (lead source) + Product (what they're interested in) — see lead.model.js.
+User.hasMany(Lead, { foreignKey: "createdBy" });
+Lead.belongsTo(User, { foreignKey: "createdBy", as: "salesEmployee" });
+Lead.belongsTo(User, { foreignKey: "approvedBy", as: "approver" });
+
+Platform.hasMany(Lead, { foreignKey: "platformId" });
+Lead.belongsTo(Platform, { foreignKey: "platformId", as: "platform" });
+
+Product.hasMany(Lead, { foreignKey: "productId" });
+Lead.belongsTo(Product, { foreignKey: "productId", as: "product" });
 
 module.exports = {
   User,
@@ -163,4 +197,7 @@ module.exports = {
   BankAccount,
   CustomerLedgerEntry,
   PendingBill,
+  PendingBillPayment,
+  Platform,
+  Lead,
 };

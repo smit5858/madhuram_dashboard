@@ -1,6 +1,7 @@
 const { Op } = require("sequelize");
 const sequelize = require("../config/db");
-const { Product, Stock, StockMovement, SerialUnit, SaleItem, Sale, Courier } = require("../models");
+const { Product, Stock, StockMovement, SerialUnit, SaleItem, Sale, Courier, Dealer } = require("../models");
+const pendingBillService = require("./pendingBill.service");
 
 // No per-product threshold field exists yet — a single constant is enough for now,
 // trivial to promote to a Product column later if the business wants it configurable.
@@ -656,7 +657,7 @@ const receiveStock = async (
       if (dealerId !== undefined && dealerId !== null) stock.dealerId = dealerId;
       await stock.save({ transaction: t });
 
-      await StockMovement.create(
+      const movement = await StockMovement.create(
         {
           productId,
           type: "PURCHASE",
@@ -673,10 +674,27 @@ const receiveStock = async (
         { transaction: t }
       );
 
+      const dealer = dealerId ? await Dealer.findByPk(dealerId, { transaction: t }) : null;
+      const pendingBill = await pendingBillService.createBillForPurchase(
+        {
+          triggerType: "RESTOCK",
+          productId,
+          productNameSnapshot: product.name,
+          dealerId: dealerId ?? null,
+          dealerNameSnapshot: dealer ? dealer.name : null,
+          quantity,
+          purchasePrice: purchasePrice ?? null,
+          billDate: purchaseDate ?? new Date(),
+          stockMovementId: movement.id,
+          createdBy: userId,
+        },
+        { transaction: t }
+      );
+
       const { allocations, readyShipmentGroupIds } = await allocateBackorders(productId, { transaction: t });
       const available = stock.quantity - stock.reserved;
 
-      return { stock, allocations, readyShipmentGroupIds, available, lowStock: available <= LOW_STOCK_THRESHOLD };
+      return { stock, allocations, readyShipmentGroupIds, available, lowStock: available <= LOW_STOCK_THRESHOLD, pendingBill };
     }
 
     // SERIALIZED
@@ -706,7 +724,7 @@ const receiveStock = async (
       created.push(unit);
     }
 
-    await StockMovement.create(
+    const movement = await StockMovement.create(
       {
         productId,
         type: "PURCHASE",
@@ -720,10 +738,32 @@ const receiveStock = async (
       { transaction: t }
     );
 
+    // Units may each carry their own dealer/price — sum the real total and use the first unit's
+    // dealer (if any) as the bill's supplier, same approach as product.controller.js#createProduct.
+    const totalUnitAmount = created.reduce((sum, u) => sum + (u.purchasePrice != null ? Number(u.purchasePrice) : 0), 0);
+    const firstDealerId = created.map((u) => u.dealerId).find((id) => id != null) || null;
+    const firstDealer = firstDealerId ? await Dealer.findByPk(firstDealerId, { transaction: t }) : null;
+
+    const pendingBill = await pendingBillService.createBillForPurchase(
+      {
+        triggerType: "RESTOCK",
+        productId,
+        productNameSnapshot: product.name,
+        dealerId: firstDealerId,
+        dealerNameSnapshot: firstDealer ? firstDealer.name : null,
+        quantity: created.length,
+        totalAmount: totalUnitAmount,
+        billDate: new Date(),
+        stockMovementId: movement.id,
+        createdBy: userId,
+      },
+      { transaction: t }
+    );
+
     const { allocations, readyShipmentGroupIds } = await allocateBackorders(productId, { transaction: t });
     const { available } = await getSerialAvailability(productId, { transaction: t });
 
-    return { units: created, allocations, readyShipmentGroupIds, available, lowStock: available <= LOW_STOCK_THRESHOLD };
+    return { units: created, allocations, readyShipmentGroupIds, available, lowStock: available <= LOW_STOCK_THRESHOLD, pendingBill };
   });
 };
 

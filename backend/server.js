@@ -40,6 +40,8 @@ const pendingBills = require("./routes/pendingBill.routes");
 const bankAccounts = require("./routes/bankAccount.routes");
 const routeSettings = require("./routes/routeSetting.routes");
 const roles = require("./routes/role.routes");
+const leads = require("./routes/lead.routes");
+const platforms = require("./routes/platform.routes");
 
 app.get("/", (req, res) => res.send("API running"));
 app.use("/auth", auth);
@@ -62,6 +64,8 @@ app.use("/pending-bills", pendingBills);
 app.use("/account/bank-accounts", bankAccounts);
 app.use("/route-settings", routeSettings);
 app.use("/roles", roles);
+app.use("/leads", leads);
+app.use("/platforms", platforms);
 
 
 const PORT = process.env.PORT || 3000;
@@ -76,6 +80,7 @@ const ensureAllRoles = async () => {
   // live DB with existing Admin/User accounts.
   await Role.findOrCreate({ where: { name: "Courier" } });
   await Role.findOrCreate({ where: { name: "Account" } });
+  await Role.findOrCreate({ where: { name: "Sales Employee" } });
 };
 
 // Ensures every system route row exists (renaming it if its display name changed). Access to
@@ -102,11 +107,16 @@ const ensureAllRoutesAndPermissions = async () => {
       { name: "Account", path: "/account" },
       { name: "Account Income", path: "/account/income", module: "Account" },
       { name: "Expense", path: "/account/expense", module: "Account" },
+      // Pending Bill now covers both manually-entered general bills and auto-created product
+      // restock/new-product bills (billType field — see pendingBill.model.js) — there is no
+      // separate Restock Bill route/page any more.
       { name: "Pending Bill", path: "/account/pending-bill", module: "Account" },
       { name: "Debited", path: "/account/debited", module: "Account" },
       { name: "Bank Accounts", path: "/account/bank-accounts", module: "Account" },
       { name: "Route Setting", path: "/setting/route-setting", module: "Setting" },
       { name: "Role Management", path: "/setting/role-management", module: "Setting" },
+      { name: "Leads", path: "/leads" },
+      { name: "Platforms", path: "/settings/platforms", module: "Setting" },
     ];
 
     for (const rDef of SYSTEM_ROUTES) {
@@ -133,7 +143,9 @@ const ensureAllRoutesAndPermissions = async () => {
 const pruneObsoleteRoutes = async () => {
   try {
     const { Op } = require("sequelize");
-    const OBSOLETE_PATHS = ["/reports", "/stock", "/inventory", "/dealers"];
+    // "/account/restock-bill" was a short-lived standalone route, folded into Pending Bill
+    // (billType:"RESTOCK") before shipping — prune any row/permissions it left behind.
+    const OBSOLETE_PATHS = ["/reports", "/stock", "/inventory", "/dealers", "/account/restock-bill"];
     const routes = await Route.findAll({ where: { path: { [Op.in]: OBSOLETE_PATHS } } });
     if (routes.length === 0) return;
 
@@ -176,11 +188,13 @@ const backfillIncomingCourierPermissions = async () => {
   }
 };
 
-// Pending Bill ships with access restricted to Admin (always bypasses authorize.js) and Krina —
-// there is no role-based default, so this grants her a UserPermission row the same way an Admin
-// would via Settings → Route Setting. findOrCreate keeps this additive/idempotent: a no-op on
-// every boot after the first, and an Admin can freely change her access afterwards. Matches the
-// backfillIncomingCourierPermissions pattern above.
+// Pending Bill ships with access restricted to Admin (always bypasses authorize.js), Krina by
+// name, and every user with the "Account" role — the role reused as "Accountant" for the
+// restock-bill payment flow now merged into this module (no dedicated Accountant role exists —
+// see pendingBill.controller.js). There is no role-based default otherwise, so this grants a
+// UserPermission row the same way an Admin would via Settings → Route Setting. findOrCreate keeps
+// this additive/idempotent: a no-op on every boot after the first, and an Admin can freely change
+// access afterwards. Matches the backfillIncomingCourierPermissions pattern above.
 const grantInitialPendingBillAccess = async () => {
   try {
     const route = await Route.findOne({ where: { path: "/account/pending-bill" } });
@@ -188,23 +202,70 @@ const grantInitialPendingBillAccess = async () => {
 
     const { Op } = require("sequelize");
     const { User } = require("./models");
-    const krina = await User.findOne({ where: { name: { [Op.like]: "Krina" } } });
-    if (!krina) return;
 
-    await UserPermission.findOrCreate({
-      where: { userId: krina.id, routeId: route.id },
-      defaults: {
-        userId: krina.id,
-        routeId: route.id,
-        canRead: true,
-        canCreate: true,
-        canUpdate: true,
-        canDelete: false,
-        viewAllRecords: true,
-      },
-    });
+    const grantee = async (user) => {
+      if (!user) return;
+      await UserPermission.findOrCreate({
+        where: { userId: user.id, routeId: route.id },
+        defaults: {
+          userId: user.id,
+          routeId: route.id,
+          canRead: true,
+          canCreate: true,
+          canUpdate: true,
+          canDelete: false,
+          viewAllRecords: true,
+        },
+      });
+    };
+
+    const krina = await User.findOne({ where: { name: { [Op.like]: "Krina" } } });
+    await grantee(krina);
+
+    const accountRole = await Role.findOne({ where: { name: "Account" } });
+    if (accountRole) {
+      const accountUsers = await User.findAll({ where: { roleId: accountRole.id } });
+      for (const user of accountUsers) await grantee(user);
+    }
   } catch (e) {
     console.warn("Could not grant initial Pending Bill access:", e.message);
+  }
+};
+
+// Leads ships with access restricted to Admin (always bypasses authorize.js) and every user with
+// the "Sales Employee" role — canDelete deliberately left false (Sales Employees never get
+// delete access by default; see lead.controller.js#deleteLead), viewAllRecords false (each Sales
+// Employee only sees/edits their own leads by default — see helper/permissionScope.js). Grants a
+// UserPermission row the same way an Admin would via Settings → Route Setting. findOrCreate keeps
+// this additive/idempotent: a no-op on every boot after the first, and an Admin can freely change
+// access afterwards. Matches the grantInitialPendingBillAccess pattern above.
+const grantInitialLeadsAccess = async () => {
+  try {
+    const route = await Route.findOne({ where: { path: "/leads" } });
+    if (!route) return;
+
+    const salesEmployeeRole = await Role.findOne({ where: { name: "Sales Employee" } });
+    if (!salesEmployeeRole) return;
+
+    const { User } = require("./models");
+    const salesEmployees = await User.findAll({ where: { roleId: salesEmployeeRole.id } });
+
+    for (const user of salesEmployees) {
+      await UserPermission.findOrCreate({
+        where: { userId: user.id, routeId: route.id },
+        defaults: {
+          userId: user.id,
+          routeId: route.id,
+          canRead: true,
+          canCreate: true,
+          canUpdate: true,
+          canDelete: false,
+          viewAllRecords: false,
+        },
+      });
+    }
+  } catch (e) {
+    console.warn("Could not grant initial Leads access:", e.message);
   }
 };
 
@@ -251,6 +312,48 @@ const ensureBankAccountFieldsNullable = async () => {
   }
 };
 
+// pending_bills gained a NOT NULL remainingAmount column (and paidAmount/billType/etc.) when the
+// restock-bill payment flow was merged into it. sequelize.sync({alter:true}) can't safely add a
+// NOT NULL column to a table that already has rows (MySQL has nothing to put in it) — so if the
+// column is missing and the table isn't empty, add it nullable first and backfill every existing
+// row (old rows predate the payment-installment flow, so they're either fully PENDING/untouched
+// or were APPROVED under the old single-click flow — treat the latter as fully paid) before sync
+// tightens the constraint. Idempotent: a no-op once the column already exists.
+const ensurePendingBillPaymentFieldsBackfilled = async () => {
+  const { DataTypes } = require("sequelize");
+  const queryInterface = sequelize.getQueryInterface();
+  const tables = await queryInterface.showAllTables();
+  const tableNames = tables.map((table) => (typeof table === "string" ? table : table.tableName));
+  if (!tableNames.includes("pending_bills")) return;
+
+  const columns = await queryInterface.describeTable("pending_bills");
+  if (columns.remainingAmount) return;
+
+  await queryInterface.addColumn("pending_bills", "paidAmount", {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await queryInterface.addColumn("pending_bills", "remainingAmount", {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: true,
+  });
+
+  const [rows] = await sequelize.query('SELECT id, amount, status FROM pending_bills');
+  for (const row of rows) {
+    const paidAmount = row.status === "APPROVED" ? row.amount : 0;
+    const remainingAmount = row.status === "APPROVED" ? 0 : row.amount;
+    await sequelize.query("UPDATE pending_bills SET paidAmount = ?, remainingAmount = ? WHERE id = ?", {
+      replacements: [paidAmount, remainingAmount, row.id],
+    });
+  }
+
+  await queryInterface.changeColumn("pending_bills", "remainingAmount", {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+  });
+};
+
 sequelize
   .authenticate()
   .then(() => {
@@ -265,6 +368,9 @@ sequelize
     return ensureBankAccountFieldsNullable();
   })
   .then(() => {
+    return ensurePendingBillPaymentFieldsBackfilled();
+  })
+  .then(() => {
     return sequelize.sync({ alter: true });
   })
   .then(async () => {
@@ -274,6 +380,7 @@ sequelize
     await pruneObsoleteRoutes();
     await backfillIncomingCourierPermissions();
     await grantInitialPendingBillAccess();
+    await grantInitialLeadsAccess();
 
     // Initialize Socket.io after DB is ready
     initSocket(httpServer);

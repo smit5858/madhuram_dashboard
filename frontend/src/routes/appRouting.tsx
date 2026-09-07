@@ -21,6 +21,8 @@ const Debited = lazy(() => import('../pages/account/Debited'));
 const BankAccounts = lazy(() => import('../pages/account/BankAccounts'));
 const RouteSetting = lazy(() => import('../pages/settings/RouteSetting'));
 const RoleManagement = lazy(() => import('../pages/settings/RoleManagement'));
+const Leads = lazy(() => import('../pages/leads/Leads'));
+const PlatformManagement = lazy(() => import('../pages/settings/PlatformManagement'));
 const Forbidden = lazy(() => import('../pages/error/Forbidden'));
 const LoadingFallback = lazy(() => import('../pages/loadingfallback/LoadingFallback'));
 
@@ -242,6 +244,34 @@ const routesConfig = [
               <Suspense fallback={<LoadingFallback />}>
                 <MainLayout>
                   <RoleManagement />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.Leads,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/leads">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <Leads />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.PlatformManagement,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/settings/platforms">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <PlatformManagement />
                 </MainLayout>
               </Suspense>
             </PermissionGuard>

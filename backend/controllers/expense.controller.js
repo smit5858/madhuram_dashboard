@@ -28,9 +28,12 @@ const serializeExpense = (row) => ({
   updatedAt: row.updatedAt,
 });
 
+// Pending Bill payoffs auto-create an AccountEntry (category "Pending Bill") purely so they count
+// toward the Total Out balance — they're a distinct module with their own page/workflow and must
+// never appear in the Expense list itself (see pendingBillService.js#recalculateStatus).
 const buildExpenseWhere = (query) => {
   const { search, status } = query;
-  const where = { entryType: "EXPENSE" };
+  const where = { entryType: "EXPENSE", category: { [Op.ne]: "Pending Bill" } };
 
   if (status && ["PENDING", "APPROVED", "REJECTED"].includes(status)) where.status = status;
   if (search && search.trim()) {
@@ -99,7 +102,7 @@ exports.getExpenseTotals = async (req, res) => {
 exports.getExpenseById = async (req, res) => {
   try {
     const entry = await AccountEntry.findOne({
-      where: { id: req.params.id, entryType: "EXPENSE" },
+      where: { id: req.params.id, entryType: "EXPENSE", category: { [Op.ne]: "Pending Bill" } },
       include: [{ model: User, as: "creator", attributes: ["id", "name"] }],
     });
     if (!entry) return res.status(404).json({ success: false, message: "Expense not found" });
@@ -175,7 +178,9 @@ exports.updateExpense = async (req, res) => {
     const validationError = validateExpensePayload(req.body);
     if (validationError) return res.status(400).json({ success: false, message: validationError });
 
-    const entry = await AccountEntry.findOne({ where: { id: req.params.id, entryType: "EXPENSE" } });
+    const entry = await AccountEntry.findOne({
+      where: { id: req.params.id, entryType: "EXPENSE", category: { [Op.ne]: "Pending Bill" } },
+    });
     if (!entry) return res.status(404).json({ success: false, message: "Expense not found" });
 
     const { customerId, name, mobile, product, amount, entryDate, paymentMethod, bankName, description, status } = req.body;
@@ -216,7 +221,9 @@ exports.deleteExpense = async (req, res) => {
       return res.status(403).json({ success: false, message: "Forbidden: only Admin can delete an expense" });
     }
 
-    const entry = await AccountEntry.findOne({ where: { id: req.params.id, entryType: "EXPENSE" } });
+    const entry = await AccountEntry.findOne({
+      where: { id: req.params.id, entryType: "EXPENSE", category: { [Op.ne]: "Pending Bill" } },
+    });
     if (!entry) return res.status(404).json({ success: false, message: "Expense not found" });
 
     const wasApproved = entry.status === "APPROVED";
@@ -241,7 +248,7 @@ exports.approveExpense = async (req, res) => {
 
     const { entry, alreadyApproved } = await sequelize.transaction(async (transaction) => {
       const row = await AccountEntry.findOne({
-        where: { id: req.params.id, entryType: "EXPENSE" },
+        where: { id: req.params.id, entryType: "EXPENSE", category: { [Op.ne]: "Pending Bill" } },
         transaction,
         lock: transaction.LOCK.UPDATE,
       });
@@ -292,7 +299,7 @@ exports.rejectExpense = async (req, res) => {
 
     const { entry, alreadyRejected, wasApproved } = await sequelize.transaction(async (transaction) => {
       const row = await AccountEntry.findOne({
-        where: { id: req.params.id, entryType: "EXPENSE" },
+        where: { id: req.params.id, entryType: "EXPENSE", category: { [Op.ne]: "Pending Bill" } },
         transaction,
         lock: transaction.LOCK.UPDATE,
       });

@@ -43,6 +43,7 @@ export const ALL_SIDEBAR_ITEMS: SidebarItem[] = [
         ],
     },
     { path: "/customers", name: "Customers" },
+    { path: "/leads",     name: "Leads"     },
     { path: "/users",     name: "Users"     },
     {
         path: "/account",
@@ -61,6 +62,7 @@ export const ALL_SIDEBAR_ITEMS: SidebarItem[] = [
         children: [
             { path: "/setting/route-setting", name: "Route Setting" },
             { path: "/setting/role-management", name: "Role Management" },
+            { path: "/settings/platforms", name: "Platform Management" },
         ],
     },
 ];

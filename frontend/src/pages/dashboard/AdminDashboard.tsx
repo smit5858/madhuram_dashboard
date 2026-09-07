@@ -1,15 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Users, IndianRupee, Receipt, ShoppingBag, Clock, Truck, UserCog } from "lucide-react";
+import { Users, IndianRupee, Receipt, ShoppingBag, Clock, Truck, UserSquare2 } from "lucide-react";
 import { Routing } from "@/routes/routing";
-import userService from "@/services/user.service";
+import customerService from "@/services/customer.service";
 import sellsService from "@/services/sells.service";
 import incomeService from "@/services/income.service";
 import expenseService from "@/services/expense.service";
 import courierService from "@/services/courier.service";
+import leadService from "@/services/lead.service";
 import KpiCard from "./components/KpiCard";
 import TrendChart from "./components/TrendChart";
-import { HR_MOCK_TOTALS } from "./mock/hrMockData";
 
 const formatCurrency = (amount: number) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
@@ -22,9 +22,9 @@ const formatCurrency = (amount: number) =>
 const AdminDashboard = () => {
   const navigate = useNavigate();
 
-  const { data: usersResp, isLoading: usersLoading } = useQuery({
-    queryKey: ["dashboard-admin-users"],
-    queryFn: () => userService.getUsers({ page: 1, limit: 1 }),
+  const { data: customersResp, isLoading: customersLoading } = useQuery({
+    queryKey: ["dashboard-admin-customers"],
+    queryFn: () => customerService.getCustomers({ page: 1, limit: 1 }),
   });
 
   const { data: sellsResp, isLoading: sellsLoading } = useQuery({
@@ -52,12 +52,18 @@ const AdminDashboard = () => {
     queryFn: () => courierService.getCourierTotals(),
   });
 
-  const totalUsers = usersResp?.data?.meta?.total ?? 0;
+  const { data: leadStatsResp, isLoading: leadStatsLoading } = useQuery({
+    queryKey: ["lead-stats"],
+    queryFn: () => leadService.getLeadStats(),
+  });
+
+  const totalCustomers = customersResp?.data?.meta?.total ?? 0;
   const sellsTotals = sellsResp?.data?.data;
   const totalIncome = incomeResp?.data?.data?.totalIncome ?? 0;
   const totalExpense = expenseResp?.data?.data?.totalExpense ?? 0;
   const pendingOrders = pendingResp?.data?.meta?.total ?? 0;
   const deliveries = courierResp?.data?.data?.totalDeliveries ?? 0;
+  const totalLeads = leadStatsResp?.data?.data?.total ?? 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -68,20 +74,12 @@ const AdminDashboard = () => {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
-          label="Total Users"
-          value={String(totalUsers)}
-          caption={usersLoading ? "Loading..." : "Registered accounts"}
-          icon={UserCog}
-          color="blue"
-          onClick={() => navigate(Routing.Users)}
-        />
-        <KpiCard
-          label="Total Employees"
-          value={String(HR_MOCK_TOTALS.totalEmployees)}
-          caption="Mock data — HR module not yet built"
+          label="Total Customers"
+          value={String(totalCustomers)}
+          caption={customersLoading ? "Loading..." : "Registered customers"}
           icon={Users}
-          color="slate"
-          disabled
+          color="blue"
+          onClick={() => navigate(Routing.Customers)}
         />
         <KpiCard
           label="Total Sales"
@@ -98,6 +96,14 @@ const AdminDashboard = () => {
           icon={ShoppingBag}
           color="blue"
           onClick={() => navigate(Routing.Sells)}
+        />
+        <KpiCard
+          label="Total Leads"
+          value={String(totalLeads)}
+          caption={leadStatsLoading ? "Loading..." : "Across every Sales Employee"}
+          icon={UserSquare2}
+          color="blue"
+          onClick={() => navigate(Routing.Leads)}
         />
         <KpiCard
           label="Total Income"
@@ -121,7 +127,7 @@ const AdminDashboard = () => {
           caption="Awaiting confirmation/fulfillment"
           icon={Clock}
           color="amber"
-          onClick={() => navigate(`${Routing.Sells}?status=PENDING`)}
+          onClick={() => navigate(`${Routing.Couriers}?direction=OUT`)}
         />
         <KpiCard
           label="Deliveries"
@@ -131,6 +137,7 @@ const AdminDashboard = () => {
           color="indigo"
           onClick={() => navigate(`${Routing.Couriers}?direction=OUT`)}
         />
+        
       </div>
 
       <TrendChart enabled />

@@ -6,7 +6,7 @@ export const courierCompanySchema = z.object({
     .union([
       z
         .string()
-        .regex(/^https?:\/\/.+\{trackId\}.*$/, "Must be a valid http(s) URL containing a {trackId} placeholder")
+        .regex(/^https?:\/\/.+\.*$/, "Must be a valid http(s) URL containing a placeholder")
         .max(500, "URL must be under 500 characters"),
       z.literal(""),
     ])

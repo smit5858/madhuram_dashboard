@@ -85,6 +85,23 @@ exports.receiveStock = async (req, res) => {
 
     await notifyBackorderAllocations(result.allocations, product);
 
+    if (result.pendingBill) {
+      const bill = result.pendingBill;
+      const qty = quantity ? parseInt(quantity, 10) : units && units.length;
+      await notify([
+        {
+          recipientModule: "admin",
+          type: "PENDING_BILL_PENDING_APPROVAL",
+          title: "New Pending Bill Awaiting Payment",
+          message: `${user.name || "A user"} restocked "${product.name}" (+${qty} unit(s)). A pending bill (#${bill.id}) of ₹${Number(bill.amount).toLocaleString("en-IN")} was generated.`,
+          referenceType: "pendingBill",
+          referenceId: bill.id,
+          event: "pending_bill_created",
+          payload: { pendingBillId: bill.id, productId: product.id },
+        },
+      ]);
+    }
+
     return res.status(200).json({ success: true, message: "Stock received successfully", data: result });
   } catch (err) {
     if (err.name === "SequelizeUniqueConstraintError") {
