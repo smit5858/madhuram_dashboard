@@ -20,7 +20,6 @@ import productService, {
 import customerService, { type CustomerData } from "../../services/customer.service";
 import bankAccountService from "../../services/bankAccount.service";
 import CancelSaleModal from "@/shared/components/CancelSaleModal";
-import ShareStatementMenu from "@/pages/customers/components/ShareStatementMenu";
 import StockShortageModal, { type StockShortageItem } from "@/pages/sells/components/StockShortageModal";
 import { blurNumberInputOnWheel } from "@/shared/utils/input";
 
@@ -1132,18 +1131,6 @@ const Sells = () => {
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>
-                          )}
-                          {/* Customer Account / Collect Payment moved to Account → Debited — the
-                              customer ledger is Account/Admin-managed only. Share stays here so
-                              a Sells rep can still send/print a customer's statement. */}
-                          {sell.customerId && (
-                            <ShareStatementMenu
-                              customerId={sell.customerId}
-                              customerName={sell.customerName}
-                              customerPhone={sell.customerNumber}
-                              balance={sell.customerLedgerBalance}
-                              compact
-                            />
                           )}
                         </div>
                       </td>

@@ -24,6 +24,7 @@ import courierCompanyService, { buildTrackingLink } from "../../../services/cour
 import { STATUS_LABEL, SHIPMENT_TYPE_LABEL, STATUS_BADGE_CLASS } from "../../../shared/constants/courierStatus";
 import { STOCK_STATUS_LABEL, STOCK_STATUS_BADGE_CLASS } from "../../../shared/constants/productStockStatus";
 import { formatDateTime } from "../../../shared/utils/date";
+import CourierShareButton from "./CourierShareButton";
 
 const Badge = ({ className, children }: { className: string; children: ReactNode }) => (
   <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${className}`}>
@@ -254,7 +255,12 @@ const CourierViewModal = ({ courier, onClose }: CourierViewModalProps) => {
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end border-t border-slate-100 bg-white px-6 py-4">
+        <div className="flex items-center justify-between border-t border-slate-100 bg-white px-6 py-4">
+          {courier.direction === "OUT" ? (
+            <CourierShareButton courier={courier} siblings={siblings} />
+          ) : (
+            <span />
+          )}
           <button
             type="button"
             onClick={onClose}

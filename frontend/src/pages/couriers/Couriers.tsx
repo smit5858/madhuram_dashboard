@@ -18,6 +18,7 @@ import CourierEditModal from "./components/CourierEditModal";
 import CourierViewModal from "./components/CourierViewModal";
 import CourierStatusModal from "./components/CourierStatusModal";
 import DeleteCourierModal from "./components/DeleteCourierModal";
+import CourierShareButton from "./components/CourierShareButton";
 import IncomingCourier from "./IncomingCourier";
 
 type PagePermission = { canRead: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean };
@@ -254,6 +255,9 @@ const CourierTable = ({
                                             >
                                                 <Eye className="h-4 w-4" />
                                             </button>
+                                            {columnsVariant === "outgoing" && (
+                                                <CourierShareButton courier={courier} compact />
+                                            )}
                                             {pagePermission.canUpdate && (
                                                 <button
                                                     onClick={() => onStatus(courier)}
