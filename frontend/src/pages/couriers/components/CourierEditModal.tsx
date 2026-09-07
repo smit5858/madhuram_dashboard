@@ -9,12 +9,12 @@ import saleService from "../../../services/sells.service";
 import FormikInput from "../../../shared/components/formik-fields/FormikInput";
 import FormikSelect from "../../../shared/components/formik-fields/FormikSelect";
 import FormikDate from "../../../shared/components/formik-fields/FormikDate";
+import FormikPhoneInput from "../../../shared/components/formik-fields/FormikPhoneInput";
 import FormikSerialPicker from "../../../shared/components/formik-fields/FormikSerialPicker";
 import { courierEditSchema, validateSerialNumbers, type CourierEditFormValues } from "../../../validation/courier.validation";
 import { COURIER_COMPANY_OTHER } from "../../../shared/constants/courierCompanies";
 import { SHIPMENT_TYPE_LABEL, type ShipmentType } from "../../../shared/constants/courierStatus";
 import { getTodayISODate } from "../../../shared/utils/date";
-import { openCourierWhatsApp } from "../../../shared/utils/whatsapp";
 
 const SHIPMENT_TYPE_OPTIONS = (Object.keys(SHIPMENT_TYPE_LABEL) as ShipmentType[]).map((value) => ({
     value,
@@ -31,10 +31,9 @@ interface CourierEditModalProps {
 }
 
 /** Combined Create/Edit modal for a courier record — the fuller field set (company, pincode,
- *  entry date, serial numbers when applicable, shipment type for sale-linked orders) plus a
- *  "Save and Share" action that fires the WhatsApp update. Scalar fields go through the shared
- *  Formik field components; the free-pickup toggle and "Other" company name stay as sibling
- *  state (not naturally Formik-shaped) and are merged in at submit. */
+ *  entry date, serial numbers when applicable, shipment type for sale-linked orders). Scalar
+ *  fields go through the shared Formik field components; the free-pickup toggle and "Other"
+ *  company name stay as sibling state (not naturally Formik-shaped) and are merged in at submit. */
 const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModalProps) => {
     const queryClient = useQueryClient();
     const isEdit = !!courier?.id;
@@ -86,20 +85,9 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
         onSuccess: (res) => {
             toast.success(res.data?.message || (isEdit ? "Courier updated successfully" : "Courier created successfully"));
             queryClient.invalidateQueries({ queryKey: ["couriers"] });
-            const updated = res.data?.data;
-            if (updated) {
-                const sent = openCourierWhatsApp(updated.mobileNo || updated.phone, {
-                    customerName: updated.customerName || updated.name,
-                    productName: updated.productName,
-                    quantity: updated.quantity,
-                    courierName: updated.courierName,
-                    trackId: updated.trackId,
-                    amount: updated.charge,
-                });
-                if (!sent) {
-                    toast.error("Saved, but no usable phone number to send a WhatsApp update");
-                }
-            }
+            // Charge/freePickup/entryDate changes shift the backend-computed monthly Courier
+            // Charge total — refresh the header pill along with the list.
+            queryClient.invalidateQueries({ queryKey: ["courier-charge"] });
             onClose();
         },
         onError: (err: any) => {
@@ -171,18 +159,23 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
             mobileNo: values.mobileNo || undefined,
             phone: values.mobileNo || undefined,
             city: role === "Admin" ? city || undefined : undefined,
-            pincode: values.pincode || undefined,
-            charge: values.charge ? parseFloat(values.charge) : undefined,
-            address: values.address || undefined,
-            productName: values.productName || undefined,
+            pincode: values.pincode || null,
+            charge: values.charge ? parseFloat(values.charge) : null,
+            address: values.address || null,
+            productName: values.productName || null,
             freePickup,
             courierName: resolvedCourierName || undefined,
-            trackId: values.trackId || undefined,
-            kg: values.kg ? parseFloat(values.kg) : undefined,
-            quantity: values.quantity ? parseInt(values.quantity, 10) : undefined,
-            note: values.note || undefined,
+            trackId: values.trackId || null,
+            kg: values.kg ? parseFloat(values.kg) : null,
+            quantity: values.quantity ? parseInt(values.quantity, 10) : null,
+            note: values.note || null,
             entryDate: values.entryDate || undefined,
             direction: formDirection,
+            // Status / Type is locked to Office Pickup only for NEW records (see the read-only
+            // field below) — on edit, omit it entirely so the backend's `!== undefined` guard
+            // leaves whatever deliveryMode the record already had untouched instead of
+            // clobbering CHANGE/PENDING/FREE back to Office Pickup on every save.
+            deliveryMode: isEdit ? undefined : "OFFICE_PICKUP",
         };
 
         if (canEditSerials) {
@@ -245,7 +238,7 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
                                 <Field name="customerName" label="Customer Name *" placeholder="Customer Name" component={FormikInput} />
                             </div>
 
-                            <Field name="mobileNo" label="Mobile" placeholder="+91 99999 99999" component={FormikInput} />
+                            <Field name="mobileNo" label="Mobile" placeholder="9876543210" component={FormikPhoneInput} />
                             <Field name="productName" label="Product Name" placeholder="e.g. Engine Oil" component={FormikInput} />
 
                             <div>
@@ -308,21 +301,38 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
                             <Field name="entryDate" label="Date" component={FormikDate} />
                             <Field name="quantity" label="Quantity" type="number" placeholder="Units to ship" component={FormikInput} />
 
+                            {/* Always Office Pickup for this flow — locked, not user-editable. Submitted as
+                                "OFFICE_PICKUP" regardless (see handleSubmit), so there's no Formik field for it. */}
                             <div>
-                                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide">Direction</label>
-                                <select
-                                    value={formDirection}
-                                    onChange={(e) => setFormDirection(e.target.value as "IN" | "OUT")}
-                                    disabled={!!courier?.saleId}
-                                    className={`mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-[#3d6fe0] focus:outline-none ${courier?.saleId ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-slate-50 text-slate-900 focus:bg-white"}`}
-                                >
-                                    <option value="OUT">Outgoing — we ship to the customer</option>
-                                    <option value="IN">Incoming — a customer/vendor ships to us</option>
-                                </select>
-                                {courier?.saleId && (
-                                    <p className="mt-0.5 text-[10px] text-slate-400">Linked to a sale — always outgoing.</p>
-                                )}
+                                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide">Status / Type</label>
+                                <input
+                                    type="text"
+                                    value="Office Pickup"
+                                    readOnly
+                                    disabled
+                                    className="mt-1 block w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-400 cursor-not-allowed"
+                                />
                             </div>
+
+                            {/* Direction is fixed by which page opened this modal (Outgoing/Incoming) — no picker
+                                needed on the Incoming Courier form since it's always "IN" there. */}
+                            {direction === "OUT" && (
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide">Direction</label>
+                                    <select
+                                        value={formDirection}
+                                        onChange={(e) => setFormDirection(e.target.value as "IN" | "OUT")}
+                                        disabled={!!courier?.saleId}
+                                        className={`mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-[#3d6fe0] focus:outline-none ${courier?.saleId ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-slate-50 text-slate-900 focus:bg-white"}`}
+                                    >
+                                        <option value="OUT">Outgoing — we ship to the customer</option>
+                                        <option value="IN">Incoming — a customer/vendor ships to us</option>
+                                    </select>
+                                    {courier?.saleId && (
+                                        <p className="mt-0.5 text-[10px] text-slate-400">Linked to a sale — always outgoing.</p>
+                                    )}
+                                </div>
+                            )}
 
                             {canEditSerials && (
                                 <Field
@@ -344,7 +354,7 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
                                     Cancel
                                 </button>
                                 <button type="submit" disabled={saveMutation.isPending} className="rounded-lg bg-[#3d6fe0] px-4 py-2 text-sm font-semibold text-white hover:bg-[#3162d2]">
-                                    {saveMutation.isPending ? "Saving..." : "Save and Share"}
+                                    {saveMutation.isPending ? "Saving..." : isEdit ? "Save Changes" : "Create Courier"}
                                 </button>
                             </div>
                         </Form>

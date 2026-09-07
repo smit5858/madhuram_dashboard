@@ -9,11 +9,18 @@ const CourierCompany = sequelize.define(
   "CourierCompany",
   {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-    name: { type: DataTypes.STRING, allowNull: false, unique: true },
+    name: { type: DataTypes.STRING, allowNull: false },
     trackingLinkTemplate: { type: DataTypes.STRING, allowNull: true },
     isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
   },
-  { tableName: "courier_companies", timestamps: true }
+  {
+    tableName: "courier_companies",
+    timestamps: true,
+    // Named (not inline column-level unique:true) so sync({alter:true}) recognizes this
+    // index as already existing on every restart, instead of adding a new duplicate each
+    // time — inline unique:true does not survive alter-sync comparisons reliably in MySQL.
+    indexes: [{ unique: true, fields: ["name"] }],
+  }
 );
 
 module.exports = CourierCompany;

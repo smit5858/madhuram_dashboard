@@ -1,4 +1,5 @@
 import httpService from "./http-service";
+import type { LedgerBalance } from "@/shared/utils/ledgerBalance";
 
 export interface SaleItemData {
   id?: number;
@@ -28,18 +29,12 @@ export interface PaymentData {
   saleId: number;
   amount: number;
   method?: "Cash" | "UPI" | "Card" | "COD" | "BankTransfer" | "Other" | null;
+  bankAccountId?: number | null;
+  bankAccount?: { id: number; bankName: string; accountHolderName: string; accountNumber: string } | null;
   notes?: string | null;
   createdAt?: string;
   creator?: { id: number; name: string };
   Sale?: { id: number; customerName: string; sellingAmount: number; paymentStatus?: string };
-}
-
-export interface PaymentsFilters {
-  search?: string;
-  start_date?: string;
-  end_date?: string;
-  page?: number;
-  limit?: number;
 }
 
 export interface SaleData {
@@ -50,6 +45,8 @@ export interface SaleData {
   customerName: string;
   customerNumber?: string;
   paymentMethod?: "Cash" | "UPI" | "Card" | "COD" | "BankTransfer" | "Other";
+  bankAccountId?: number | null;
+  bankAccount?: { id: number; bankName: string; accountHolderName: string; accountNumber: string } | null;
   city?: string;
   fromAddress?: string;
   pincode?: string;
@@ -76,6 +73,10 @@ export interface SaleData {
   };
   createdAt?: string;
   updatedAt?: string;
+  /** The customer's live running account balance (advance/pending), carried across ALL of their
+   *  sales — not this sale's own pendingAmount. Null when the sale has no linked customer. See
+   *  backend sells.controller.js#attachLedgerBalances. */
+  customerLedgerBalance?: LedgerBalance | null;
 }
 
 export interface CreateSalePayload {
@@ -84,6 +85,7 @@ export interface CreateSalePayload {
   customerName: string;
   customerNumber?: string;
   paymentMethod?: string;
+  bankAccountId?: number | null;
   city?: string;
   fromAddress?: string;
   pincode?: string;
@@ -134,6 +136,18 @@ const getSales = (filters: SalesFilters, config?: { signal?: AbortSignal }) =>
 const getSellsTotals = (filters?: SalesFilters) =>
   httpService.get<{ success: boolean; data: SellsTotalsData }>("/sells/totals", { params: filters });
 
+export interface SalesDailyTrendRow {
+  date: string;
+  totalSelling: number;
+  salesCount: number;
+}
+
+const getSalesDailyTrend = (params: { startDate?: string; endDate?: string }, config?: { signal?: AbortSignal }) =>
+  httpService.get<{ success: boolean; data: SalesDailyTrendRow[] }>("/sells/daily-trend", {
+    params,
+    signal: config?.signal,
+  });
+
 const getSaleById = (id: number) =>
   httpService.get<{ success: boolean; data: SaleData }>(`/sells/${id}`);
 
@@ -152,24 +166,18 @@ const exportSales = (format: "pdf" | "excel", filters?: SalesFilters) =>
 const getPayments = (saleId: number) =>
   httpService.get<{ success: boolean; data: PaymentData[] }>(`/sells/${saleId}/payments`);
 
-const getAllPayments = (filters?: PaymentsFilters) =>
-  httpService.get<{ success: boolean; data: PaymentData[]; meta: { page: number; limit: number; total: number; totalPages: number } }>(
-    "/sells/payments",
-    { params: filters }
-  );
-
-const recordPayment = (saleId: number, data: { amount: number; method?: string; notes?: string }) =>
+const recordPayment = (saleId: number, data: { amount: number; method?: string; bankAccountId?: number | null; notes?: string }) =>
   httpService.post<{ success: boolean; message: string; data: SaleData }>(`/sells/${saleId}/payments`, data);
 
 export default {
   getSales,
   getSellsTotals,
+  getSalesDailyTrend,
   getSaleById,
   createSale,
   updateSale,
   deleteSale,
   exportSales,
   getPayments,
-  getAllPayments,
   recordPayment,
 };

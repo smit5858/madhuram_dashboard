@@ -38,7 +38,7 @@ export const ALL_SIDEBAR_ITEMS: SidebarItem[] = [
         name: "Couriers",
         children: [
             { path: "/couriers", name: "Outgoing Couriers", search: "?direction=OUT" },
-            { path: "/couriers", name: "Incoming Couriers", search: "?direction=IN" },
+            { path: "/couriers/incoming", name: "Incoming Couriers", search: "?direction=IN" },
             { path: "/couriers-companies", name: "Courier Companies" },
         ],
     },
@@ -48,12 +48,18 @@ export const ALL_SIDEBAR_ITEMS: SidebarItem[] = [
         path: "/account",
         name: "Account",
         children: [
-            { path: "/account/income", name: "Income" }, 
+            { path: "/account/income", name: "Income" },
             { path: "/account/expense", name: "Expense" },
-            { path: "/account/credit", name: "Credit" },
-            { path: "/account/pending-bills", name: "Pending Bills" },
-            { path: "/account/account", name: "Account" },
+            { path: "/account/debited", name: "Debited" },
+            { path: "/account/bank-accounts", name: "Manage Bank Account Details" },
         ],
     },
-    { path: "/setting",     name: "Setting"     },
+    {
+        path: "/setting",
+        name: "Settings",
+        children: [
+            { path: "/setting/route-setting", name: "Route Setting" },
+            { path: "/setting/role-management", name: "Role Management" },
+        ],
+    },
 ];

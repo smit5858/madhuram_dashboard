@@ -1,18 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
 import { useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
-import { Eye, PackageCheck, Search, Truck } from "lucide-react";
+import { Formik, Form, Field, useFormikContext, type FormikProps } from "formik";
+import { Download, ChevronDown, ExternalLink, Eye, PackageCheck, RotateCcw, Search, Truck } from "lucide-react";
 import { type RootState } from "../../store/store";
-import courierService, { type CourierData } from "../../services/courier.service";
-import { normalizePhoneForWhatsApp, openCourierWhatsApp } from "../../shared/utils/whatsapp";
+import courierService, { type CourierData, type CourierFilters } from "../../services/courier.service";
+import courierCompanyService, { buildTrackingLink } from "../../services/courierCompany.service";
 import { initSocket } from "../../services/socket.service";
 import { STATUS_LABEL, STATUS_BADGE_CLASS, type CourierStatus } from "../../shared/constants/courierStatus";
+import { DELIVERY_MODE_LABEL, DELIVERY_MODE_BADGE_CLASS, DELIVERY_MODE_OPTIONS } from "../../shared/constants/deliveryMode";
+import { STOCK_STATUS_LABEL, STOCK_STATUS_BADGE_CLASS } from "../../shared/constants/productStockStatus";
+import { courierFilterSchema, type CourierFilterValues } from "../../validation/courier.validation";
+import { useDebounce } from "../../hook/useDebounce";
 import CourierEditModal from "./components/CourierEditModal";
 import CourierViewModal from "./components/CourierViewModal";
 import CourierStatusModal from "./components/CourierStatusModal";
 import DeleteCourierModal from "./components/DeleteCourierModal";
+import IncomingCourier from "./IncomingCourier";
 
 type PagePermission = { canRead: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean };
 
@@ -21,6 +27,18 @@ const CourierStatusBadge = ({ status }: { status?: CourierStatus | string | null
     return (
         <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_BADGE_CLASS[key]}`}>
             {STATUS_LABEL[key]}
+        </span>
+    );
+};
+
+// Snapshot taken at courier-creation time (see backend orderService.createOrder) — never
+// recomputed from current inventory, so it stays "—" (not applicable) for manually-created
+// entries that have no product/stock linkage to check against.
+const StockStatusBadge = ({ status }: { status?: CourierData["productStockStatus"] }) => {
+    if (!status) return <span className="text-slate-300">—</span>;
+    return (
+        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${STOCK_STATUS_BADGE_CLASS[status]}`}>
+            {status === "IN_STOCK" ? "✓" : "⚠"} {STOCK_STATUS_LABEL[status]}
         </span>
     );
 };
@@ -34,6 +52,7 @@ const CourierTable = ({
     totalCount,
     searchTerm,
     onSearchChange,
+    showSearch = true,
     emptyMessage,
     pagePermission,
     highlightedSaleIds,
@@ -41,7 +60,7 @@ const CourierTable = ({
     onStatus,
     onEdit,
     onDelete,
-    onWhatsApp,
+    columnsVariant = "full",
 }: {
     title: string;
     badgeClassName: string;
@@ -49,6 +68,9 @@ const CourierTable = ({
     totalCount: number;
     searchTerm: string;
     onSearchChange: (value: string) => void;
+    /** Set false when a page-level filter bar already covers search (e.g. Outgoing) — avoids
+     *  stacking two overlapping, inconsistent search controls on one page. */
+    showSearch?: boolean;
     emptyMessage: string;
     pagePermission: PagePermission;
     highlightedSaleIds: Set<number>;
@@ -56,8 +78,20 @@ const CourierTable = ({
     onStatus: (courier: CourierData) => void;
     onEdit: (courier: CourierData) => void;
     onDelete: (courier: CourierData) => void;
-    onWhatsApp: (courier: CourierData) => void;
-}) => (
+    /** "outgoing" trims the table to Sr No/Customer/Mobile/Product/Courier Company/Tracking ID/
+     *  Action only — the Incoming table keeps the full column set. */
+    columnsVariant?: "full" | "outgoing";
+}) => {
+    // Only needed to resolve a courier's tracking link (matched by company name) — same lookup
+    // and queryKey CourierViewModal already uses, so react-query dedupes it to one request.
+    const { data: companiesResponse } = useQuery({
+        queryKey: ["courier-companies-picker"],
+        queryFn: () => courierCompanyService.getCourierCompanies(),
+        enabled: columnsVariant === "outgoing",
+    });
+    const courierCompanies = companiesResponse?.data?.data || [];
+
+    return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
             <h3 className="text-sm font-bold text-slate-900">
@@ -66,16 +100,18 @@ const CourierTable = ({
                     {totalCount}
                 </span>
             </h3>
-            <div className="relative w-full max-w-xs">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-                <input
-                    type="text"
-                    value={searchTerm}
-                    onChange={(e) => onSearchChange(e.target.value)}
-                    placeholder="Filter by name, city, mobile, courier, track ID..."
-                    className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-3 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
-                />
-            </div>
+            {showSearch && (
+                <div className="relative w-full max-w-xs">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                    <input
+                        type="text"
+                        value={searchTerm}
+                        onChange={(e) => onSearchChange(e.target.value)}
+                        placeholder="Filter by name, city, mobile, courier, track ID..."
+                        className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-3 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                    />
+                </div>
+            )}
         </div>
 
         {couriers.length === 0 ? (
@@ -84,28 +120,43 @@ const CourierTable = ({
             <div className="overflow-x-auto">
                 <table className="w-full border-collapse text-left text-sm text-slate-500">
                     <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-700">
-                        <tr>
-                            <th className="px-4 py-3 whitespace-nowrap">Sr No.</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Customer Name</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Address</th>
-                            <th className="px-4 py-3 whitespace-nowrap">City</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Mobile No.</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Product Name</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Charge</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Free Pickup</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Courier Name</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Track ID</th>
-                            <th className="px-4 py-3 whitespace-nowrap">KG</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Qty</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Status</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Note</th>
-                            <th className="px-4 py-3 whitespace-nowrap">Delivered Date</th>
-                            <th className="px-4 py-3 text-right whitespace-nowrap">Action</th>
-                        </tr>
+                        {columnsVariant === "outgoing" ? (
+                            <tr>
+                                <th className="px-4 py-3 whitespace-nowrap">Sr No.</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Customer Name</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Mobile</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Product</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Stock Status</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Courier Company Name</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Tracking ID</th>
+                                <th className="px-4 py-3 text-right whitespace-nowrap">Action</th>
+                            </tr>
+                        ) : (
+                            <tr>
+                                <th className="px-4 py-3 whitespace-nowrap">Sr No.</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Customer Name</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Address</th>
+                                <th className="px-4 py-3 whitespace-nowrap">City</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Mobile No.</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Product Name</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Charge</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Free Pickup</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Courier Name</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Track ID</th>
+                                <th className="px-4 py-3 whitespace-nowrap">KG</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Qty</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Status</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Note</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Delivered Date</th>
+                                <th className="px-4 py-3 text-right whitespace-nowrap">Action</th>
+                            </tr>
+                        )}
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                         {couriers.map((courier, index) => {
                             const isHighlighted = !!courier.saleId && highlightedSaleIds.has(courier.saleId);
+                            const matchedCompany = courierCompanies.find((c) => c.name === courier.courierName);
+                            const trackingLink = buildTrackingLink(matchedCompany?.trackingLinkTemplate, courier.trackId);
                             return (
                                 <tr
                                     key={courier.id}
@@ -118,59 +169,84 @@ const CourierTable = ({
                                     <td className="px-4 py-3 font-semibold text-slate-900 whitespace-nowrap">
                                         {courier.customerName || courier.name || <span className="text-slate-300">—</span>}
                                     </td>
-                                    <td className="px-4 py-3 max-w-[150px] truncate" title={courier.address || ""}>
-                                        {courier.address || <span className="text-slate-300">—</span>}
-                                    </td>
-                                    <td className="px-4 py-3 whitespace-nowrap">
-                                        {courier.city
-                                            ? <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 border border-blue-100">{courier.city}</span>
-                                            : <span className="text-slate-300">—</span>}
-                                    </td>
-                                    <td className="px-4 py-3 whitespace-nowrap">{courier.mobileNo || courier.phone || <span className="text-slate-300">—</span>}</td>
-                                    <td className="px-4 py-3 whitespace-nowrap">{courier.productName || <span className="text-slate-300">—</span>}</td>
-                                    <td className="px-4 py-3 whitespace-nowrap">
-                                        {courier.charge !== undefined && courier.charge !== null
-                                            ? <span className="font-medium text-slate-700">₹{Number(courier.charge).toFixed(2)}</span>
-                                            : <span className="text-slate-300">—</span>}
-                                    </td>
-                                    <td className="px-4 py-3 whitespace-nowrap">
-                                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${courier.freePickup ? "bg-green-50 text-green-700 border border-green-100" : "bg-slate-100 text-slate-500"}`}>
-                                            {courier.freePickup ? "Yes" : "No"}
-                                        </span>
-                                    </td>
-                                    <td className="px-4 py-3 whitespace-nowrap">{courier.courierName || <span className="text-slate-300">—</span>}</td>
-                                    <td className="px-4 py-3 font-mono text-xs">{courier.trackId || <span className="text-slate-300">—</span>}</td>
-                                    <td className="px-4 py-3 whitespace-nowrap">{courier.kg !== undefined && courier.kg !== null ? `${courier.kg} kg` : <span className="text-slate-300">—</span>}</td>
-                                    <td className="px-4 py-3 whitespace-nowrap font-semibold text-slate-700">{courier.quantity ?? <span className="text-slate-300 font-normal">—</span>}</td>
-                                    <td className="px-4 py-3 whitespace-nowrap">
-                                        <div className="flex items-center gap-1">
-                                            <CourierStatusBadge status={courier.status} />
-                                            {isHighlighted && (
-                                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 border border-emerald-300 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
-                                                    <PackageCheck className="h-3 w-3" /> Stock Arrived
+                                    {columnsVariant === "outgoing" ? (
+                                        <>
+                                            <td className="px-4 py-3 whitespace-nowrap">{courier.mobileNo || courier.phone || <span className="text-slate-300">—</span>}</td>
+                                            <td className="px-4 py-3 whitespace-nowrap">{courier.productName || <span className="text-slate-300">—</span>}</td>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                <StockStatusBadge status={courier.productStockStatus} />
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">{courier.courierName || <span className="text-slate-300">—</span>}</td>
+                                            <td className="px-4 py-3 font-mono text-xs">
+                                                {courier.trackId ? (
+                                                    trackingLink ? (
+                                                        <a
+                                                            href={trackingLink}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-700 hover:underline"
+                                                        >
+                                                            {courier.trackId} <ExternalLink className="h-3 w-3" />
+                                                        </a>
+                                                    ) : (
+                                                        courier.trackId
+                                                    )
+                                                ) : (
+                                                    <span className="text-slate-300">—</span>
+                                                )}
+                                            </td>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <td className="px-4 py-3 max-w-[150px] truncate" title={courier.address || ""}>
+                                                {courier.address || <span className="text-slate-300">—</span>}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                {courier.city
+                                                    ? <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 border border-blue-100">{courier.city}</span>
+                                                    : <span className="text-slate-300">—</span>}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">{courier.mobileNo || courier.phone || <span className="text-slate-300">—</span>}</td>
+                                            <td className="px-4 py-3 whitespace-nowrap">{courier.productName || <span className="text-slate-300">—</span>}</td>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                {courier.charge !== undefined && courier.charge !== null
+                                                    ? <span className="font-medium text-slate-700">₹{Number(courier.charge).toFixed(2)}</span>
+                                                    : <span className="text-slate-300">—</span>}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${courier.freePickup ? "bg-green-50 text-green-700 border border-green-100" : "bg-slate-100 text-slate-500"}`}>
+                                                    {courier.freePickup ? "Yes" : "No"}
                                                 </span>
-                                            )}
-                                        </div>
-                                    </td>
-                                    <td className="px-4 py-3 max-w-[120px] truncate text-xs" title={courier.note || ""}>
-                                        {courier.note || <span className="text-slate-300">—</span>}
-                                    </td>
-                                    <td className="px-4 py-3 whitespace-nowrap text-xs">
-                                        {courier.completedDate || <span className="text-slate-300">—</span>}
-                                    </td>
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">{courier.courierName || <span className="text-slate-300">—</span>}</td>
+                                            <td className="px-4 py-3 font-mono text-xs">{courier.trackId || <span className="text-slate-300">—</span>}</td>
+                                            <td className="px-4 py-3 whitespace-nowrap">{courier.kg !== undefined && courier.kg !== null ? `${courier.kg} kg` : <span className="text-slate-300">—</span>}</td>
+                                            <td className="px-4 py-3 whitespace-nowrap font-semibold text-slate-700">{courier.quantity ?? <span className="text-slate-300 font-normal">—</span>}</td>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                <div className="flex flex-wrap items-center gap-1">
+                                                    <CourierStatusBadge status={courier.status} />
+                                                    {courier.deliveryMode && (
+                                                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${DELIVERY_MODE_BADGE_CLASS[courier.deliveryMode]}`}>
+                                                            {DELIVERY_MODE_LABEL[courier.deliveryMode]}
+                                                        </span>
+                                                    )}
+                                                    {isHighlighted && (
+                                                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 border border-emerald-300 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                                                            <PackageCheck className="h-3 w-3" /> Stock Arrived
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-3 max-w-[120px] truncate text-xs" title={courier.note || ""}>
+                                                {courier.note || <span className="text-slate-300">—</span>}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-xs">
+                                                {courier.completedDate || <span className="text-slate-300">—</span>}
+                                            </td>
+                                        </>
+                                    )}
                                     <td className="px-4 py-3 text-right">
                                         <div className="flex justify-end gap-2">
-                                            {normalizePhoneForWhatsApp(courier.mobileNo || courier.phone || "") && (
-                                                <button
-                                                    onClick={() => onWhatsApp(courier)}
-                                                    className="rounded p-1.5 text-green-600 hover:bg-green-50 hover:text-green-700"
-                                                    title="Send WhatsApp message"
-                                                >
-                                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
-                                                        <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38a9.9 9.9 0 004.74 1.21h.004c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.86 9.86 0 0012.04 2zm0 18.14h-.003a8.2 8.2 0 01-4.19-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.2 8.2 0 01-1.26-4.37c0-4.54 3.7-8.24 8.25-8.24 2.2 0 4.27.86 5.83 2.42a8.18 8.18 0 012.41 5.83c0 4.55-3.7 8.24-8.24 8.24zm4.52-6.17c-.25-.12-1.47-.72-1.69-.81-.23-.08-.39-.12-.56.13-.17.25-.64.81-.78.97-.14.17-.29.18-.53.06-.25-.12-1.05-.39-2-1.23-.74-.66-1.24-1.48-1.39-1.73-.14-.25-.02-.38.11-.51.11-.11.25-.29.37-.43.12-.15.16-.25.25-.42.08-.17.04-.31-.02-.43-.06-.12-.56-1.34-.76-1.84-.2-.48-.41-.42-.56-.42-.14-.01-.31-.01-.48-.01-.17 0-.43.06-.66.31-.23.25-.86.84-.86 2.05 0 1.21.88 2.38 1 2.54.12.17 1.74 2.65 4.21 3.72.59.25 1.05.4 1.41.52.59.19 1.13.16 1.55.1.47-.07 1.47-.6 1.68-1.18.21-.58.21-1.08.14-1.18-.06-.11-.22-.17-.47-.29z" />
-                                                    </svg>
-                                                </button>
-                                            )}
                                             <button
                                                 onClick={() => onView(courier)}
                                                 className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-950"
@@ -219,7 +295,36 @@ const CourierTable = ({
             </div>
         )}
     </div>
-);
+    );
+};
+
+// Pushes the Outgoing filter bar's Formik values into the applied-filters state that
+// actually drives the courier query — debounced for search, immediate for the rest.
+const FilterSync = ({
+    setAppliedFilters,
+}: {
+    setAppliedFilters: React.Dispatch<React.SetStateAction<CourierFilters>>;
+}) => {
+    const { values } = useFormikContext<CourierFilterValues>();
+    const debouncedSearch = useDebounce(values.search, 400);
+
+    useEffect(() => {
+        setAppliedFilters((prev) => ({ ...prev, search: debouncedSearch || undefined }));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [debouncedSearch]);
+
+    useEffect(() => {
+        setAppliedFilters((prev) => ({
+            ...prev,
+            startDate: values.startDate || undefined,
+            endDate: values.endDate || undefined,
+            deliveryMode: values.deliveryMode || undefined,
+        }));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [values.startDate, values.endDate, values.deliveryMode]);
+
+    return null;
+};
 
 const Couriers = () => {
     const queryClient = useQueryClient();
@@ -240,14 +345,62 @@ const Couriers = () => {
     const [searchParams] = useSearchParams();
     const direction: "IN" | "OUT" = searchParams.get("direction") === "IN" ? "IN" : "OUT";
 
+    // Outgoing-only filter bar (date range / search / delivery mode) — stays {} on the
+    // Incoming tab since its FilterSync never mounts there, so Incoming's query is
+    // unaffected. Export always reuses this same object so the two can never diverge.
+    const [appliedFilters, setAppliedFilters] = useState<CourierFilters>({});
+    const hasActiveFilters = Object.values(appliedFilters).some(Boolean);
+    const filterFormRef = useRef<FormikProps<CourierFilterValues>>(null);
+    const [isExportOpen, setIsExportOpen] = useState(false);
+
+    const handleClearFilters = () => {
+        filterFormRef.current?.resetForm();
+        setAppliedFilters({});
+    };
+
+    const handleExport = async (format: "pdf" | "excel") => {
+        try {
+            const res = await courierService.exportCouriers(format, { ...appliedFilters, direction: "OUT" });
+            const blob = new Blob([res.data], {
+                type: format === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `outgoing-couriers-${Date.now()}.${format === "pdf" ? "pdf" : "xlsx"}`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (err: any) {
+            let message = "Export failed";
+            if (err.response?.data instanceof Blob) {
+                try {
+                    const parsed = JSON.parse(await err.response.data.text());
+                    message = parsed?.message || message;
+                } catch {
+                    // response wasn't JSON — fall back to the generic message
+                }
+            } else {
+                message = err.response?.data?.message || err.message || message;
+            }
+            toast.error(message);
+        }
+    };
+
     // Fetch couriers — backend applies city scope + direction filter automatically. Every
     // sale line item gets an OUT courier row the moment the sale is created, so the Outgoing
     // list is the single source of truth for both "what's pending" and "what's delivered";
     // Incoming rows are always manually created.
     const { data: response, isLoading: listLoading, error: listError } = useQuery({
-        queryKey: ["couriers", direction],
-        queryFn: () => courierService.getCouriers({ direction }),
-        enabled: pagePermission.canRead,
+        queryKey: ["couriers", direction, appliedFilters],
+        // Forwarding react-query's AbortSignal means a request superseded by a newer
+        // search/date/delivery-mode change is actually cancelled, not left to resolve and get
+        // ignored — only the response for the latest filters can ever reach the table.
+        queryFn: ({ signal }) => courierService.getCouriers({ direction, ...appliedFilters }, { signal }),
+        // Incoming Couriers has its own dedicated page/query (see IncomingCourier.tsx) — this
+        // fetch is only needed for the Outgoing Pending/Completed tables below.
+        enabled: pagePermission.canRead && direction === "OUT",
     });
 
     // Sales whose backordered items just got allocated by a stock receipt (live push via
@@ -326,6 +479,7 @@ const Couriers = () => {
         onSuccess: (res) => {
             toast.success(res.data?.message || "Courier deleted successfully");
             queryClient.invalidateQueries({ queryKey: ["couriers"] });
+            queryClient.invalidateQueries({ queryKey: ["courier-charge"] });
             setDeletingCourier(null);
         },
         onError: (err: any) => {
@@ -346,6 +500,7 @@ const Couriers = () => {
         onSuccess: (res) => {
             toast.success(res.data?.message || "Status updated successfully");
             queryClient.invalidateQueries({ queryKey: ["couriers"] });
+            queryClient.invalidateQueries({ queryKey: ["courier-charge"] });
             setStatusCourier(null);
         },
         onError: (err: any) => {
@@ -353,70 +508,154 @@ const Couriers = () => {
         },
     });
 
-    const handleWhatsAppShare = (courier: CourierData) => {
-        const sent = openCourierWhatsApp(courier.mobileNo || courier.phone, {
-            customerName: courier.customerName || courier.name,
-            productName: courier.productName,
-            quantity: courier.quantity,
-            courierName: courier.courierName,
-            trackId: courier.trackId,
-            amount: courier.charge,
-        });
-        if (!sent) {
-            toast.error("This courier record has no usable phone number");
-        }
-    };
-
     const couriersList: CourierData[] = response?.data?.data || [];
 
-    // "Pending" (Pending / Waiting for Stock / In Progress / Out for Delivery) and "Completed"
-    // (Done) — each independently filterable by its own search box.
+    // Incoming keeps its own simple client-side search box (out of scope for this feature —
+    // Outgoing's search/date/delivery-mode filtering happens server-side via appliedFilters,
+    // so couriersList is already the filtered set there).
     const [pendingSearch, setPendingSearch] = useState("");
     const [completedSearch, setCompletedSearch] = useState("");
 
-    const matchesSearch = (courier: CourierData, term: string) => {
-        const q = term.trim().toLowerCase();
-        if (!q) return true;
-        return [
-            courier.customerName,
-            courier.name,
-            courier.address,
-            courier.city,
-            courier.mobileNo,
-            courier.phone,
-            courier.productName,
-            courier.courierName,
-            courier.trackId,
-            courier.note,
-        ].some((value) => (value || "").toString().toLowerCase().includes(q));
-    };
-
     const pendingCouriers = couriersList.filter((c) => c.pending);
     const completedCouriers = couriersList.filter((c) => !c.pending);
-    const filteredPendingCouriers = pendingCouriers.filter((c) => matchesSearch(c, pendingSearch));
-    const filteredCompletedCouriers = completedCouriers.filter((c) => matchesSearch(c, completedSearch));
-    // Incoming has no Pending/Completed split — one flat, searchable list (reuses pendingSearch).
-    const filteredIncomingCouriers = couriersList.filter((c) => matchesSearch(c, pendingSearch));
+
+    // Incoming Couriers has its own dedicated page (own table, filters, pagination, and Done
+    // workflow) — see IncomingCourier.tsx. Everything below this point is Outgoing-only.
+    if (direction === "IN") {
+        return <IncomingCourier />;
+    }
 
     return (
         <div className="p-6 bg-white rounded-xl shadow-md flex flex-col gap-6">
 
-            <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-slate-900">
-                    {direction === "OUT" ? "Outgoing Couriers" : "Incoming Couriers"}
-                </h2>
-                {pagePermission.canCreate && (
-                    <button
-                        onClick={openCreateModal}
-                        className="inline-flex items-center justify-center gap-2 rounded-full bg-[#3d6fe0] px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-blue-500/10 transition hover:bg-[#3162d2] active:scale-[0.98]"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="h-4 w-4">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                        </svg>
-                        Add Courier
-                    </button>
-                )}
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <h2 className="text-lg font-bold text-slate-900">Outgoing Couriers</h2>
+                <div className="flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:items-start sm:justify-end">
+                    {pagePermission.canCreate && (
+                        <button
+                            onClick={openCreateModal}
+                            className="inline-flex items-center justify-center gap-2 rounded-full bg-[#3d6fe0] px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-blue-500/10 transition hover:bg-[#3162d2] active:scale-[0.98] sm:self-start"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="h-4 w-4">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                            </svg>
+                            Add Courier
+                        </button>
+                    )}
+                </div>
             </div>
+
+            {pagePermission.canRead && (
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <Formik
+                        innerRef={filterFormRef}
+                        initialValues={{ search: "", startDate: "", endDate: "", deliveryMode: "" } as CourierFilterValues}
+                        validate={(values) => {
+                            const result = courierFilterSchema.safeParse(values);
+                            return result.success ? {} : { search: result.error.issues[0]?.message };
+                        }}
+                        onSubmit={() => { }}
+                    >
+                        <Form className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                            <FilterSync setAppliedFilters={setAppliedFilters} />
+
+                            <div className="relative flex-1 min-w-50 max-w-xs">
+                                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                                <Field
+                                    name="search"
+                                    type="text"
+                                    placeholder="Search customer, phone, product, serial..."
+                                    className="w-full rounded-full border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-3 text-xs text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                                />
+                            </div>
+
+                            <Field
+                                name="startDate"
+                                type="date"
+                                aria-label="From date"
+                                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                            />
+                            <Field
+                                name="endDate"
+                                type="date"
+                                aria-label="To date"
+                                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                            />
+
+                            <Field
+                                as="select"
+                                name="deliveryMode"
+                                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-medium text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none cursor-pointer"
+                            >
+                                <option value="">All Types</option>
+                                {DELIVERY_MODE_OPTIONS.map((opt) => (
+                                    <option key={opt.value} value={opt.value}>
+                                        {opt.label}
+                                    </option>
+                                ))}
+                            </Field>
+
+                            <button
+                                type="button"
+                                onClick={handleClearFilters}
+                                title={hasActiveFilters ? "Clear filters" : "Reset filters"}
+                                className={`inline-flex items-center gap-1.5 rounded-full border px-4 py-2.5 text-xs font-semibold ${hasActiveFilters
+                                    ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                                    }`}
+                            >
+                                <RotateCcw className="h-3.5 w-3.5" />
+                                {hasActiveFilters ? "Clear Filters" : "Reset"}
+                            </button>
+
+                            {hasActiveFilters && (
+                                <span className="text-[11px] font-semibold text-blue-600">Filters active</span>
+                            )}
+
+                            <div className="relative sm:ml-auto">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsExportOpen((o) => !o)}
+                                    className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                >
+                                    <Download className="h-3.5 w-3.5" />
+                                    Export
+                                    <ChevronDown className="h-3 w-3" />
+                                </button>
+                                {isExportOpen && (
+                                    <div className="absolute right-0 z-10 mt-1 w-40 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                handleExport("pdf");
+                                                setIsExportOpen(false);
+                                            }}
+                                            className="block w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
+                                        >
+                                            Export as PDF
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                handleExport("excel");
+                                                setIsExportOpen(false);
+                                            }}
+                                            className="block w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
+                                        >
+                                            Export as Excel
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </Form>
+                    </Formik>
+                    {!hasActiveFilters && (
+                        <p className="mt-2 text-[11px] text-slate-400">
+                            No filters applied — Export will use the current month's records.
+                        </p>
+                    )}
+                </div>
+            )}
 
             {/* Table(s) */}
             {listLoading ? (
@@ -442,24 +681,44 @@ const Couriers = () => {
                             <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0l-3-3m3 3l3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
                         </svg>
                     </div>
-                    <h3 className="mt-4 text-sm font-semibold text-slate-900">No Couriers Found</h3>
-                    <p className="mt-1 text-xs text-slate-500">
-                        Click the button above to add your first courier record.
-                    </p>
+                    {hasActiveFilters ? (
+                        <>
+                            <h3 className="mt-4 text-sm font-semibold text-slate-900">No Couriers Match Your Filters</h3>
+                            <p className="mt-1 text-xs text-slate-500">
+                                Try adjusting the date range, search term, or delivery mode.
+                            </p>
+                            <button
+                                type="button"
+                                onClick={handleClearFilters}
+                                className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-4 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                            >
+                                <RotateCcw className="h-3.5 w-3.5" />
+                                Clear Filters
+                            </button>
+                        </>
+                    ) : (
+                        <>
+                            <h3 className="mt-4 text-sm font-semibold text-slate-900">No Couriers Found</h3>
+                            <p className="mt-1 text-xs text-slate-500">
+                                Click the button above to add your first courier record.
+                            </p>
+                        </>
+                    )}
                 </div>
-            ) : direction === "OUT" ? (
+            ) : (
                 <div className="mt-6 flex flex-col gap-6">
                     <CourierTable
                         title="Pending"
                         badgeClassName="bg-amber-50 text-amber-700"
-                        couriers={filteredPendingCouriers}
+                        couriers={pendingCouriers}
                         totalCount={pendingCouriers.length}
                         searchTerm={pendingSearch}
                         onSearchChange={setPendingSearch}
+                        showSearch={false}
                         emptyMessage={
-                            pendingCouriers.length === 0
-                                ? "No pending shipments."
-                                : "No pending shipments match this filter."
+                            hasActiveFilters
+                                ? "No pending shipments match your filters."
+                                : "No pending shipments."
                         }
                         pagePermission={pagePermission}
                         highlightedSaleIds={highlightedSaleIds}
@@ -467,19 +726,20 @@ const Couriers = () => {
                         onStatus={setStatusCourier}
                         onEdit={openEditModal}
                         onDelete={setDeletingCourier}
-                        onWhatsApp={handleWhatsAppShare}
+                        columnsVariant="outgoing"
                     />
                     <CourierTable
                         title="Completed"
                         badgeClassName="bg-green-50 text-green-700"
-                        couriers={filteredCompletedCouriers}
+                        couriers={completedCouriers}
                         totalCount={completedCouriers.length}
                         searchTerm={completedSearch}
                         onSearchChange={setCompletedSearch}
+                        showSearch={false}
                         emptyMessage={
-                            completedCouriers.length === 0
-                                ? "No completed couriers."
-                                : "No completed couriers match this filter."
+                            hasActiveFilters
+                                ? "No completed couriers match your filters."
+                                : "No completed couriers."
                         }
                         pagePermission={pagePermission}
                         highlightedSaleIds={highlightedSaleIds}
@@ -487,30 +747,7 @@ const Couriers = () => {
                         onStatus={setStatusCourier}
                         onEdit={openEditModal}
                         onDelete={setDeletingCourier}
-                        onWhatsApp={handleWhatsAppShare}
-                    />
-                </div>
-            ) : (
-                <div className="mt-6">
-                    <CourierTable
-                        title="Incoming"
-                        badgeClassName="bg-blue-50 text-blue-700"
-                        couriers={filteredIncomingCouriers}
-                        totalCount={couriersList.length}
-                        searchTerm={pendingSearch}
-                        onSearchChange={setPendingSearch}
-                        emptyMessage={
-                            couriersList.length === 0
-                                ? "No incoming courier records."
-                                : "Nothing matches this filter."
-                        }
-                        pagePermission={pagePermission}
-                        highlightedSaleIds={highlightedSaleIds}
-                        onView={setViewingCourier}
-                        onStatus={setStatusCourier}
-                        onEdit={openEditModal}
-                        onDelete={setDeletingCourier}
-                        onWhatsApp={handleWhatsAppShare}
+                        columnsVariant="outgoing"
                     />
                 </div>
             )}

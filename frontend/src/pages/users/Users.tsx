@@ -14,6 +14,7 @@ import {
   Mail,
   ShieldCheck,
   UserCheck,
+  UserX,
   RotateCcw,
   AlertTriangle,
   Lock,
@@ -140,6 +141,7 @@ const Users = () => {
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserData | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<UserData | null>(null);
 
   // Mutation: Create User
   const createUserMutation = useMutation({
@@ -168,15 +170,31 @@ const Users = () => {
     },
   });
 
-  // Mutation: Deactivate User
+  // Mutation: Delete User (removes from table; distinct from Deactivate below)
   const deleteUserMutation = useMutation({
     mutationFn: (id: number) => userService.deleteUser(id),
     onSuccess: (res) => {
-      toast.success(res.data?.message || "User deactivated successfully");
+      toast.success(res.data?.message || "User deleted successfully");
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      setDeleteTarget(null);
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.message || err.message || "Failed to delete user");
+    },
+  });
+
+  // Mutation: Toggle Active/Inactive (reversible, user stays visible in the table)
+  const toggleActiveMutation = useMutation({
+    mutationFn: ({ id, isActive }: { id: number; isActive: boolean }) =>
+      userService.updateUser(id, { isActive }),
+    onSuccess: (res, variables) => {
+      toast.success(
+        res.data?.message || (variables.isActive ? "User activated successfully" : "User deactivated successfully")
+      );
       queryClient.invalidateQueries({ queryKey: ["users"] });
     },
     onError: (err: any) => {
-      toast.error(err.response?.data?.message || err.message || "Failed to deactivate user");
+      toast.error(err.response?.data?.message || err.message || "Failed to update user status");
     },
   });
 
@@ -243,9 +261,17 @@ const Users = () => {
     }
   };
 
-  const handleDelete = (user: UserData) => {
-    if (window.confirm(`Are you sure you want to deactivate "${user.name}"? They will no longer be able to log in.`)) {
-      deleteUserMutation.mutate(user.id);
+  const handleToggleActive = (user: UserData) => {
+    toggleActiveMutation.mutate({ id: user.id, isActive: !user.isActive });
+  };
+
+  const handleDeleteClick = (user: UserData) => {
+    setDeleteTarget(user);
+  };
+
+  const confirmDelete = () => {
+    if (deleteTarget) {
+      deleteUserMutation.mutate(deleteTarget.id);
     }
   };
 
@@ -485,11 +511,27 @@ const Users = () => {
                           </button>
                         )}
 
+                        {pagePermission.canUpdate && (
+                          <button
+                            type="button"
+                            onClick={() => handleToggleActive(user)}
+                            disabled={toggleActiveMutation.isPending}
+                            title={user.isActive ? "Deactivate User" : "Activate User"}
+                            className={`rounded p-1 transition disabled:opacity-40 ${
+                              user.isActive
+                                ? "text-amber-600 hover:bg-amber-50"
+                                : "text-emerald-600 hover:bg-emerald-50"
+                            }`}
+                          >
+                            {user.isActive ? <UserX className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
+                          </button>
+                        )}
+
                         {pagePermission.canDelete && (
                           <button
                             type="button"
-                            onClick={() => handleDelete(user)}
-                            title="Deactivate User"
+                            onClick={() => handleDeleteClick(user)}
+                            title="Delete User"
                             className="rounded p-1 text-rose-500 hover:bg-rose-50 transition"
                           >
                             <Trash2 className="h-4 w-4" />
@@ -640,11 +682,14 @@ const Users = () => {
                         className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                       >
                         <option value="">-- Select Role --</option>
-                        {roles.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {r.name}
-                          </option>
-                        ))}
+                        {roles
+                          .filter((r) => r.isActive !== false || r.id === selectedUser?.roleId)
+                          .map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.name}
+                              {r.isActive === false ? " (Inactive)" : ""}
+                            </option>
+                          ))}
                       </select>
                     </div>
 
@@ -753,6 +798,49 @@ const Users = () => {
                 className="rounded-lg bg-slate-800 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-900 transition"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE USER CONFIRMATION MODAL */}
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setDeleteTarget(null); }}
+        >
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-50 text-amber-600">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Delete User</h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Are you sure you want to delete <span className="font-semibold text-slate-700">"{deleteTarget.name}"</span>?
+                  They will be removed from this list and will no longer be able to log in. Their past sales,
+                  restock, and courier records will still show their name.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-3 border-t border-slate-100 pt-4">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleteUserMutation.isPending}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                disabled={deleteUserMutation.isPending}
+                className="rounded-lg bg-rose-600 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-rose-700 disabled:opacity-50 transition"
+              >
+                {deleteUserMutation.isPending ? "Deleting..." : "Delete User"}
               </button>
             </div>
           </div>

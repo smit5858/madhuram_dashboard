@@ -1,9 +1,10 @@
 const User = require("./user.model");
 const Role = require("./role.model");
 const Route = require("./route.model");
-const Permission = require("./permission.model");
+const UserPermission = require("./userPermission.model");
 const Courier = require("./courier.model");
 const CourierCompany = require("./courierCompany.model");
+const CourierCharge = require("./courierCharge.model");
 const Product = require("./product.model");
 const Stock = require("./stock.model");
 const StockMovement = require("./stockMovement.model");
@@ -14,21 +15,31 @@ const Notification = require("./notification.model");
 const SerialUnit = require("./serialUnit.model");
 const Dealer = require("./dealer.model");
 const Payment = require("./payment.model");
+const AccountEntry = require("./accountEntry.model");
+const DailyAccountBalance = require("./dailyBalance.model");
+const BankAccount = require("./bankAccount.model");
+const CustomerLedgerEntry = require("./customerLedgerEntry.model");
 
 // Role associations
 Role.hasMany(User, { foreignKey: "roleId" });
 User.belongsTo(Role, { foreignKey: "roleId" });
 
-Role.hasMany(Permission, { foreignKey: "roleId" });
-Permission.belongsTo(Role, { foreignKey: "roleId" });
+// Per-user permissions (Settings → Route Setting) — the sole source of route-level access
+// for non-Admin users. Absence of a row means no access — see authorize.js and
+// permission.controller.js.
+User.hasMany(UserPermission, { foreignKey: "userId" });
+UserPermission.belongsTo(User, { foreignKey: "userId" });
 
-// Route associations
-Route.hasMany(Permission, { foreignKey: "routeId" });
-Permission.belongsTo(Route, { foreignKey: "routeId" });
+Route.hasMany(UserPermission, { foreignKey: "routeId" });
+UserPermission.belongsTo(Route, { foreignKey: "routeId" });
 
 // Courier associations
 User.hasMany(Courier, { foreignKey: "userId" });
 Courier.belongsTo(User, { foreignKey: "userId" });
+
+// Self-referencing link from an Incoming courier row to the Outgoing courier row auto-created
+// for it when marked Done (see courier.controller.js#completeIncomingCourier).
+Courier.belongsTo(Courier, { foreignKey: "linkedCourierId", as: "linkedCourier" });
 
 // Customer associations
 Customer.hasMany(Sale, { foreignKey: "customerId", as: "sales" });
@@ -95,13 +106,42 @@ Payment.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
 User.hasMany(Notification, { foreignKey: "recipientUserId" });
 Notification.belongsTo(User, { foreignKey: "recipientUserId", as: "recipient" });
 
+// Courier ↔ AccountEntry (the Accounts/Expense entry auto-created when an Incoming courier is
+// marked Done) + User ↔ AccountEntry (who triggered it)
+Courier.hasOne(AccountEntry, { foreignKey: "courierId" });
+AccountEntry.belongsTo(Courier, { foreignKey: "courierId" });
+User.hasMany(AccountEntry, { foreignKey: "createdBy" });
+AccountEntry.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
+
+// Customer ↔ AccountEntry (Income entries may optionally reference a real customer)
+Customer.hasMany(AccountEntry, { foreignKey: "customerId" });
+AccountEntry.belongsTo(Customer, { foreignKey: "customerId", as: "customer" });
+
+// BankAccount ↔ Sale/Payment (which configured bank account a BankTransfer sale/payment used)
+BankAccount.hasMany(Sale, { foreignKey: "bankAccountId" });
+Sale.belongsTo(BankAccount, { foreignKey: "bankAccountId", as: "bankAccount" });
+BankAccount.hasMany(Payment, { foreignKey: "bankAccountId" });
+Payment.belongsTo(BankAccount, { foreignKey: "bankAccountId", as: "bankAccount" });
+
+// Customer ↔ CustomerLedgerEntry (the running account ledger) + Sale (traceability only, not
+// used for balance calc) + User (createdBy) + BankAccount (BankTransfer entries)
+Customer.hasMany(CustomerLedgerEntry, { foreignKey: "customerId", as: "ledgerEntries" });
+CustomerLedgerEntry.belongsTo(Customer, { foreignKey: "customerId", as: "customer" });
+Sale.hasMany(CustomerLedgerEntry, { foreignKey: "saleId", as: "ledgerEntries" });
+CustomerLedgerEntry.belongsTo(Sale, { foreignKey: "saleId", as: "sale" });
+User.hasMany(CustomerLedgerEntry, { foreignKey: "createdBy" });
+CustomerLedgerEntry.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
+BankAccount.hasMany(CustomerLedgerEntry, { foreignKey: "bankAccountId" });
+CustomerLedgerEntry.belongsTo(BankAccount, { foreignKey: "bankAccountId", as: "bankAccount" });
+
 module.exports = {
   User,
   Role,
   Route,
-  Permission,
+  UserPermission,
   Courier,
   CourierCompany,
+  CourierCharge,
   Customer,
   Product,
   Stock,
@@ -112,4 +152,8 @@ module.exports = {
   SerialUnit,
   Dealer,
   Payment,
+  AccountEntry,
+  DailyAccountBalance,
+  BankAccount,
+  CustomerLedgerEntry,
 };

@@ -29,7 +29,7 @@ export const AuthGuard = ({ children }: { children: React.ReactElement }) => {
  *
  * Navigation between modules uses the stored permissions — no API call per module.
  */
-export const PermissionGuard = ({ children, requiredPath }: { children: React.ReactElement; requiredPath: string }) => {
+export const PermissionGuard = ({ children, requiredPath }: { children: React.ReactElement; requiredPath: string | string[] }) => {
     const { allowedRoutes, permissions, token } = useSelector((state: RootState) => state.auth);
     const dispatch = useDispatch();
 
@@ -65,10 +65,12 @@ export const PermissionGuard = ({ children, requiredPath }: { children: React.Re
         );
     }
 
-    // Check if the current route path is in allowedRoutes (canRead === true)
-    const hasAccess = allowedRoutes?.some(
-        (r: any) => r.path.toLowerCase() === requiredPath.toLowerCase()
-    );
+    // Check if the current route path is in allowedRoutes (canRead === true). requiredPath may be
+    // an array — access is granted if the user has read on ANY of them (mirrors the backend's
+    // authorizeAny, used for routes that legitimately serve more than one audience, e.g. the
+    // Customer Ledger page reachable from both Sells and Account/Debited).
+    const requiredPaths = (Array.isArray(requiredPath) ? requiredPath : [requiredPath]).map((p) => p.toLowerCase());
+    const hasAccess = allowedRoutes?.some((r: any) => requiredPaths.includes(r.path.toLowerCase()));
 
     if (!hasAccess) {
         return <Navigate to="/forbidden" replace />;

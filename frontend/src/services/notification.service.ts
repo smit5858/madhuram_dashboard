@@ -10,7 +10,11 @@ export interface NotificationData {
     | "STOCK_LOW"
     | "PAYMENT_RECEIVED"
     | "ORDER_FULFILLED"
-    | "BACKORDER_ALLOCATED";
+    | "BACKORDER_ALLOCATED"
+    | "INCOMING_COURIER_COMPLETED"
+    | "EXPENSE_PENDING_APPROVAL"
+    | "EXPENSE_APPROVED"
+    | "EXPENSE_REJECTED";
   title: string;
   message?: string;
   referenceType?: string;

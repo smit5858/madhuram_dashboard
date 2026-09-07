@@ -21,9 +21,10 @@ import {
     ArrowUpRight,
     ArrowDownLeft,
     Banknote,
-    CreditCard,
     FileClock,
     Building2,
+    ShieldCheck,
+    UserCog,
     type LucideIcon,
 } from "lucide-react";
 
@@ -36,17 +37,18 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
     "/sells": TrendingUp,
     "/couriers": Truck,
     "/couriers?direction=out": ArrowUpRight,
-    "/couriers?direction=in": ArrowDownLeft,
+    "/couriers/incoming": ArrowDownLeft,
     "/couriers-companies": Building2,
     "/customers": Contact,
     "/users": Users,
     "/account": UserCircle2,
     "/account/income": Banknote,
     "/account/expense": Receipt,
-    "/account/credit": CreditCard,
-    "/account/pending-bills": FileClock,
-    "/account/account": Wallet,
+    "/account/debited": FileClock,
+    "/account/bank-accounts": Wallet,
     "/setting": Settings,
+    "/setting/route-setting": ShieldCheck,
+    "/setting/role-management": UserCog,
 };
 
 const getIconForRoute = (path: string, search?: string, className = "h-5 w-5") => {

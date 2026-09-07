@@ -5,24 +5,27 @@ const customerNameField = z
   .min(1, "Customer name is required")
   .max(150, "Customer name must be under 150 characters");
 
+// Digits only, exactly 10 when provided — matching FormikPhoneInput's on-keystroke sanitization
+// (strips non-digits, caps at 10), so what reaches the server can never disagree with what the
+// user saw typed.
 const optionalMobileField = z
-  .union([z.string().regex(/^\+?[0-9\s-]{7,15}$/, "Please enter a valid mobile number"), z.literal("")])
+  .union([z.string().regex(/^\d{10}$/, "Mobile number must be exactly 10 digits"), z.literal("")])
   .optional();
 
+// Formik coerces <input type="number"> values to a JS number, so these must accept a stray
+// number (not just a string) before checking their pattern — otherwise Zod's union collapses
+// to a generic "Invalid input"/"Invalid number" instead of the message below.
 const optionalChargeField = z
-  .union([z.string().regex(/^\d+(\.\d{1,2})?$/, "Please enter a valid amount"), z.literal("")])
-  .optional();
+  .preprocess((val) => (typeof val === "number" ? String(val) : val), z.string().optional())
+  .refine((val) => !val || /^\d+(\.\d{1,2})?$/.test(val), { message: "Please enter a valid amount" });
 
-// Formik coerces <input type="number"> values to a JS number, so this must accept a stray
-// number (not just a string) before checking the decimal-places pattern — otherwise Zod's
-// union collapses to a generic "Invalid input" instead of the message below.
 const optionalWeightField = z
   .preprocess((val) => (typeof val === "number" ? String(val) : val), z.string().optional())
   .refine((val) => !val || /^\d+(\.\d{1,3})?$/.test(val), { message: "Please enter a valid weight" });
 
 const optionalQuantityField = z
-  .union([z.string().regex(/^\d+$/, "Please enter a whole number"), z.literal("")])
-  .optional();
+  .preprocess((val) => (typeof val === "number" ? String(val) : val), z.string().optional())
+  .refine((val) => !val || /^\d+$/.test(val), { message: "Please enter a whole number" });
 
 export const courierEditSchema = z.object({
   customerName: customerNameField,
@@ -38,9 +41,25 @@ export const courierEditSchema = z.object({
   trackId: z.string().max(60, "Track ID must be under 60 characters").optional(),
   note: z.string().max(1000, "Note must be under 1000 characters").optional(),
   entryDate: z.string().optional(),
+  deliveryMode: z.string().optional(),
 });
 
 export type CourierEditFormValues = z.infer<typeof courierEditSchema>;
+
+export const courierFilterSchema = z.object({
+  search: z.string().optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  deliveryMode: z.string().optional(),
+});
+
+export type CourierFilterValues = z.infer<typeof courierFilterSchema>;
+
+export const incomingCourierFilterSchema = z.object({
+  search: z.string().max(150, "Search term is too long").optional(),
+});
+
+export type IncomingCourierFilterValues = z.infer<typeof incomingCourierFilterSchema>;
 
 /** Serial-number selection must match the remaining (not-yet-fulfilled) quantity for a
  *  serialized line item, with no duplicates — validated separately from the Formik schema

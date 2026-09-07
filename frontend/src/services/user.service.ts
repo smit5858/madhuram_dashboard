@@ -3,6 +3,7 @@ import httpService from "./http-service";
 export interface UserRole {
   id: number;
   name: string;
+  isActive?: boolean;
 }
 
 export interface UserData {

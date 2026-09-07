@@ -12,7 +12,7 @@ axios.interceptors.request.use(
     async (config: any) => {
         const backend_url = import.meta.env.VITE_APP_BASE_URL ?? "http://localhost:3000";
 
-        if (config.url) {
+        if (config.url && !/^https?:\/\//i.test(config.url)) {
             config.url = getBaseURL(backend_url) + config.url;
         }
         config.headers["Content-Type"] = "application/json";

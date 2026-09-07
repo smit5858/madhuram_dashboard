@@ -79,3 +79,23 @@
 .password-toggle:hover {
     color: #333;
 }
+
+.form-field-checkbox {
+    width: 100%;
+}
+
+.form-checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #161616;
+    cursor: pointer;
+}
+
+.form-checkbox-input {
+    width: 16px;
+    height: 16px;
+    accent-color: #3970df;
+    cursor: pointer;
+}

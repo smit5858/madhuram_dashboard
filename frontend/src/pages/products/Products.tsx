@@ -754,16 +754,6 @@ const Products = () => {
     return p ?? { canRead: false, canCreate: false, canUpdate: false, canDelete: false };
   }, [permissions]);
 
-  const inventoryPermission = useMemo(() => {
-    if (!permissions) {
-      return { canRead: false, canCreate: false, canUpdate: false, canDelete: false };
-    }
-    const p = permissions.find(
-      (perm) => perm.routePath.toLowerCase() === "/inventory" || perm.routeName.toLowerCase() === "inventory"
-    );
-    return p ?? { canRead: false, canCreate: false, canUpdate: false, canDelete: false };
-  }, [permissions]);
-
   // Default to Active only — deactivated (deleted) products stay out of the default view.
   const [appliedFilters, setAppliedFilters] = useState<ProductFilters>({ status: "active" });
   const [pageSize, setPageSize] = useState(10);
@@ -1065,7 +1055,7 @@ const Products = () => {
         </Formik>
 
         <div className="flex items-center gap-2">
-          {inventoryPermission.canRead && (
+          {pagePermission.canRead && (
             <button
               type="button"
               onClick={() => setIsSerialLookupOpen(true)}
@@ -1224,7 +1214,7 @@ const Products = () => {
                           </button>
                         )}
 
-                        {inventoryPermission.canCreate && product.isActive && (
+                        {pagePermission.canCreate && product.isActive && (
                           <button
                             type="button"
                             onClick={() => setReceiveStockProduct(product)}

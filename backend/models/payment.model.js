@@ -28,6 +28,14 @@ const Payment = sequelize.define(
       type: DataTypes.ENUM("Cash", "UPI", "Card", "COD", "BankTransfer", "Other"),
       allowNull: true,
     },
+    bankAccountId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: "bank_accounts",
+        key: "id",
+      },
+    },
     notes: {
       type: DataTypes.TEXT,
       allowNull: true,

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Plus, RotateCcw, Trash2, Eye, Edit2, AlertTriangle, CheckCircle2, XCircle, Package, IndianRupee, ShoppingBag, Search as SearchIcon, Download, ChevronDown, UserCheck, Loader2 } from "lucide-react";
 import { Formik, Form, Field, useFormikContext } from "formik";
@@ -18,7 +18,9 @@ import productService, {
   type ProductData,
 } from "../../services/product.service";
 import customerService, { type CustomerData } from "../../services/customer.service";
+import bankAccountService from "../../services/bankAccount.service";
 import CancelSaleModal from "@/shared/components/CancelSaleModal";
+import ShareStatementMenu from "@/pages/customers/components/ShareStatementMenu";
 import { blurNumberInputOnWheel } from "@/shared/utils/input";
 
 interface FormItem {
@@ -36,6 +38,14 @@ const PAYMENT_METHODS = [
   "Other",
 ] as const;
 
+const ORDER_STATUS_OPTIONS = [
+  { value: "", label: "All Status" },
+  { value: "PENDING", label: "Pending" },
+  { value: "CONFIRMED", label: "Confirmed" },
+  { value: "FULFILLED", label: "Fulfilled" },
+  { value: "CANCELLED", label: "Cancelled" },
+];
+
 const PLATFORMS = [
   "Direct Store",
   "Website",
@@ -51,7 +61,7 @@ const FilterSync = ({
 }: {
   setAppliedFilters: React.Dispatch<React.SetStateAction<SalesFilters>>;
 }) => {
-  const { values } = useFormikContext<{ search: string; startDate: string; endDate: string }>();
+  const { values } = useFormikContext<{ search: string; startDate: string; endDate: string; status: string }>();
   const debouncedSearch = useDebounce(values.search, 400);
 
   useEffect(() => {
@@ -64,10 +74,11 @@ const FilterSync = ({
       ...prev,
       startDate: values.startDate || undefined,
       endDate: values.endDate || undefined,
+      status: values.status || undefined,
       page: 1,
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [values.startDate, values.endDate]);
+  }, [values.startDate, values.endDate, values.status]);
 
   return null;
 };
@@ -77,7 +88,6 @@ const Sells = () => {
   const navigate = useNavigate();
   const auth = useSelector((state: RootState) => state.auth);
   const { permissions } = auth;
-  const isAdmin = auth.role === "Admin";
 
   // Permission derivation
   const pagePermission = useMemo(() => {
@@ -87,6 +97,7 @@ const Sells = () => {
         canCreate: false,
         canUpdate: false,
         canDelete: false,
+        viewAllRecords: false,
       };
     const p = permissions.find(
       (p) =>
@@ -99,12 +110,23 @@ const Sells = () => {
         canCreate: false,
         canUpdate: false,
         canDelete: false,
+        viewAllRecords: false,
       }
     );
   }, [permissions]);
 
+  // Permission-driven, not role-name-driven: this module (via role or per-user override)
+  // is granted visibility into every user's Sales, not just their own — see backend
+  // helper/permissionScope.js.
+  const canViewAllSales = pagePermission.viewAllRecords;
+
+  // Lets the Sales/Admin dashboard's "Pending Orders"/"Completed Orders" KPIs land here
+  // pre-filtered (e.g. ?status=PENDING).
+  const [searchParams] = useSearchParams();
+  const initialStatus = searchParams.get("status") || "";
+
   // Filters State
-  const [appliedFilters, setAppliedFilters] = useState<SalesFilters>({});
+  const [appliedFilters, setAppliedFilters] = useState<SalesFilters>(initialStatus ? { status: initialStatus } : {});
   const [pageSize] = useState(10);
   const [isExportOpen, setIsExportOpen] = useState(false);
 
@@ -144,6 +166,15 @@ const Sells = () => {
     queryFn: () => productService.getProducts({ status: "active", limit: 100 }),
   });
 
+  // Query: active Bank Accounts (for the Bank Account dropdown shown when Payment Method =
+  // BankTransfer) — configured under Account → Manage Bank Account Details.
+  const { data: bankAccountsResponse } = useQuery({
+    queryKey: ["bank-accounts-active"],
+    queryFn: () => bankAccountService.getActiveBankAccounts(),
+    enabled: pagePermission.canRead,
+  });
+  const bankAccountsList = bankAccountsResponse?.data?.data || [];
+
   const productsList: ProductData[] = productsResponse?.data?.data || [];
   const sellsList: SaleData[] = sellsResponse?.data?.data || [];
 
@@ -177,6 +208,7 @@ const Sells = () => {
   const [customerNumber, setCustomerNumber] = useState("");
   const [platform, setPlatform] = useState("Direct Store");
   const [paymentMethod, setPaymentMethod] = useState<string>("UPI");
+  const [bankAccountId, setBankAccountId] = useState<number | "">("");
   const [city, setCity] = useState("");
   const [fromAddress, setFromAddress] = useState("");
   const [pincode, setPincode] = useState("");
@@ -323,10 +355,17 @@ const Sells = () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["customers"] });
       closeModal();
-      // Fulfillment (line items, shipping, courier history) happens on the
-      // Couriers page's "Pending Fulfillment" list — send the user there,
-      // but don't auto-open anything; they pick the entry themselves.
-      navigate("/sells");
+      const created = res.data?.data;
+      if (created?.customerId && Number(created?.pendingAmount) > 0) {
+        // Customer didn't pay in full — take the user straight to that customer's ledger/
+        // debit account instead of the Sells list, so the outstanding balance is front and center.
+        navigate(`/customers/${created.customerId}/ledger`);
+      } else {
+        // Fulfillment (line items, shipping, courier history) happens on the
+        // Couriers page's "Pending Fulfillment" list — send the user there,
+        // but don't auto-open anything; they pick the entry themselves.
+        navigate("/sells");
+      }
     },
     onError: (err: any) => {
       toast.error(
@@ -390,17 +429,19 @@ const Sells = () => {
   // Payment-history "Record Payment" mini-form state (inside the detail modal)
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentMethodInput, setPaymentMethodInput] = useState<string>("Cash");
+  const [bankAccountIdInput, setBankAccountIdInput] = useState<number | "">("");
   const [paymentNotes, setPaymentNotes] = useState("");
 
   const recordPaymentMutation = useMutation({
-    mutationFn: ({ saleId, amount, method, notes }: { saleId: number; amount: number; method: string; notes?: string }) =>
-      saleService.recordPayment(saleId, { amount, method, notes }),
+    mutationFn: ({ saleId, amount, method, bankAccountId, notes }: { saleId: number; amount: number; method: string; bankAccountId?: number | null; notes?: string }) =>
+      saleService.recordPayment(saleId, { amount, method, bankAccountId, notes }),
     onSuccess: (res) => {
       toast.success(res.data?.message || "Payment recorded successfully");
       queryClient.invalidateQueries({ queryKey: ["sells"] });
       queryClient.invalidateQueries({ queryKey: ["sells-totals"] });
       queryClient.invalidateQueries({ queryKey: ["sale-detail", selectedSale?.id] });
       setPaymentAmount("");
+      setBankAccountIdInput("");
       setPaymentNotes("");
     },
     onError: (err: any) => {
@@ -418,6 +459,7 @@ const Sells = () => {
     setCustomerNumber("");
     setPlatform("Direct Store");
     setPaymentMethod("UPI");
+    setBankAccountId("");
     setCity("");
     setFromAddress("");
     setPincode("");
@@ -444,6 +486,7 @@ const Sells = () => {
     setCustomerNumber(sale.customerNumber || "");
     setPlatform(sale.platform || "Direct Store");
     setPaymentMethod(sale.paymentMethod || "UPI");
+    setBankAccountId(sale.bankAccountId || "");
     setCity(sale.city || "");
     setFromAddress(sale.fromAddress || "");
     setPincode(sale.pincode || "");
@@ -474,6 +517,7 @@ const Sells = () => {
     setSelectedSale(null);
     setPaymentAmount("");
     setPaymentMethodInput("Cash");
+    setBankAccountIdInput("");
     setPaymentNotes("");
   };
 
@@ -564,6 +608,7 @@ const Sells = () => {
           customerNumber: customerNumber || undefined,
           platform,
           paymentMethod: paymentMethod as any,
+          bankAccountId: paymentMethod === "BankTransfer" ? (bankAccountId || null) : null,
           city: city || undefined,
           fromAddress: fromAddress || undefined,
           pincode: pincode || undefined,
@@ -579,6 +624,7 @@ const Sells = () => {
         customerNumber: customerNumber || undefined,
         platform,
         paymentMethod,
+        bankAccountId: paymentMethod === "BankTransfer" ? (bankAccountId || undefined) : undefined,
         city: city || undefined,
         fromAddress: fromAddress || undefined,
         pincode: pincode || undefined,
@@ -673,7 +719,7 @@ const Sells = () => {
         <div className="rounded-2xl border border-blue-100 bg-linear-to-br from-blue-50/60 to-white p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-blue-700">
-              {isAdmin ? "Total Sells" : "My Total Sells"}
+              {canViewAllSales ? "Total Sells" : "My Total Sells"}
             </span>
             <div className="rounded-xl bg-blue-100 p-2 text-blue-600">
               <IndianRupee className="h-5 w-5" />
@@ -683,7 +729,7 @@ const Sells = () => {
             ₹{totalsData.totalSellingAmount.toLocaleString("en-IN")}
           </div>
           <p className="mt-1 text-[11px] text-slate-500">
-            {isAdmin ? "Combined team selling total" : "Your total sales contribution"}
+            {canViewAllSales ? "Combined team selling total" : "Your total sales contribution"}
           </p>
         </div>
 
@@ -735,7 +781,7 @@ const Sells = () => {
 
       {/* Filter Section */}
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <Formik initialValues={{ search: "", startDate: "", endDate: "" }} onSubmit={() => { }}>
+        <Formik initialValues={{ search: "", startDate: "", endDate: "", status: initialStatus }} onSubmit={() => { }}>
           {({ resetForm }) => (
             <Form className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <FilterSync setAppliedFilters={setAppliedFilters} />
@@ -750,7 +796,19 @@ const Sells = () => {
                 />
               </div>
 
-              {isAdmin && (
+              <Field
+                as="select"
+                name="status"
+                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-medium text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none cursor-pointer"
+              >
+                {ORDER_STATUS_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </Field>
+
+              {canViewAllSales && (
                 <select
                   value={appliedFilters.userId || ""}
                   onChange={(e) =>
@@ -897,12 +955,6 @@ const Sells = () => {
                   <th className="px-4 py-3.5 whitespace-nowrap text-right">
                     Selling (₹)
                   </th>
-                  <th className="px-4 py-3.5 whitespace-nowrap text-right">
-                    Collected (₹)
-                  </th>
-                  <th className="px-4 py-3.5 whitespace-nowrap text-right">
-                    Pending (₹)
-                  </th>
                   {/* <th className="px-4 py-3.5 whitespace-nowrap">Status</th> */}
                   <th className="px-4 py-3.5 whitespace-nowrap">Date</th>
                   {/* {isAdmin && ( */}
@@ -980,20 +1032,6 @@ const Sells = () => {
                     <td className="px-4 py-3.5 text-right font-semibold text-slate-900 whitespace-nowrap">
                       ₹{Number(sell.sellingAmount || 0).toLocaleString("en-IN")}
                     </td>
-                    <td className="px-4 py-3.5 text-right font-semibold text-emerald-600 whitespace-nowrap">
-                      ₹{Number(sell.collectedAmount || 0).toLocaleString("en-IN")}
-                    </td>
-                    <td className="px-4 py-3.5 text-right font-bold whitespace-nowrap">
-                      <span
-                        className={
-                          Number(sell.pendingAmount) > 0
-                            ? "text-rose-600"
-                            : "text-slate-400"
-                        }
-                      >
-                        ₹{Number(sell.pendingAmount || 0).toLocaleString("en-IN")}
-                      </span>
-                    </td>
                     {/* <td className="px-4 py-3.5 whitespace-nowrap">
                       {renderStatusBadge(sell.status)}
                     </td> */}
@@ -1032,6 +1070,18 @@ const Sells = () => {
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>
+                          )}
+                          {/* Customer Account / Collect Payment moved to Account → Debited — the
+                              customer ledger is Account/Admin-managed only. Share stays here so
+                              a Sells rep can still send/print a customer's statement. */}
+                          {sell.customerId && (
+                            <ShareStatementMenu
+                              customerId={sell.customerId}
+                              customerName={sell.customerName}
+                              customerPhone={sell.customerNumber}
+                              balance={sell.customerLedgerBalance}
+                              compact
+                            />
                           )}
                         </div>
                       </td>
@@ -1276,6 +1326,31 @@ const Sells = () => {
                       ))}
                     </select>
                   </div>
+
+                  {paymentMethod === "BankTransfer" && (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Bank Account
+                      </label>
+                      <select
+                        value={bankAccountId}
+                        onChange={(e) => setBankAccountId(e.target.value ? Number(e.target.value) : "")}
+                        className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                      >
+                        <option value="">Select bank account</option>
+                        {bankAccountsList.map((acc) => (
+                          <option key={acc.id} value={acc.id}>
+                            {acc.bankName} — {acc.accountNumber}
+                          </option>
+                        ))}
+                      </select>
+                      {bankAccountsList.length === 0 && (
+                        <p className="mt-1 text-[10px] text-amber-600">
+                          No bank accounts configured yet — add one under Account → Manage Bank Account Details.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
 
               </div>
@@ -1706,6 +1781,11 @@ const Sells = () => {
                   </span>
                   <span className="font-semibold text-slate-800">
                     {detail.paymentMethod || "—"}
+                    {detail.paymentMethod === "BankTransfer" && detail.bankAccount && (
+                      <span className="block text-[10px] font-normal text-slate-500">
+                        {detail.bankAccount.bankName} — {detail.bankAccount.accountNumber}
+                      </span>
+                    )}
                   </span>
                 </div>
                 <div>
@@ -1803,7 +1883,12 @@ const Sells = () => {
                             <td className="p-2.5 text-slate-600">
                               {p.createdAt ? new Date(p.createdAt).toLocaleDateString() : "—"}
                             </td>
-                            <td className="p-2.5 text-slate-600">{p.method || "—"}</td>
+                            <td className="p-2.5 text-slate-600">
+                              {p.method || "—"}
+                              {p.method === "BankTransfer" && p.bankAccount && (
+                                <div className="text-[10px] text-slate-400">{p.bankAccount.bankName} — {p.bankAccount.accountNumber}</div>
+                              )}
+                            </td>
                             <td className="p-2.5 text-slate-600">{p.creator?.name || "—"}</td>
                             <td className="p-2.5 text-right font-bold text-emerald-600">
                               ₹{Number(p.amount).toLocaleString("en-IN")}
@@ -1845,6 +1930,21 @@ const Sells = () => {
                         ))}
                       </select>
                     </div>
+                    {paymentMethodInput === "BankTransfer" && (
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-0.5">Bank Account</label>
+                        <select
+                          value={bankAccountIdInput}
+                          onChange={(e) => setBankAccountIdInput(e.target.value ? Number(e.target.value) : "")}
+                          className="rounded-md border border-emerald-200 bg-white px-2 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                        >
+                          <option value="">Select account</option>
+                          {bankAccountsList.map((acc) => (
+                            <option key={acc.id} value={acc.id}>{acc.bankName} — {acc.accountNumber}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     <div className="flex-1 min-w-[120px]">
                       <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-0.5">Note (optional)</label>
                       <input
@@ -1868,6 +1968,7 @@ const Sells = () => {
                           saleId: detail.id,
                           amount: amt,
                           method: paymentMethodInput,
+                          bankAccountId: paymentMethodInput === "BankTransfer" ? (bankAccountIdInput || null) : null,
                           notes: paymentNotes || undefined,
                         });
                       }}
@@ -1910,6 +2011,7 @@ const Sells = () => {
           }
         />
       )}
+
     </div>
   );
 };

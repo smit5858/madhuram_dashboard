@@ -10,7 +10,8 @@ exports.getUsers = async (req, res) => {
   try {
     const { search, name, email, role, status, page, limit } = req.query;
 
-    const where = {};
+    // Deleted users never show in the table — separate from isActive/"Inactive" filtering below.
+    const where = { deletedAt: null };
     const roleWhere = {};
 
     if (name) {
@@ -80,7 +81,7 @@ exports.getUsers = async (req, res) => {
 // Lightweight lookup used to populate role dropdowns (filters + create/edit form)
 exports.getRoles = async (req, res) => {
   try {
-    const roles = await Role.findAll({ attributes: ["id", "name"], order: [["id", "ASC"]] });
+    const roles = await Role.findAll({ attributes: ["id", "name", "isActive"], order: [["id", "ASC"]] });
     return res.status(200).json({ success: true, data: roles });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -128,6 +129,9 @@ exports.createUser = async (req, res) => {
     const role = await Role.findByPk(roleId);
     if (!role) {
       return res.status(400).json({ success: false, message: "Selected role does not exist" });
+    }
+    if (!role.isActive) {
+      return res.status(400).json({ success: false, message: "Selected role is inactive and cannot be assigned" });
     }
 
     const trimmedEmail = email.trim().toLowerCase();
@@ -204,6 +208,9 @@ exports.updateUser = async (req, res) => {
       if (!role) {
         return res.status(400).json({ success: false, message: "Selected role does not exist" });
       }
+      if (!role.isActive) {
+        return res.status(400).json({ success: false, message: "Selected role is inactive and cannot be assigned" });
+      }
       user.roleId = roleId;
     }
 
@@ -257,15 +264,19 @@ exports.deleteUser = async (req, res) => {
     const requester = req.user;
 
     if (requester && parseInt(id, 10) === requester.id) {
-      return res.status(400).json({ success: false, message: "You cannot deactivate your own account" });
+      return res.status(400).json({ success: false, message: "You cannot delete your own account" });
     }
 
-    const user = await User.findByPk(id);
+    const user = await User.findOne({ where: { id, deletedAt: null } });
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // Soft delete: deactivate + revoke sessions, preserving audit trail (matches customer/product pattern)
+    // Delete: removes the user from the table/login, but keeps the row (not a DB hard-delete)
+    // so sells/stock-movement/courier records they created keep showing their name — see
+    // deletedAt comment in user.model.js. Distinct from Deactivate (isActive), which keeps the
+    // user visible in the table as "Inactive" and reversible.
+    user.deletedAt = new Date();
     user.isActive = false;
     user.tokenInvalidatedAt = new Date();
     user.refreshToken = null;
@@ -273,7 +284,7 @@ exports.deleteUser = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "User deactivated successfully",
+      message: "User deleted successfully",
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });

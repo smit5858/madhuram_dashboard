@@ -11,11 +11,15 @@ const Couriers = lazy(() => import('../pages/couriers/Couriers'));
 const CourierCompanies = lazy(() => import('../pages/couriers/CourierCompanies'));
 const Customers = lazy(() => import('../pages/customers/Customers'));
 const Sells = lazy(() => import('../pages/sells/Sells'));
+const CustomerLedger = lazy(() => import('../pages/customers/CustomerLedger'));
 const Users = lazy(() => import('../pages/users/Users'));
 const Products = lazy(() => import('../pages/products/Products'));
-const AccountSells = lazy(() => import('../pages/account/Sells'));
+const Income = lazy(() => import('../pages/account/Income'));
 const Expense = lazy(() => import('../pages/account/Expense'));
 const Debited = lazy(() => import('../pages/account/Debited'));
+const BankAccounts = lazy(() => import('../pages/account/BankAccounts'));
+const RouteSetting = lazy(() => import('../pages/settings/RouteSetting'));
+const RoleManagement = lazy(() => import('../pages/settings/RoleManagement'));
 const Forbidden = lazy(() => import('../pages/error/Forbidden'));
 const LoadingFallback = lazy(() => import('../pages/loadingfallback/LoadingFallback'));
 
@@ -51,7 +55,7 @@ const routesConfig = [
         path: Routing.Couriers, 
         element: (
           <AuthGuard>
-            <PermissionGuard requiredPath="/couriers">
+            <PermissionGuard requiredPath={["/couriers", "/couriers/incoming"]}>
               <Suspense fallback={<LoadingFallback />}>
                 <MainLayout>
                   <Couriers />
@@ -104,13 +108,13 @@ const routesConfig = [
         )
       },
       {
-        path: Routing.Products,
+        path: Routing.CustomerLedger,
         element: (
           <AuthGuard>
-            <PermissionGuard requiredPath="/products">
+            <PermissionGuard requiredPath={["/sells", "/account/debited"]}>
               <Suspense fallback={<LoadingFallback />}>
                 <MainLayout>
-                  <Products />
+                  <CustomerLedger />
                 </MainLayout>
               </Suspense>
             </PermissionGuard>
@@ -118,13 +122,13 @@ const routesConfig = [
         )
       },
       {
-        path: Routing.Stock,
+        path: Routing.Products,
         element: (
           <AuthGuard>
-            <PermissionGuard requiredPath="/stock">
+            <PermissionGuard requiredPath="/products">
               <Suspense fallback={<LoadingFallback />}>
                 <MainLayout>
-                  <Sells />
+                  <Products />
                 </MainLayout>
               </Suspense>
             </PermissionGuard>
@@ -146,13 +150,13 @@ const routesConfig = [
         )
       },
       {
-        path: Routing.AccountSells,
+        path: Routing.AccountIncome,
         element: (
           <AuthGuard>
-            <PermissionGuard requiredPath="/account/sells">
+            <PermissionGuard requiredPath="/account/income">
               <Suspense fallback={<LoadingFallback />}>
                 <MainLayout>
-                  <AccountSells />
+                  <Income />
                 </MainLayout>
               </Suspense>
             </PermissionGuard>
@@ -187,8 +191,50 @@ const routesConfig = [
           </AuthGuard>
         )
       },
-      { 
-        path: Routing.Forbidden, 
+      {
+        path: Routing.AccountBankAccounts,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/account/bank-accounts">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <BankAccounts />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.RouteSetting,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/setting/route-setting">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <RouteSetting />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.RoleManagement,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/setting/role-management">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <RoleManagement />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.Forbidden,
         element: (
           <AuthGuard>
             <Suspense fallback={<LoadingFallback />}>

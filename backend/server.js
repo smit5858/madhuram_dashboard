@@ -34,6 +34,11 @@ const inventory = require("./routes/inventory.routes");
 const dealers = require("./routes/dealer.routes");
 const notifications = require("./routes/notification.routes");
 const users = require("./routes/user.routes");
+const income = require("./routes/income.routes");
+const expense = require("./routes/expense.routes");
+const bankAccounts = require("./routes/bankAccount.routes");
+const routeSettings = require("./routes/routeSetting.routes");
+const roles = require("./routes/role.routes");
 
 app.get("/", (req, res) => res.send("API running"));
 app.use("/auth", auth);
@@ -50,141 +55,121 @@ app.use("/inventory", inventory);
 app.use("/dealers", dealers);
 app.use("/notifications", notifications);
 app.use("/users", users);
+app.use("/income", income);
+app.use("/expense", expense);
+app.use("/account/bank-accounts", bankAccounts);
+app.use("/route-settings", routeSettings);
+app.use("/roles", roles);
 
 
 const PORT = process.env.PORT || 3000;
 
-const { Route, Role, Permission } = require("./models");
+const { Route, Role, UserPermission } = require("./models");
 
 // Wrap Express in an http.Server so Socket.io can attach
 const httpServer = http.createServer(app);
 
+const ensureAllRoles = async () => {
+  // Additive only — never removes/renames existing roles, so this is safe to run against a
+  // live DB with existing Admin/User accounts.
+  await Role.findOrCreate({ where: { name: "Courier" } });
+  await Role.findOrCreate({ where: { name: "Account" } });
+};
+
+// Ensures every system route row exists (renaming it if its display name changed). Access to
+// these routes is granted entirely per-user via Settings → Route Setting — there is no
+// role-based default to seed here; a newly created user starts with no access to anything
+// until an Admin explicitly grants it.
 const ensureAllRoutesAndPermissions = async () => {
   try {
     const SYSTEM_ROUTES = [
       { name: "Dashboard", path: "/dashboard" },
-      { name: "Couriers", path: "/couriers" },
-      { name: "Courier Companies", path: "/couriers-companies" },
+      // Outgoing Courier keeps the original "/couriers" path so every existing UserPermission
+      // row carries over unchanged (find-or-create below matches on path, not name) — see
+      // backfillIncomingCourierPermissions for how Incoming Courier gets seeded from it.
+      // module: "Courier" groups Outgoing/Incoming/Companies under one parent header in the
+      // Route Setting permission matrix (see PermissionGrid.tsx) — purely presentational, there
+      // is no separate "Courier" parent Route/permission row.
+      { name: "Outgoing Courier", path: "/couriers", module: "Courier" },
+      { name: "Incoming Courier", path: "/couriers/incoming", module: "Courier" },
+      { name: "Courier Companies", path: "/couriers-companies", module: "Courier" },
       { name: "Customers", path: "/customers" },
       { name: "Sells", path: "/sells" },
       { name: "Products", path: "/products" },
-      { name: "Stock", path: "/stock" },
-      { name: "Inventory", path: "/inventory" },
-      { name: "Dealers", path: "/dealers" },
       { name: "Users", path: "/users" },
-      { name: "Reports", path: "/reports" },
       { name: "Account", path: "/account" },
-      { name: "Account Sells", path: "/account/sells" },
-      { name: "Expense", path: "/account/expense" },
-      { name: "Debited", path: "/account/debited" },
+      { name: "Account Income", path: "/account/income", module: "Account" },
+      { name: "Expense", path: "/account/expense", module: "Account" },
+      { name: "Debited", path: "/account/debited", module: "Account" },
+      { name: "Bank Accounts", path: "/account/bank-accounts", module: "Account" },
+      { name: "Route Setting", path: "/setting/route-setting", module: "Setting" },
+      { name: "Role Management", path: "/setting/role-management", module: "Setting" },
     ];
 
-    const createdRoutes = [];
     for (const rDef of SYSTEM_ROUTES) {
       const [route] = await Route.findOrCreate({
         where: { path: rDef.path },
         defaults: rDef,
       });
-      if (route.name !== rDef.name) {
-        await route.update({ name: rDef.name });
-      }
-      createdRoutes.push(route);
-    }
-
-    const roles = await Role.findAll();
-    for (const role of roles) {
-      const isAdmin = role.name === "Admin";
-
-      for (const route of createdRoutes) {
-        const path = route.path.toLowerCase();
-
-        let canRead = false;
-        let canCreate = false;
-        let canUpdate = false;
-        let canDelete = false;
-
-        if (isAdmin) {
-          canRead = true;
-          canCreate = true;
-          canUpdate = true;
-          canDelete = true;
-        } else {
-          // Sales / User Role
-          if (["/sells", "/customers", "/products", "/stock", "/inventory", "/dealers", "/couriers"].includes(path)) {
-            canRead = true;
-            canCreate = true;
-            canUpdate = true;
-            canDelete = false; // NO delete permission for Sales
-          } else if (
-            path === "/dashboard" ||
-            path === "/account" ||
-            path === "/account/sells" ||
-            path === "/users" ||
-            path === "/couriers-companies"
-          ) {
-            // Users / Courier Companies: non-admin gets read-only access (view list/details;
-            // needed to populate the courier-company dropdown), no create/update/delete.
-            canRead = true;
-            canCreate = false;
-            canUpdate = false;
-            canDelete = false;
-          }
-        }
-
-        const [perm, created] = await Permission.findOrCreate({
-          where: { roleId: role.id, routeId: route.id },
-          defaults: { canRead, canCreate, canUpdate, canDelete },
-        });
-
-        if (!created) {
-          await perm.update({ canRead, canCreate, canUpdate, canDelete });
-        }
+      const moduleValue = rDef.module || null;
+      if (route.name !== rDef.name || route.module !== moduleValue) {
+        await route.update({ name: rDef.name, module: moduleValue });
       }
     }
   } catch (e) {
-    console.warn("Could not ensure routes and permissions:", e.message);
+    console.warn("Could not ensure routes:", e.message);
   }
 };
 
-const renameSalesRoutes = async () => {
-  const routeRenames = [
-    { oldPath: "/sales", newPath: "/sells", name: "Sells" },
-    { oldPath: "/account/sales", newPath: "/account/sells", name: "Account Sells" },
-  ];
+// Reports/Stock/Inventory/Dealers never had a page of their own and are no longer checked by any
+// authorize() call (Inventory/Dealers now ride on the "/products" permission — see
+// inventory.routes.js / dealer.routes.js), so they were pure dead entries cluttering the Route
+// Setting permission grid. One-time cleanup: delete their UserPermission rows first (routeId is
+// NOT NULL, so the Route row can't be removed while they still reference it), then the Route rows
+// themselves. Idempotent — a no-op once these are already gone.
+const pruneObsoleteRoutes = async () => {
+  try {
+    const { Op } = require("sequelize");
+    const OBSOLETE_PATHS = ["/reports", "/stock", "/inventory", "/dealers"];
+    const routes = await Route.findAll({ where: { path: { [Op.in]: OBSOLETE_PATHS } } });
+    if (routes.length === 0) return;
 
-  for (const { oldPath, newPath, name } of routeRenames) {
-    const oldRoute = await Route.findOne({ where: { path: oldPath } });
-    if (!oldRoute) continue;
+    const routeIds = routes.map((r) => r.id);
+    await UserPermission.destroy({ where: { routeId: { [Op.in]: routeIds } } });
+    await Route.destroy({ where: { id: { [Op.in]: routeIds } } });
+  } catch (e) {
+    console.warn("Could not prune obsolete routes:", e.message);
+  }
+};
 
-    const newRoute = await Route.findOne({ where: { path: newPath } });
-    if (!newRoute) {
-      await oldRoute.update({ name, path: newPath });
-      continue;
-    }
+// One-time-per-user-per-route backfill: Outgoing/Incoming Courier used to be a single "/couriers"
+// permission, split into two independent ones above. Copies every existing Outgoing Courier
+// UserPermission row onto the new Incoming Courier route (same booleans) so nobody who already
+// had Couriers access loses Incoming access the day this ships. findOrCreate keeps this additive
+// and a no-op on every boot after the first — an Admin can freely un-grant Incoming afterwards.
+const backfillIncomingCourierPermissions = async () => {
+  try {
+    const outgoing = await Route.findOne({ where: { path: "/couriers" } });
+    const incoming = await Route.findOne({ where: { path: "/couriers/incoming" } });
+    if (!outgoing || !incoming) return;
 
-    const oldPermissions = await Permission.findAll({ where: { routeId: oldRoute.id } });
-    for (const oldPermission of oldPermissions) {
-      const [permission, created] = await Permission.findOrCreate({
-        where: { roleId: oldPermission.roleId, routeId: newRoute.id },
+    const outgoingPerms = await UserPermission.findAll({ where: { routeId: outgoing.id } });
+    for (const perm of outgoingPerms) {
+      await UserPermission.findOrCreate({
+        where: { userId: perm.userId, routeId: incoming.id },
         defaults: {
-          canRead: oldPermission.canRead,
-          canCreate: oldPermission.canCreate,
-          canUpdate: oldPermission.canUpdate,
-          canDelete: oldPermission.canDelete,
+          userId: perm.userId,
+          routeId: incoming.id,
+          canRead: perm.canRead,
+          canCreate: perm.canCreate,
+          canUpdate: perm.canUpdate,
+          canDelete: perm.canDelete,
+          viewAllRecords: perm.viewAllRecords,
         },
       });
-      if (!created) {
-        await permission.update({
-          canRead: permission.canRead || oldPermission.canRead,
-          canCreate: permission.canCreate || oldPermission.canCreate,
-          canUpdate: permission.canUpdate || oldPermission.canUpdate,
-          canDelete: permission.canDelete || oldPermission.canDelete,
-        });
-      }
     }
-    await Permission.destroy({ where: { routeId: oldRoute.id } });
-    await oldRoute.destroy();
-    await newRoute.update({ name });
+  } catch (e) {
+    console.warn("Could not backfill Incoming Courier permissions:", e.message);
   }
 };
 
@@ -201,6 +186,36 @@ const renameSalesTables = async () => {
   }
 };
 
+// sequelize.sync({alter:true}) does not reliably loosen an existing NOT NULL constraint,
+// so users.roleId (allowNull:true — see user.model.js)
+// needs an explicit ALTER here. Idempotent: a no-op once the column is already nullable.
+const ensureUserRoleIdNullable = async () => {
+  const { DataTypes } = require("sequelize");
+  const queryInterface = sequelize.getQueryInterface();
+  const columns = await queryInterface.describeTable("users");
+  if (columns.roleId && columns.roleId.allowNull === false) {
+    await queryInterface.changeColumn("users", "roleId", { type: DataTypes.INTEGER, allowNull: true });
+  }
+};
+
+// Same sync({alter:true}) limitation as ensureUserRoleIdNullable above — accountHolderName and
+// accountNumber became optional after bank_accounts shipped with them NOT NULL. Idempotent.
+const ensureBankAccountFieldsNullable = async () => {
+  const { DataTypes } = require("sequelize");
+  const queryInterface = sequelize.getQueryInterface();
+  const tables = await queryInterface.showAllTables();
+  const tableNames = tables.map((table) => (typeof table === "string" ? table : table.tableName));
+  if (!tableNames.includes("bank_accounts")) return;
+
+  const columns = await queryInterface.describeTable("bank_accounts");
+  if (columns.accountHolderName && columns.accountHolderName.allowNull === false) {
+    await queryInterface.changeColumn("bank_accounts", "accountHolderName", { type: DataTypes.STRING, allowNull: true });
+  }
+  if (columns.accountNumber && columns.accountNumber.allowNull === false) {
+    await queryInterface.changeColumn("bank_accounts", "accountNumber", { type: DataTypes.STRING, allowNull: true });
+  }
+};
+
 sequelize
   .authenticate()
   .then(() => {
@@ -209,12 +224,20 @@ sequelize
     return renameSalesTables();
   })
   .then(() => {
+    return ensureUserRoleIdNullable();
+  })
+  .then(() => {
+    return ensureBankAccountFieldsNullable();
+  })
+  .then(() => {
     return sequelize.sync({ alter: true });
   })
   .then(async () => {
     logger.info("Models synced");
-    await renameSalesRoutes();
+    await ensureAllRoles();
     await ensureAllRoutesAndPermissions();
+    await pruneObsoleteRoutes();
+    await backfillIncomingCourierPermissions();
 
     // Initialize Socket.io after DB is ready
     initSocket(httpServer);

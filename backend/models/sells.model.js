@@ -37,6 +37,14 @@ const Sale = sequelize.define(
       type: DataTypes.ENUM("Cash", "UPI", "Card", "COD", "BankTransfer", "Other"),
       allowNull: true,
     },
+    bankAccountId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: "bank_accounts",
+        key: "id",
+      },
+    },
     city: {
       type: DataTypes.STRING,
       allowNull: true,

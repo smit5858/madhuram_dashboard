@@ -1,11 +1,71 @@
-const { Sale, SaleItem, Product, Customer, User, SerialUnit, Courier, Payment } = require("../models");
+const { Sale, SaleItem, Product, Customer, User, SerialUnit, Courier, Payment, BankAccount } = require("../models");
 const sequelize = require("../config/db");
 const { Op } = require("sequelize");
 const orderService = require("../services/order.service");
+const { generateSalesExcel, generateSalesPdf } = require("../services/salesExport.service");
+const { canViewAllRecords } = require("../helper/permissionScope");
+const { syncIncomeForSaleUpdate } = require("../services/incomeSync.service");
+const { recalculateDay } = require("../services/dailyBalance.service");
+const customerLedgerService = require("../services/customerLedger.service");
+
+// Attaches each sale's live customer-account balance (advance/pending, carried across ALL of
+// that customer's sales — not this sale's own pendingAmount) as `customerLedgerBalance`. One
+// batched query for the whole list, not N+1 — see customerLedger.service.js#getCustomerBalances.
+const attachLedgerBalances = async (sales) => {
+  const customerIds = sales.map((s) => s.customerId).filter(Boolean);
+  const balances = await customerLedgerService.getCustomerBalances(customerIds);
+  return sales.map((sale) => {
+    const json = sale.toJSON ? sale.toJSON() : sale;
+    json.customerLedgerBalance = sale.customerId
+      ? balances.get(sale.customerId) || { amount: 0, status: "SETTLED", label: "Settled" }
+      : null;
+    return json;
+  });
+};
 
 const errorResponse = (res, err) => {
   const status = err.statusCode || 500;
   return res.status(status).json({ success: false, message: err.message });
+};
+
+/**
+ * Builds the Sells list where-clause (ownership scope + platform/paymentMethod/status/city/
+ * customerName/date-range filters). Used identically by getSales (list) and exportSales
+ * (export) so the table and the exported file can never diverge.
+ */
+const buildSalesWhere = async (user, query) => {
+  const canViewAll = user && (await canViewAllRecords(user, "/sells"));
+  const { platform, paymentMethod, status, city, startDate, endDate, customerName, userId, createdBy } = query;
+
+  const where = {};
+
+  // Ownership filter: a viewAllRecords-granted user (Admin or otherwise) can filter by
+  // userId/createdBy; everyone else is locked to req.user.id
+  if (canViewAll) {
+    const targetUser = userId || createdBy;
+    if (targetUser) {
+      where.createdBy = targetUser;
+    }
+  } else {
+    where.createdBy = user.id;
+  }
+
+  if (platform) where.platform = { [Op.like]: `%${platform}%` };
+  if (paymentMethod) where.paymentMethod = paymentMethod;
+  if (status) where.status = status;
+  if (city) where.city = { [Op.like]: `%${city}%` };
+  if (customerName) where.customerName = { [Op.like]: `%${customerName}%` };
+  if (startDate || endDate) {
+    where.createdAt = {};
+    if (startDate) where.createdAt[Op.gte] = new Date(startDate);
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      where.createdAt[Op.lte] = end;
+    }
+  }
+
+  return where;
 };
 
 // POST /sells
@@ -23,36 +83,7 @@ exports.createSale = async (req, res) => {
 exports.getSales = async (req, res) => {
   try {
     const user = req.user;
-    const isAdmin = user && user.roleName === "Admin";
-
-    const { platform, paymentMethod, status, city, startDate, endDate, customerName, userId, createdBy } = req.query;
-
-    const where = {};
-
-    // Ownership filter: Admin can filter by userId/createdBy; Sales users are locked to req.user.id
-    if (isAdmin) {
-      const targetUser = userId || createdBy;
-      if (targetUser) {
-        where.createdBy = targetUser;
-      }
-    } else {
-      where.createdBy = user.id;
-    }
-
-    if (platform) where.platform = { [Op.like]: `%${platform}%` };
-    if (paymentMethod) where.paymentMethod = paymentMethod;
-    if (status) where.status = status;
-    if (city) where.city = { [Op.like]: `%${city}%` };
-    if (customerName) where.customerName = { [Op.like]: `%${customerName}%` };
-    if (startDate || endDate) {
-      where.createdAt = {};
-      if (startDate) where.createdAt[Op.gte] = new Date(startDate);
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        where.createdAt[Op.lte] = end;
-      }
-    }
+    const where = await buildSalesWhere(user, req.query);
 
     const sales = await Sale.findAll({
       where,
@@ -64,24 +95,62 @@ exports.getSales = async (req, res) => {
           include: [{ model: Product, attributes: ["id", "name", "productType"] }],
         },
         { model: User, as: "creator", attributes: ["id", "name", "email"] },
+        { model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] },
       ],
       order: [["createdAt", "DESC"]],
     });
 
-    return res.status(200).json({ success: true, data: sales });
+    const data = await attachLedgerBalances(sales);
+    return res.status(200).json({ success: true, data });
   } catch (err) {
     return errorResponse(res, err);
   }
 };
 
-// GET /sells/totals
+// GET /sells/export?format=pdf|excel — exports the same filtered dataset as getSales (via
+// buildSalesWhere) so the table and the exported file can never diverge.
+exports.exportSales = async (req, res) => {
+  try {
+    const user = req.user;
+    const where = await buildSalesWhere(user, req.query);
+
+    const sales = await Sale.findAll({
+      where,
+      include: [
+        { model: Customer, as: "customer", attributes: ["id", "name", "phone", "email", "address", "city", "pincode"] },
+        {
+          model: SaleItem,
+          as: "items",
+          include: [{ model: Product, attributes: ["id", "name", "productType"] }],
+        },
+        { model: User, as: "creator", attributes: ["id", "name", "email"] },
+        { model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] },
+      ],
+      order: [["createdAt", "DESC"]],
+    });
+
+    const format = req.query.format === "pdf" ? "pdf" : "excel";
+    if (format === "pdf") {
+      return generateSalesPdf(sales, res);
+    }
+    return await generateSalesExcel(sales, res);
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// GET /sells/totals?startDate=&endDate= — date range is optional (all-time totals when
+// absent, unchanged from before); when present, narrows the sum the same way buildSalesWhere's
+// list/export date filter does, so a dashboard can reuse this one endpoint for "Today"/"This
+// month" KPIs instead of needing a separate aggregate per window.
 exports.getSellsTotals = async (req, res) => {
   try {
     const user = req.user;
-    const isAdmin = user && user.roleName === "Admin";
+    const canViewAll = user && (await canViewAllRecords(user, "/sells"));
+    const { startDate, endDate } = req.query;
     const where = {};
 
-    if (isAdmin) {
+    if (canViewAll) {
       const { userId, createdBy } = req.query;
       const targetUser = userId || createdBy;
       if (targetUser) {
@@ -89,6 +158,16 @@ exports.getSellsTotals = async (req, res) => {
       }
     } else {
       where.createdBy = user.id;
+    }
+
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) where.createdAt[Op.gte] = new Date(startDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        where.createdAt[Op.lte] = end;
+      }
     }
 
     const totals = await Sale.findAll({
@@ -113,8 +192,58 @@ exports.getSellsTotals = async (req, res) => {
         totalCollectedAmount: parseFloat(result.totalCollectedAmount) || 0,
         totalPendingAmount: parseFloat(result.totalPendingAmount) || 0,
         totalSalesCount: parseInt(result.totalSalesCount, 10) || 0,
-        scope: isAdmin ? (where.createdBy ? "USER_FILTERED" : "ALL") : "OWN_ONLY",
+        scope: canViewAll ? (where.createdBy ? "USER_FILTERED" : "ALL") : "OWN_ONLY",
       },
+    });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// GET /sells/daily-trend?startDate=&endDate= — Sales dashboard revenue trend chart. Same
+// ownership scope as getSellsTotals (a non-viewAll user must only ever see their own sales
+// here too), grouped by calendar date of createdAt, excluding CANCELLED like every other
+// sells total.
+exports.getSalesDailyTrend = async (req, res) => {
+  try {
+    const user = req.user;
+    const canViewAll = user && (await canViewAllRecords(user, "/sells"));
+    const { startDate, endDate } = req.query;
+    const where = { status: { [Op.ne]: "CANCELLED" } };
+
+    if (!canViewAll) {
+      where.createdBy = user.id;
+    }
+
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) where.createdAt[Op.gte] = new Date(startDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        where.createdAt[Op.lte] = end;
+      }
+    }
+
+    const rows = await Sale.findAll({
+      where,
+      attributes: [
+        [sequelize.fn("DATE", sequelize.col("createdAt")), "date"],
+        [sequelize.fn("SUM", sequelize.col("sellingAmount")), "totalSelling"],
+        [sequelize.fn("COUNT", sequelize.col("id")), "salesCount"],
+      ],
+      group: [sequelize.fn("DATE", sequelize.col("createdAt"))],
+      order: [[sequelize.fn("DATE", sequelize.col("createdAt")), "ASC"]],
+      raw: true,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: rows.map((row) => ({
+        date: row.date,
+        totalSelling: parseFloat(row.totalSelling) || 0,
+        salesCount: parseInt(row.salesCount, 10) || 0,
+      })),
     });
   } catch (err) {
     return errorResponse(res, err);
@@ -126,7 +255,7 @@ exports.getSaleById = async (req, res) => {
   try {
     const { id } = req.params;
     const user = req.user;
-    const isAdmin = user && user.roleName === "Admin";
+    const canViewAll = user && (await canViewAllRecords(user, "/sells"));
 
     const sale = await Sale.findByPk(id, {
       include: [
@@ -141,10 +270,14 @@ exports.getSaleById = async (req, res) => {
           ],
         },
         { model: User, as: "creator", attributes: ["id", "name", "email"] },
+        { model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] },
         {
           model: Payment,
           as: "payments",
-          include: [{ model: User, as: "creator", attributes: ["id", "name"] }],
+          include: [
+            { model: User, as: "creator", attributes: ["id", "name"] },
+            { model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] },
+          ],
         },
       ],
       order: [[{ model: Payment, as: "payments" }, "createdAt", "ASC"]],
@@ -154,11 +287,12 @@ exports.getSaleById = async (req, res) => {
       return res.status(404).json({ success: false, message: "Sale not found" });
     }
 
-    if (!isAdmin && sale.createdBy !== user.id) {
+    if (!canViewAll && sale.createdBy !== user.id) {
       return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to view this sale" });
     }
 
-    return res.status(200).json({ success: true, data: sale });
+    const [data] = await attachLedgerBalances([sale]);
+    return res.status(200).json({ success: true, data });
   } catch (err) {
     return errorResponse(res, err);
   }
@@ -166,10 +300,11 @@ exports.getSaleById = async (req, res) => {
 
 // PUT /sells/:id — header edits only, never touches items/stock/fulfillment
 exports.updateSale = async (req, res) => {
+  const t = await sequelize.transaction();
   try {
     const { id } = req.params;
     const user = req.user;
-    const isAdmin = user && user.roleName === "Admin";
+    const canViewAll = user && (await canViewAllRecords(user, "/sells"));
 
     const {
       platform,
@@ -177,6 +312,7 @@ exports.updateSale = async (req, res) => {
       customerName,
       customerNumber,
       paymentMethod,
+      bankAccountId,
       city,
       fromAddress,
       pincode,
@@ -186,12 +322,14 @@ exports.updateSale = async (req, res) => {
       notes,
     } = req.body || {};
 
-    const sale = await Sale.findByPk(id);
+    const sale = await Sale.findByPk(id, { transaction: t, lock: true });
     if (!sale) {
+      await t.rollback();
       return res.status(404).json({ success: false, message: "Sale not found" });
     }
 
-    if (!isAdmin && sale.createdBy !== user.id) {
+    if (!canViewAll && sale.createdBy !== user.id) {
+      await t.rollback();
       return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to update this sale" });
     }
 
@@ -200,6 +338,9 @@ exports.updateSale = async (req, res) => {
     if (customerName !== undefined) sale.customerName = customerName;
     if (customerNumber !== undefined) sale.customerNumber = customerNumber;
     if (paymentMethod !== undefined) sale.paymentMethod = paymentMethod;
+    if (bankAccountId !== undefined) {
+      sale.bankAccountId = sale.paymentMethod === "BankTransfer" ? bankAccountId || null : null;
+    }
     if (city !== undefined) sale.city = city;
     if (fromAddress !== undefined) sale.fromAddress = fromAddress;
     if (pincode !== undefined) sale.pincode = pincode;
@@ -215,10 +356,30 @@ exports.updateSale = async (req, res) => {
       refundedAmount: parseFloat(sale.refundedAmount),
     });
 
-    await sale.save();
+    // Keep the customer's ledger debit in sync with this sale's own amount — otherwise editing
+    // sellingAmount here leaves the original CustomerLedgerEntry stale and the two screens
+    // (Sells vs. Debited/CustomerLedger) silently disagree on how much the customer owes.
+    if (sellingAmount !== undefined) {
+      await customerLedgerService.updateSaleDebit(sale.id, sale.customerId, sale.sellingAmount, {
+        transaction: t,
+        userId: user.id,
+      });
+    }
+
+    await sale.save({ transaction: t });
+
+    // Keep the linked Account → Income entry in sync with this edit (customer/payment/amount,
+    // or removed outright if this update just cancelled the sale) — see
+    // incomeSync.service.js#syncIncomeForSaleUpdate.
+    const incomeEntryDate = await syncIncomeForSaleUpdate(sale, { transaction: t });
+
+    await t.commit();
+
+    if (incomeEntryDate) await recalculateDay(incomeEntryDate);
 
     return res.status(200).json({ success: true, message: "Sale updated successfully", data: sale });
   } catch (err) {
+    if (!t.finished) await t.rollback();
     return errorResponse(res, err);
   }
 };
@@ -229,14 +390,14 @@ exports.deleteSale = async (req, res) => {
   try {
     const { id } = req.params;
     const user = req.user;
-    const isAdmin = user && user.roleName === "Admin";
+    const canViewAll = user && (await canViewAllRecords(user, "/sells"));
     const { defective, reason } = req.body || {};
 
     const sale = await Sale.findByPk(id);
     if (!sale) {
       return res.status(404).json({ success: false, message: "Sale not found" });
     }
-    if (!isAdmin && sale.createdBy !== user.id) {
+    if (!canViewAll && sale.createdBy !== user.id) {
       return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to cancel this sale" });
     }
 
@@ -253,80 +414,26 @@ exports.getPayments = async (req, res) => {
   try {
     const { id } = req.params;
     const user = req.user;
-    const isAdmin = user && user.roleName === "Admin";
+    const canViewAll = user && (await canViewAllRecords(user, "/sells"));
 
     const sale = await Sale.findByPk(id);
     if (!sale) {
       return res.status(404).json({ success: false, message: "Sale not found" });
     }
-    if (!isAdmin && sale.createdBy !== user.id) {
+    if (!canViewAll && sale.createdBy !== user.id) {
       return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to view this sale's payments" });
     }
 
     const payments = await Payment.findAll({
       where: { saleId: id },
-      include: [{ model: User, as: "creator", attributes: ["id", "name"] }],
+      include: [
+        { model: User, as: "creator", attributes: ["id", "name"] },
+        { model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] },
+      ],
       order: [["createdAt", "ASC"]],
     });
 
     return res.status(200).json({ success: true, data: payments });
-  } catch (err) {
-    return errorResponse(res, err);
-  }
-};
-
-// GET /sells/payments?search=&start_date=&end_date=&page=&limit=
-// Cross-sale ledger of every payment collected (Account section). Non-admin users only see
-// payments on sales they created, matching the ownership scoping used by getSales/getPayments.
-exports.getAllPayments = async (req, res) => {
-  try {
-    const user = req.user;
-    const isAdmin = user && user.roleName === "Admin";
-    const { search, start_date, end_date, page, limit } = req.query;
-
-    const where = {};
-    if (start_date || end_date) {
-      where.createdAt = {};
-      if (start_date) where.createdAt[Op.gte] = new Date(start_date);
-      if (end_date) {
-        const end = new Date(end_date);
-        end.setHours(23, 59, 59, 999);
-        where.createdAt[Op.lte] = end;
-      }
-    }
-
-    const saleWhere = {};
-    if (!isAdmin) saleWhere.createdBy = user.id;
-    if (search && search.trim()) {
-      saleWhere.customerName = { [Op.like]: `%${search.trim()}%` };
-    }
-
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
-    const offset = (pageNum - 1) * limitNum;
-
-    const { count, rows } = await Payment.findAndCountAll({
-      where,
-      include: [
-        { model: Sale, where: saleWhere, attributes: ["id", "customerName", "sellingAmount", "paymentStatus"] },
-        { model: User, as: "creator", attributes: ["id", "name"] },
-      ],
-      order: [["createdAt", "DESC"]],
-      limit: limitNum,
-      offset,
-      distinct: true,
-    });
-
-    return res.status(200).json({
-      success: true,
-      data: rows,
-      meta: {
-        page: pageNum,
-        limit: limitNum,
-        total: count,
-        totalPages: Math.ceil(count / limitNum) || 1,
-      },
-    });
   } catch (err) {
     return errorResponse(res, err);
   }
@@ -337,9 +444,9 @@ exports.recordPayment = async (req, res) => {
   try {
     const { id } = req.params;
     const user = req.user;
-    const { amount, method, notes } = req.body || {};
+    const { amount, method, bankAccountId, notes } = req.body || {};
 
-    const sale = await orderService.recordPayment({ saleId: id, amount, method, userId: user.id, notes });
+    const sale = await orderService.recordPayment({ saleId: id, amount, method, bankAccountId, userId: user.id, notes });
     return res.status(200).json({ success: true, message: "Payment recorded successfully", data: sale });
   } catch (err) {
     return errorResponse(res, err);

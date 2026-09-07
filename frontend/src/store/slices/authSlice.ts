@@ -15,6 +15,8 @@ export interface RoutePermission {
     canCreate: boolean;
     canUpdate: boolean;
     canDelete: boolean;
+    /** Sees ALL records on this module (e.g. all Sales/Couriers), not just its own */
+    viewAllRecords: boolean;
 }
 
 export interface AuthState {

@@ -1,6 +1,8 @@
-const { Route, Permission } = require("../models");
+const { Route, UserPermission } = require("../models");
 const { Op } = require("sequelize");
 
+// Access is granted per-user only (Settings → Route Setting) — there is no role-based
+// permission fallback. Absence of a UserPermission row for a route means no access.
 module.exports = (routeNameOrPath, action) => {
   // Normalize action name to canRead, canCreate, canUpdate, canDelete
   const actionKey = `can${action.charAt(0).toUpperCase()}${action.slice(1)}`; // "read" -> "canRead"
@@ -31,15 +33,14 @@ module.exports = (routeNameOrPath, action) => {
         return res.status(403).json({ success: false, message: "Insufficient permissions for this route" });
       }
 
-      // Look up permissions for user role and route
-      const permission = await Permission.findOne({
+      const userPermission = await UserPermission.findOne({
         where: {
-          roleId: user.roleId,
+          userId: user.id,
           routeId: route.id,
         },
       });
 
-      if (!permission || !permission[actionKey]) {
+      if (!userPermission || !userPermission[actionKey]) {
         return res.status(403).json({ success: false, message: "Insufficient permissions" });
       }
 

@@ -74,10 +74,18 @@ const Courier = sequelize.define(
     // Courier workflow pipeline: Pending -> Waiting for Stock -> In Progress -> Out for Delivery -> Done.
     // Waiting for Stock is a system-driven state (set/cleared by the shipment-group readiness
     // logic in inventory.service.js) — not one a Courier Employee picks manually.
+    // CANCELLED is system-set only (when the linked sale/order-item is cancelled — see
+    // order.service.js#cancelOrder/cancelOrderItem) — never a manually-pickable status.
     status: {
-      type: DataTypes.ENUM("PENDING", "WAITING_FOR_STOCK", "IN_PROGRESS", "OUT_FOR_DELIVERY", "DONE"),
+      type: DataTypes.ENUM("PENDING", "WAITING_FOR_STOCK", "IN_PROGRESS", "OUT_FOR_DELIVERY", "DONE", "CANCELLED"),
       allowNull: false,
       defaultValue: "PENDING",
+    },
+    // Independent classification of how this outgoing shipment is being handled — unrelated
+    // to the `status` pipeline above. Nullable/unset until the user picks one on create/edit.
+    deliveryMode: {
+      type: DataTypes.ENUM("OFFICE_PICKUP", "CHANGE", "PENDING", "FREE"),
+      allowNull: true,
     },
     pincode: {
       type: DataTypes.STRING,
@@ -156,6 +164,29 @@ const Courier = sequelize.define(
     shipmentType: {
       type: DataTypes.ENUM("SHIP_COMPLETE", "SHIP_AVAILABLE"),
       allowNull: true,
+    },
+
+    // Traceability link between an Incoming courier record and the Outgoing courier record
+    // auto-created for it when marked Done (see courier.controller.js#completeIncomingCourier).
+    // Set on the IN row to point at the new OUT row; null for every other record.
+    linkedCourierId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: "couriers",
+        key: "id",
+      },
+    },
+
+    // Snapshot of product availability at the moment this courier record was created — never
+    // recomputed from current inventory, so a later stock replenishment doesn't silently rewrite
+    // history (see orderService.createOrder, which derives this from the same allocated/requested
+    // comparison used for `status`). Null for manually-created entries (no product/stock linkage
+    // to check against) and for legacy rows created before this field existed.
+    productStockStatus: {
+      type: DataTypes.ENUM("IN_STOCK", "OUT_OF_STOCK"),
+      allowNull: true,
+      defaultValue: null,
     },
   },
   {

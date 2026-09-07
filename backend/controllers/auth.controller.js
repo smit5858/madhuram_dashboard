@@ -17,7 +17,7 @@ exports.login = async (req, res) => {
       include: { model: Role },
     });
 
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || user.deletedAt || (user.Role && !user.Role.isActive)) {
       return res
         .status(401)
         .json({ success: false, message: "Invalid credentials" });
@@ -97,7 +97,7 @@ exports.refreshToken = async (req, res) => {
       include: { model: Role },
     });
 
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || user.deletedAt || (user.Role && !user.Role.isActive)) {
       return res.status(401).json({ success: false, message: "User no longer active or exists" });
     }
 

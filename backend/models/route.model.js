@@ -17,6 +17,13 @@ const Route = sequelize.define(
       type: DataTypes.STRING,
       allowNull: false,
     },
+    // Parent grouping label for the Route Setting permission matrix (e.g. "Courier", "Account",
+    // "Setting"). Purely presentational — there is no parent-level Route/permission row; routes
+    // with no module render as flat top-level rows, same as before this column existed.
+    module: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
   },
   {
     tableName: "routes",

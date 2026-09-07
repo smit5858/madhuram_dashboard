@@ -3,6 +3,10 @@ const sequelize = require("../config/db");
 const { Sale, SaleItem, Product, Stock, StockMovement, SerialUnit, Customer, Courier, Payment } = require("../models");
 const inventoryService = require("./inventory.service");
 const { notify } = require("./notification.service");
+const { createIncomeForSale, removeIncomeForSale } = require("./incomeSync.service");
+const { recalculateDay } = require("./dailyBalance.service");
+const customerLedgerService = require("./customerLedger.service");
+const { recalculateCourierChargeForDates } = require("./courierCharge.service");
 
 // Sequential per-month invoice numbers, e.g. MM-202608-0001. Row-locked read of the last
 // invoice in the current month prevents two concurrent creates from colliding.
@@ -45,6 +49,7 @@ const createOrder = async ({
   customerName,
   customerNumber,
   paymentMethod,
+  bankAccountId,
   city,
   fromAddress,
   pincode,
@@ -139,6 +144,7 @@ const createOrder = async ({
         customerName: customerName.trim(),
         customerNumber: trimmedPhone,
         paymentMethod: paymentMethod || null,
+        bankAccountId: paymentMethod === "BankTransfer" ? bankAccountId || null : null,
         city: city || null,
         fromAddress: fromAddress || null,
         pincode: pincode || null,
@@ -160,6 +166,7 @@ const createOrder = async ({
           saleId: sale.id,
           amount: collected,
           method: paymentMethod || null,
+          bankAccountId: paymentMethod === "BankTransfer" ? bankAccountId || null : null,
           createdBy: userId,
         },
         { transaction: t }
@@ -236,6 +243,7 @@ const createOrder = async ({
           quantity: requested,
           pending: true,
           status: allocated >= requested ? "PENDING" : "WAITING_FOR_STOCK",
+          productStockStatus: allocated >= requested ? "IN_STOCK" : "OUT_OF_STOCK",
           courierName: null,
           trackId: null,
           direction: "OUT",
@@ -264,7 +272,30 @@ const createOrder = async ({
     await inventoryService.recomputeSaleFulfillmentStatus(sale.id, { transaction: t });
     await sale.reload({ transaction: t });
 
+    // Customer account ledger: a SALE debit for the full selling amount, plus a PAYMENT credit
+    // for whatever was collected up front — only when the sale resolved to a real Customer (no
+    // phone number given means no Customer row, and the ledger is customer-scoped). See
+    // customerLedger.service.js — the single place the running balance is computed everywhere.
+    if (finalCustomerId) {
+      await customerLedgerService.recordSaleDebit({ customerId: finalCustomerId, saleId: sale.id, amount: selling, userId }, { transaction: t });
+      if (collected > 0) {
+        await customerLedgerService.recordPayment(
+          { customerId: finalCustomerId, saleId: sale.id, amount: collected, paymentMethod: paymentMethod || null, bankAccountId, userId },
+          { transaction: t }
+        );
+      }
+    }
+
+    // Every Sale automatically creates exactly one Account → Income entry, in the same
+    // transaction as the sale itself (see incomeSync.service.js#createIncomeForSale).
+    const incomeEntryDate = await createIncomeForSale(sale, { transaction: t, userId });
+
     await t.commit();
+
+    // Feed the Account daily balance rollup (runs its own transaction — see
+    // dailyBalance.service.js). Kept out of the transaction above so the shared per-day
+    // balance row isn't locked for the whole order-creation transaction.
+    await recalculateDay(incomeEntryDate);
 
     const creatorName = "Sells Member";
     const dateFormatted = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
@@ -312,7 +343,7 @@ const createOrder = async ({
 
 // Records a payment/deposit. Never touches stock or fulfillment — payment and
 // fulfillment are fully independent state machines.
-const recordPayment = async ({ saleId, amount, method, userId, notes }) => {
+const recordPayment = async ({ saleId, amount, method, bankAccountId, userId, notes }) => {
   const parsedAmount = parseFloat(amount);
   if (isNaN(parsedAmount) || parsedAmount === 0) {
     const err = new Error("amount must be a non-zero number");
@@ -337,19 +368,30 @@ const recordPayment = async ({ saleId, amount, method, userId, notes }) => {
       collectedAmount: newCollected,
       refundedAmount: parseFloat(sale.refundedAmount),
     });
+    const effectiveMethod = method || sale.paymentMethod || null;
     if (method) sale.paymentMethod = method;
+    if (effectiveMethod === "BankTransfer") sale.bankAccountId = bankAccountId || sale.bankAccountId || null;
     await sale.save({ transaction: t });
 
     await Payment.create(
       {
         saleId: sale.id,
         amount: parsedAmount,
-        method: method || sale.paymentMethod || null,
+        method: effectiveMethod,
+        bankAccountId: effectiveMethod === "BankTransfer" ? bankAccountId || null : null,
         notes: notes || null,
         createdBy: userId,
       },
       { transaction: t }
     );
+
+    if (sale.customerId && parsedAmount !== 0) {
+      const ledgerRecordFn = parsedAmount > 0 ? customerLedgerService.recordPayment : customerLedgerService.recordAdjustment;
+      await ledgerRecordFn(
+        { customerId: sale.customerId, saleId: sale.id, amount: parsedAmount, paymentMethod: effectiveMethod, bankAccountId, note: notes, userId },
+        { transaction: t }
+      );
+    }
 
     await t.commit();
 
@@ -517,7 +559,37 @@ const cancelOrder = async ({ saleId, userId, reason, defective }) => {
     sale.fulfillmentStatus = "CANCELLED";
     await sale.save({ transaction: t });
 
+    // A cancelled order no longer represents a real debt — remove its SALE ledger entry so it
+    // stops counting against the customer's pending balance. Any payment already collected is
+    // left untouched (it becomes/stays credit, same as everywhere else in the ledger).
+    await customerLedgerService.removeSaleDebit(sale.id, { transaction: t });
+
+    // A cancelled order's courier record(s) would otherwise sit forever with their old
+    // status/pending:true, permanently inflating the Outgoing Couriers "Pending" count — mark
+    // them CANCELLED (and pending:false) too. A courier that already reached DONE (already
+    // shipped/delivered before this cancellation) is left alone.
+    const couriersToCancel = await Courier.findAll({
+      where: { saleId: sale.id, status: { [Op.ne]: "DONE" } },
+      attributes: ["entryDate"],
+      transaction: t,
+    });
+    await Courier.update(
+      { status: "CANCELLED", pending: false },
+      { where: { saleId: sale.id, status: { [Op.ne]: "DONE" } }, transaction: t }
+    );
+    // A CANCELLED courier drops out of the Courier Charge sum too — recalc whichever month(s)
+    // it belonged to.
+    await recalculateCourierChargeForDates(couriersToCancel.map((c) => c.entryDate), { transaction: t });
+
+    // A cancelled order no longer represents real income — remove its linked Account →
+    // Income entry so the daily balance stops counting it (see
+    // incomeSync.service.js#removeIncomeForSale).
+    const removedIncomeDate = await removeIncomeForSale(sale.id, { transaction: t });
+
     await t.commit();
+
+    if (removedIncomeDate) await recalculateDay(removedIncomeDate);
+
     return sale;
   } catch (err) {
     if (!t.finished) await t.rollback();
@@ -562,6 +634,18 @@ const cancelOrderItem = async ({ saleId, saleItemId, userId, reason, defective }
     item.backorderedQuantity = 0;
     item.fulfillmentStatus = "CANCELLED";
     await item.save({ transaction: t });
+
+    // Same courier-count fix as cancelOrder, scoped to this one line item's courier record(s).
+    const itemCouriersToCancel = await Courier.findAll({
+      where: { saleItemId: item.id, status: { [Op.ne]: "DONE" } },
+      attributes: ["entryDate"],
+      transaction: t,
+    });
+    await Courier.update(
+      { status: "CANCELLED", pending: false },
+      { where: { saleItemId: item.id, status: { [Op.ne]: "DONE" } }, transaction: t }
+    );
+    await recalculateCourierChargeForDates(itemCouriersToCancel.map((c) => c.entryDate), { transaction: t });
 
     await inventoryService.recomputeSaleFulfillmentStatus(saleId, { transaction: t });
 

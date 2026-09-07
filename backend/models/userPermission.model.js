@@ -1,19 +1,22 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../config/db");
 
-const Permission = sequelize.define(
-  "Permission",
+// Per-user permission — the sole source of route-level access for non-Admin users. Absence
+// of a row for a given (userId, routeId) means no access — see authorize.js and
+// permission.controller.js.
+const UserPermission = sequelize.define(
+  "UserPermission",
   {
     id: {
       type: DataTypes.INTEGER,
       primaryKey: true,
       autoIncrement: true,
     },
-    roleId: {
+    userId: {
       type: DataTypes.INTEGER,
       allowNull: false,
       references: {
-        model: "roles",
+        model: "users",
         key: "id",
       },
     },
@@ -41,17 +44,23 @@ const Permission = sequelize.define(
       type: DataTypes.BOOLEAN,
       defaultValue: false,
     },
+    // Per-user override of the role's viewAllRecords flag — see
+    // backend/helper/permissionScope.js.
+    viewAllRecords: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+    },
   },
   {
-    tableName: "permissions",
+    tableName: "user_permissions",
     timestamps: true,
     indexes: [
       {
         unique: true,
-        fields: ["roleId", "routeId"],
+        fields: ["userId", "routeId"],
       },
     ],
   }
 );
 
-module.exports = Permission;
+module.exports = UserPermission;

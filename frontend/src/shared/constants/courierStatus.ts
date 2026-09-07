@@ -1,4 +1,4 @@
-export type CourierStatus = "PENDING" | "WAITING_FOR_STOCK" | "IN_PROGRESS" | "OUT_FOR_DELIVERY" | "DONE";
+export type CourierStatus = "PENDING" | "WAITING_FOR_STOCK" | "IN_PROGRESS" | "OUT_FOR_DELIVERY" | "DONE" | "CANCELLED";
 export type ShipmentType = "SHIP_COMPLETE" | "SHIP_AVAILABLE";
 
 export const COURIER_STATUSES: CourierStatus[] = [
@@ -15,6 +15,7 @@ export const STATUS_LABEL: Record<CourierStatus, string> = {
     IN_PROGRESS: "In Progress",
     OUT_FOR_DELIVERY: "Out for Delivery",
     DONE: "Done",
+    CANCELLED: "Cancelled",
 };
 
 export const STATUS_BADGE_CLASS: Record<CourierStatus, string> = {
@@ -23,6 +24,7 @@ export const STATUS_BADGE_CLASS: Record<CourierStatus, string> = {
     IN_PROGRESS: "bg-blue-50 text-blue-700 border border-blue-100",
     OUT_FOR_DELIVERY: "bg-indigo-50 text-indigo-700 border border-indigo-100",
     DONE: "bg-green-50 text-green-700 border border-green-100",
+    CANCELLED: "bg-rose-50 text-rose-700 border border-rose-100",
 };
 
 /** Waiting for Stock is system-managed (see updateCourier's WAITING_FOR_STOCK guard) — it's
@@ -33,6 +35,7 @@ export const STATUS_HELPER: Record<CourierStatus, string> = {
     IN_PROGRESS: "Parcel created, awaiting pickup/processing.",
     OUT_FOR_DELIVERY: "Tracking ID assigned, on its way to the customer.",
     DONE: "Delivered — the seller will be notified.",
+    CANCELLED: "The linked order was cancelled — no further action needed.",
 };
 
 export const SHIPMENT_TYPE_LABEL: Record<ShipmentType, string> = {

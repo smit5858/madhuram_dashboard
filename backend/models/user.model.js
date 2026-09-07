@@ -24,7 +24,9 @@ const User = sequelize.define(
         },
         roleId: {
             type: DataTypes.INTEGER,
-            allowNull: false,
+            // Nullable: authorize.js treats a missing roleId as unauthorized, so this can never
+            // grant access — kept nullable only to avoid an FK constraint edge case.
+            allowNull: true,
             references: {
                 model: "roles",
                 key: "id",
@@ -40,10 +42,18 @@ const User = sequelize.define(
         },
         tokenInvalidatedAt: {
           type: DataTypes.DATE,
-          allowNull: true, 
+          allowNull: true,
         },
         refreshToken: {
           type: DataTypes.TEXT,
+          allowNull: true,
+        },
+        // Distinct from isActive: isActive is a reversible login toggle (user still shows in
+        // the Users table as "Inactive"). deletedAt marks the user as removed from the table
+        // (hidden from list/login) while keeping the row so historical records (sells, stock
+        // movements, etc.) still resolve the creator's name via the User association.
+        deletedAt: {
+          type: DataTypes.DATE,
           allowNull: true,
         },
     },

@@ -5,8 +5,9 @@ const authorize = require("../middlewares/authorize");
 const saleController = require("../controllers/sells.controller");
 
 router.get("/", authenticate, authorize("/sells", "read"), saleController.getSales);
+router.get("/export", authenticate, authorize("/sells", "read"), saleController.exportSales);
 router.get("/totals", authenticate, authorize("/sells", "read"), saleController.getSellsTotals);
-router.get("/payments", authenticate, authorize("/sells", "read"), saleController.getAllPayments);
+router.get("/daily-trend", authenticate, authorize("/sells", "read"), saleController.getSalesDailyTrend);
 router.post("/", authenticate, authorize("/sells", "create"), saleController.createSale);
 router.get("/:id", authenticate, authorize("/sells", "read"), saleController.getSaleById);
 router.put("/:id", authenticate, authorize("/sells", "update"), saleController.updateSale);

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
+import { useNavigate } from "react-router-dom";
 import { Bell, CheckCheck, Package, DollarSign, Truck } from "lucide-react";
 import type { RootState } from "@/store/store";
 import {
@@ -23,10 +24,23 @@ const LIVE_NOTIFICATION_EVENTS = [
   "order_fulfilled",
   "backorder_allocated",
   "order_delivered",
+  "expense_pending_approval",
+  "expense_approved",
+  "expense_rejected",
 ] as const;
+
+// Notification types that navigate somewhere when clicked — the Admin-facing Expense approval
+// alert plus the submitter-facing approve/reject alerts (see expense.controller.js /
+// courier.controller.js#completeIncomingCourier).
+const NOTIFICATION_TYPE_ROUTE: Record<string, string> = {
+  EXPENSE_PENDING_APPROVAL: "/account/expense",
+  EXPENSE_APPROVED: "/account/expense",
+  EXPENSE_REJECTED: "/account/expense",
+};
 
 const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
   const { items, unreadCount } = useSelector(
     (state: RootState) => state.notifications
   );
@@ -94,6 +108,15 @@ const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
     }
   };
 
+  const handleNotificationClick = (n: NotificationData) => {
+    if (!n.isRead) handleMarkAsRead(n.id);
+    const route = NOTIFICATION_TYPE_ROUTE[n.type];
+    if (route) {
+      setIsOpen(false);
+      navigate(route);
+    }
+  };
+
   const handleMarkAllRead = async () => {
     try {
       await notificationService.markAllRead(
@@ -106,6 +129,9 @@ const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
   };
 
   const getNotificationIcon = (type: string, recipientModule: string) => {
+    if (type === "EXPENSE_PENDING_APPROVAL") {
+      return <DollarSign className="h-4 w-4 text-rose-500" />;
+    }
     if (recipientModule === "couriers") {
       return <Truck className="h-4 w-4 text-blue-500" />;
     }
@@ -169,7 +195,7 @@ const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
               items.map((n: NotificationData) => (
                 <div
                   key={n.id}
-                  onClick={() => !n.isRead && handleMarkAsRead(n.id)}
+                  onClick={() => handleNotificationClick(n)}
                   className={`flex gap-3 p-3.5 transition hover:bg-slate-50 cursor-pointer ${
                     !n.isRead ? "bg-blue-50/40" : "bg-white"
                   }`}
