@@ -18,6 +18,7 @@ const Payment = require("./payment.model");
 const AccountEntry = require("./accountEntry.model");
 const DailyAccountBalance = require("./dailyBalance.model");
 const BankAccount = require("./bankAccount.model");
+const SaleBankAccount = require("./saleBankAccount.model");
 const CustomerLedgerEntry = require("./customerLedgerEntry.model");
 const PendingBill = require("./pendingBill.model");
 const PendingBillPayment = require("./pendingBillPayment.model");
@@ -127,6 +128,15 @@ Sale.belongsTo(BankAccount, { foreignKey: "bankAccountId", as: "bankAccount" });
 BankAccount.hasMany(Payment, { foreignKey: "bankAccountId" });
 Payment.belongsTo(BankAccount, { foreignKey: "bankAccountId", as: "bankAccount" });
 
+// Sale ↔ BankAccount payment allocation: the Sale form's paid amount can be split across
+// multiple bank accounts, each row carrying its own amount (see saleBankAccount.model.js) — a
+// plain many-to-many would lose the amount, so this is a hasMany/belongsTo through the join
+// model directly rather than Sequelize's belongsToMany.
+Sale.hasMany(SaleBankAccount, { foreignKey: "saleId", as: "bankPayments", onDelete: "CASCADE" });
+SaleBankAccount.belongsTo(Sale, { foreignKey: "saleId" });
+SaleBankAccount.belongsTo(BankAccount, { foreignKey: "bankAccountId", as: "bankAccount" });
+BankAccount.hasMany(SaleBankAccount, { foreignKey: "bankAccountId" });
+
 // Customer ↔ CustomerLedgerEntry (the running account ledger) + Sale (traceability only, not
 // used for balance calc) + User (createdBy) + BankAccount (BankTransfer entries)
 Customer.hasMany(CustomerLedgerEntry, { foreignKey: "customerId", as: "ledgerEntries" });
@@ -174,6 +184,12 @@ Lead.belongsTo(Platform, { foreignKey: "platformId", as: "platform" });
 Product.hasMany(Lead, { foreignKey: "productId" });
 Lead.belongsTo(Product, { foreignKey: "productId", as: "product" });
 
+// Lead ↔ Sale: the Sell auto-created when a Lead's status is set to Complete (see
+// lead.controller.js#ensureSaleForLead) — at most one per Lead, enforced by the unique index on
+// Sale.leadId.
+Lead.hasOne(Sale, { foreignKey: "leadId", as: "sale" });
+Sale.belongsTo(Lead, { foreignKey: "leadId", as: "lead" });
+
 module.exports = {
   User,
   Role,
@@ -195,6 +211,7 @@ module.exports = {
   AccountEntry,
   DailyAccountBalance,
   BankAccount,
+  SaleBankAccount,
   CustomerLedgerEntry,
   PendingBill,
   PendingBillPayment,

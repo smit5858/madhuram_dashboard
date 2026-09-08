@@ -42,16 +42,25 @@ export type CreateNonSerialFormValues = z.infer<typeof createNonSerialSchema>;
 
 const serialUnitRowSchema = z.object({
   serialNumber: z.string().min(1, "Serial number is required"),
-  purchasePrice: optionalAmountField,
-  sellingPrice: optionalAmountField,
-  purchaseDate: z.string().optional(),
 });
 
-// Create — SERIALIZED: product + optional starting batch of individually-priced units.
+// Every unit in the same batch shares one purchase price/selling price — only the serial
+// number differs — so uniqueness is checked across the batch rather than per row.
+const uniqueSerialNumbers = (units: { serialNumber: string }[]) => {
+  const trimmed = units.map((u) => u.serialNumber.trim().toLowerCase()).filter(Boolean);
+  return new Set(trimmed).size === trimmed.length;
+};
+
+// Create — SERIALIZED: product + optional starting batch of units sharing one purchase/selling price.
 export const createSerializedSchema = z.object({
   name: nameField,
   description: descriptionField,
-  units: z.array(serialUnitRowSchema).optional(),
+  purchasePrice: optionalAmountField,
+  sellingPrice: optionalAmountField,
+  units: z
+    .array(serialUnitRowSchema)
+    .optional()
+    .refine((units) => !units || uniqueSerialNumbers(units), { message: "Serial numbers must be unique" }),
 });
 
 export type CreateSerializedFormValues = z.infer<typeof createSerializedSchema>;
@@ -88,7 +97,12 @@ export const receiveNonSerialStockSchema = z.object({
 export type ReceiveNonSerialStockFormValues = z.infer<typeof receiveNonSerialStockSchema>;
 
 export const receiveSerializedStockSchema = z.object({
-  units: z.array(serialUnitRowSchema).min(1, "Add at least one serial unit"),
+  purchasePrice: optionalAmountField,
+  sellingPrice: optionalAmountField,
+  units: z
+    .array(serialUnitRowSchema)
+    .min(1, "Add at least one serial unit")
+    .refine(uniqueSerialNumbers, { message: "Serial numbers must be unique" }),
 });
 
 export type ReceiveSerializedStockFormValues = z.infer<typeof receiveSerializedStockSchema>;

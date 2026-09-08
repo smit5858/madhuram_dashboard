@@ -1,7 +1,8 @@
-const { Lead, Platform, Product, User } = require("../models");
+const { Lead, Platform, Product, Stock, User, Sale } = require("../models");
 const { Op } = require("sequelize");
 const { canViewAllRecords } = require("../helper/permissionScope");
 const { notify } = require("../services/notification.service");
+const orderService = require("../services/order.service");
 
 const ROUTE_PATH = "/leads";
 
@@ -12,7 +13,55 @@ const LEAD_INCLUDE = [
   { model: Product, as: "product", attributes: ["id", "name"] },
   { model: User, as: "salesEmployee", attributes: ["id", "name"] },
   { model: User, as: "approver", attributes: ["id", "name"] },
+  { model: Sale, as: "sale", attributes: ["id", "invoiceNumber", "status", "sellingAmount", "collectedAmount", "pendingAmount"] },
 ];
+
+// Auto-creates the Sell for a Lead whose status is Complete (see createLead/updateLead below).
+// Idempotent: a Lead has at most one linked Sale (unique index on Sale.leadId), so this is safe
+// to call every time the lead is saved as Complete, not just on the first transition.
+// The Sale is owned by the lead's own creator (not necessarily the caller — an Admin can flip
+// another employee's lead to Complete) so it correctly counts under that employee's own Sells.
+// A failure here must never fail the Lead save itself — it's logged and swallowed.
+const ensureSaleForLead = async (lead) => {
+  const existing = await Sale.findOne({ where: { leadId: lead.id } });
+  if (existing) return existing;
+
+  try {
+    // Seed the line item at the product's own configured price (its "tag price" — Stock.sellingPrice
+    // for a NON_SERIAL product) instead of ₹0, so the Sales member opens a sale that already
+    // reflects the product's real price and only needs to confirm/adjust it, not look it up and
+    // type it in from scratch. SERIALIZED products have no single product-level price (pricing is
+    // per unit — see product.controller.js#serializeProduct), so those still start at 0.
+    const product = await Product.findByPk(lead.productId, { include: [Stock] });
+    const initialSellingPrice = product && product.productType === "NON_SERIAL" && product.Stock ? parseFloat(product.Stock.sellingPrice) || 0 : 0;
+
+    const sale = await orderService.createOrder({
+      customerName: lead.customerName,
+      customerNumber: lead.phone,
+      city: lead.city,
+      fromAddress: lead.address,
+      sellingAmount: 0,
+      collectedAmount: 0,
+      items: [{ productId: lead.productId, quantity: lead.quantity, sellingPrice: initialSellingPrice }],
+      userId: lead.createdBy,
+      leadId: lead.id,
+      // Only the Sale itself gets created here — no Courier entry (the assigned Sales member
+      // opts into shipping via the checkbox once the sale's real details are filled in) and no
+      // Account entry (nothing to book yet at sellingAmount/collectedAmount 0; the entry is
+      // created automatically the first time the Sales member saves real amounts — see
+      // incomeSync.service.js#syncIncomeForSaleUpdate).
+      createCourierEntry: false,
+      createAccountEntry: false,
+    });
+    return sale;
+  } catch (err) {
+    if (err.name === "SequelizeUniqueConstraintError") {
+      return Sale.findOne({ where: { leadId: lead.id } });
+    }
+    console.error(`Failed to auto-create Sell for Lead #${lead.id}:`, err);
+    return null;
+  }
+};
 
 const VALID_STATUSES = ["PENDING", "PROGRESS", "COMPLETED", "INCOMPLETED", "NOT_INTERESTED"];
 const VALID_APPROVAL_STATUSES = ["PENDING", "APPROVED", "REJECTED"];
@@ -50,6 +99,8 @@ const serializeLead = (row) => ({
   createdBy: row.createdBy,
   salesEmployee: row.salesEmployee || null,
   approver: row.approver || null,
+  saleId: row.sale?.id || null,
+  sale: row.sale || null,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 });
@@ -265,6 +316,12 @@ exports.createLead = async (req, res) => {
       ]);
     }
 
+    // Sell auto-creation doesn't wait on Admin approval — a lead saved as Complete gets its
+    // Sell immediately, approved or not.
+    if (lead.status === "COMPLETED") {
+      await ensureSaleForLead(lead);
+    }
+
     const leadWithIncludes = await Lead.findByPk(lead.id, { include: LEAD_INCLUDE });
     return res.status(201).json({ success: true, message: "Lead created successfully", data: serializeLead(leadWithIncludes) });
   } catch (err) {
@@ -295,6 +352,11 @@ exports.updateLead = async (req, res) => {
     if (!product) return res.status(400).json({ success: false, message: "Selected product does not exist" });
 
     await lead.update(pickLeadFields(req.body));
+
+    // Same as createLead — see ensureSaleForLead.
+    if (lead.status === "COMPLETED") {
+      await ensureSaleForLead(lead);
+    }
 
     const leadWithIncludes = await Lead.findByPk(lead.id, { include: LEAD_INCLUDE });
     return res.status(200).json({ success: true, message: "Lead updated successfully", data: serializeLead(leadWithIncludes) });

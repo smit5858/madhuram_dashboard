@@ -12,6 +12,8 @@ export interface ProductData {
   description: string | null;
   productType: ProductType;
   isActive: boolean;
+  /** false for products quick-added from the Sells form without "Save as New Product". */
+  isMasterProduct: boolean;
   /** Currently on-hand/available count. NON_SERIAL: quantity - reserved. SERIALIZED: count of AVAILABLE units. */
   currentStock: number;
   reserved: number;
@@ -42,15 +44,27 @@ export interface SerialUnitDetail {
   invoiceNumber: string | null;
 }
 
+export interface PurchaseHistoryEntry {
+  id: number;
+  purchaseDate: string | null;
+  quantity: number;
+  purchaseAmount: number | null;
+}
+
 export interface ProductDetail extends ProductData {
   total?: number;
   units?: SerialUnitDetail[];
+  /** NON_SERIAL only — one row per purchase date, merging same-day restock batches. */
+  purchases?: PurchaseHistoryEntry[];
 }
 
 export interface ProductFilters {
   search?: string;
   productType?: ProductType | "";
   status?: "active" | "inactive" | "";
+  /** Excludes products quick-added from the Sells form without "Save as New Product" — those
+   *  are scoped to one sale and shouldn't clutter the master product catalog. */
+  masterOnly?: boolean;
   page?: number;
   limit?: number;
 }
@@ -81,6 +95,10 @@ export interface CreateProductPayload {
   purchaseDate?: string;
   // SERIALIZED
   units?: CreateUnitInput[];
+  /** Defaults to true server-side. Sent as `false` only by the Sells quick-add modal when
+   *  "Save as New Product" is unchecked — the product backs that one sale only and is left
+   *  out of the master product catalog. */
+  isMasterProduct?: boolean;
 }
 
 export interface UpdateProductPayload {

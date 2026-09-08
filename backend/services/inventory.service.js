@@ -714,7 +714,7 @@ const receiveStock = async (
           status: "AVAILABLE",
           purchasePrice: u.purchasePrice ?? null,
           sellingPrice: u.sellingPrice ?? null,
-          purchaseDate: u.purchaseDate ?? null,
+          purchaseDate: u.purchaseDate ?? new Date(),
           dealerId: u.dealerId ?? null,
           receivedAt: new Date(),
           createdBy: userId,
@@ -794,9 +794,21 @@ const allocateBackorders = async (productId, { transaction } = {}) => {
 
     // After an item's allocation changes, re-check whether its linked courier shipment (and the
     // whole shipment group it belongs to, for SHIP_COMPLETE orders) is now ready to fulfill.
+    // A sale created with "Create Courier Entry" off has no Courier row at all — such an item
+    // isn't part of any shipment group, so it's fulfilled directly the moment it's no longer
+    // backordered rather than waiting on group readiness.
     const recheckCourierForItem = async (item) => {
       const courier = await Courier.findOne({ where: { saleItemId: item.id }, transaction: t, lock: true });
-      if (!courier || !courier.shipmentGroupId) return;
+      if (!courier) {
+        if (item.backorderedQuantity === 0 && item.allocatedQuantity > 0) {
+          await fulfillStock(
+            { productId: item.productId, saleItemId: item.id, quantity: item.allocatedQuantity, userId: null },
+            { transaction: t }
+          );
+        }
+        return;
+      }
+      if (!courier.shipmentGroupId) return;
       const result = await tryFulfillReadyGroup(courier.shipmentGroupId, { userId: null, transaction: t });
       if (result.becameReady) readyShipmentGroupIds.add(courier.shipmentGroupId);
     };

@@ -15,6 +15,8 @@ router.delete("/:id", authenticate, authorize("/sells", "delete"), saleControlle
 
 router.get("/:id/payments", authenticate, authorize("/sells", "read"), saleController.getPayments);
 router.post("/:id/payments", authenticate, authorize("/sells", "update"), saleController.recordPayment);
+router.post("/:id/items", authenticate, authorize("/sells", "update"), saleController.addSaleItem);
+router.put("/:id/items/:itemId", authenticate, authorize("/sells", "update"), saleController.updateSaleItem);
 router.post("/:id/items/:itemId/return", authenticate, authorize("/sells", "update"), saleController.returnOrderItem);
 router.post("/:id/items/:itemId/cancel", authenticate, authorize("/sells", "update"), saleController.cancelOrderItem);
 

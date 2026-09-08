@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
+import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Field, Form, Formik, useFormikContext, type FormikProps } from "formik";
-import { AlertTriangle, Edit2, Eye, Plus, RotateCcw, Search as SearchIcon, Trash2, UserSquare2 } from "lucide-react";
+import { AlertTriangle, Edit2, Eye, Plus, RotateCcw, Search as SearchIcon, ShoppingBag, Trash2, UserSquare2 } from "lucide-react";
 import type { RootState } from "@/store/store";
 import leadService, { type LeadData, type LeadFilters } from "@/services/lead.service";
 import platformService from "@/services/platform.service";
@@ -90,6 +91,7 @@ const FilterSync = ({ setAppliedFilters }: { setAppliedFilters: React.Dispatch<R
 
 const Leads = () => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const { permissions, role, userId } = useSelector((state: RootState) => state.auth);
   const isAdmin = role === "Admin";
 
@@ -401,6 +403,16 @@ const Leads = () => {
                           >
                             <Eye className="h-4 w-4" />
                           </button>
+                          {lead.status === "COMPLETED" && lead.sale?.id && (
+                            <button
+                              type="button"
+                              onClick={() => navigate(`/sells?openSaleId=${lead.sale!.id}`)}
+                              className="rounded-lg p-1.5 text-emerald-600 hover:bg-emerald-50"
+                              title="Open Sell"
+                            >
+                              <ShoppingBag className="h-4 w-4" />
+                            </button>
+                          )}
                           {canEditRow && (
                             <button
                               type="button"

@@ -1,6 +1,6 @@
 const { Op } = require("sequelize");
 const sequelize = require("../config/db");
-const { Sale, SaleItem, Product, Stock, StockMovement, SerialUnit, Customer, Courier, Payment } = require("../models");
+const { Sale, SaleItem, Product, Stock, StockMovement, SerialUnit, Customer, Courier, Payment, SaleBankAccount } = require("../models");
 const inventoryService = require("./inventory.service");
 const { notify } = require("./notification.service");
 const { createIncomeForSale, removeIncomeForSale } = require("./incomeSync.service");
@@ -32,6 +32,35 @@ const generateInvoiceNumber = async (t) => {
   return `${prefix}-${String(seq).padStart(4, "0")}`;
 };
 
+// Validates and normalizes a sale's bank-payment allocation rows — each {bankAccountId, amount}
+// pair must name a bank account and a positive amount, and the rows may never claim more than
+// what was actually collected on the sale (the same bank account can appear more than once;
+// rows are never merged). Shared by createOrder below and sells.controller.js#updateSale.
+const normalizeBankPayments = (bankPayments, collectedAmount) => {
+  if (!Array.isArray(bankPayments)) return [];
+
+  const rows = bankPayments
+    .filter((row) => row && row.bankAccountId)
+    .map((row) => ({ bankAccountId: Number(row.bankAccountId), amount: parseFloat(row.amount) || 0 }));
+
+  for (const row of rows) {
+    if (!row.amount || row.amount <= 0) {
+      const err = new Error("Each bank account payment row must have an amount greater than 0");
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+
+  const total = rows.reduce((sum, row) => sum + row.amount, 0);
+  if (total > collectedAmount + 0.01) {
+    const err = new Error("Bank account payment amounts cannot exceed the collected amount");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  return rows;
+};
+
 const computePaymentStatus = ({ sellingAmount, collectedAmount, refundedAmount }) => {
   if (refundedAmount > 0 && refundedAmount >= collectedAmount) return "REFUNDED";
   if (refundedAmount > 0 && refundedAmount < collectedAmount) return "PARTIALLY_REFUNDED";
@@ -49,7 +78,7 @@ const createOrder = async ({
   customerName,
   customerNumber,
   paymentMethod,
-  bankAccountId,
+  bankPayments,
   city,
   fromAddress,
   pincode,
@@ -58,6 +87,9 @@ const createOrder = async ({
   notes,
   items,
   userId,
+  createCourierEntry = true,
+  createAccountEntry = true,
+  leadId,
 }) => {
   if (!customerName || !customerName.trim()) {
     const err = new Error("Customer name is required");
@@ -83,6 +115,13 @@ const createOrder = async ({
     const collected = parseFloat(collectedAmount) || 0;
     const pending = Math.max(0, selling - collected);
     const paymentStatus = computePaymentStatus({ sellingAmount: selling, collectedAmount: collected, refundedAmount: 0 });
+
+    // Bank Account field — shown every time regardless of Payment Method, optional, and lets
+    // the collected amount be split across multiple bank accounts (each with its own amount —
+    // see saleBankAccount.model.js). bankAccountId is kept in sync as the first allocation's
+    // bank for any reader that still uses the legacy single-account column.
+    const bankPaymentRows = normalizeBankPayments(bankPayments, collected);
+    const bankAccountId = bankPaymentRows[0]?.bankAccountId || null;
 
     // Customer resolve-or-create, same pattern as before
     let finalCustomerId = inputCustomerId || null;
@@ -144,7 +183,7 @@ const createOrder = async ({
         customerName: customerName.trim(),
         customerNumber: trimmedPhone,
         paymentMethod: paymentMethod || null,
-        bankAccountId: paymentMethod === "BankTransfer" ? bankAccountId || null : null,
+        bankAccountId,
         city: city || null,
         fromAddress: fromAddress || null,
         pincode: pincode || null,
@@ -156,9 +195,17 @@ const createOrder = async ({
         status: "PENDING",
         notes: notes || null,
         createdBy: userId,
+        leadId: leadId || null,
       },
       { transaction: t }
     );
+
+    if (bankPaymentRows.length > 0) {
+      await SaleBankAccount.bulkCreate(
+        bankPaymentRows.map((row) => ({ saleId: sale.id, bankAccountId: row.bankAccountId, amount: row.amount })),
+        { transaction: t }
+      );
+    }
 
     if (collected > 0) {
       await Payment.create(
@@ -166,7 +213,7 @@ const createOrder = async ({
           saleId: sale.id,
           amount: collected,
           method: paymentMethod || null,
-          bankAccountId: paymentMethod === "BankTransfer" ? bankAccountId || null : null,
+          bankAccountId,
           createdBy: userId,
         },
         { transaction: t }
@@ -231,42 +278,61 @@ const createOrder = async ({
       // Fully-allocated lines start Pending; anything still backordered starts Waiting for
       // Stock. All lines from this sale share one shipment group (defaulting to "wait for the
       // complete order") until the Courier Employee splits it via updateShipmentType.
-      const courier = await Courier.create(
-        {
-          customerName: customerName.trim(),
-          name: customerName.trim(),
-          address: fromAddress || null,
-          city: city || null,
-          mobileNo: trimmedPhone,
-          phone: trimmedPhone,
-          productName: product.name,
-          quantity: requested,
-          pending: true,
-          status: allocated >= requested ? "PENDING" : "WAITING_FOR_STOCK",
-          productStockStatus: allocated >= requested ? "IN_STOCK" : "OUT_OF_STOCK",
-          courierName: null,
-          trackId: null,
-          direction: "OUT",
-          userId,
-          saleId: sale.id,
-          saleItemId: saleItem.id,
-          shipmentGroupId,
-          shipmentType: "SHIP_COMPLETE",
-        },
-        { transaction: t }
-      );
+      // Skipped entirely when the caller opted out via createCourierEntry (e.g. a walk-in sale
+      // that doesn't need shipping) — the line is fulfilled directly below instead of waiting
+      // on shipment-group readiness.
+      const courier = createCourierEntry
+        ? await Courier.create(
+            {
+              customerName: customerName.trim(),
+              name: customerName.trim(),
+              address: fromAddress || null,
+              city: city || null,
+              mobileNo: trimmedPhone,
+              phone: trimmedPhone,
+              productName: product.name,
+              quantity: requested,
+              pending: true,
+              status: allocated >= requested ? "PENDING" : "WAITING_FOR_STOCK",
+              productStockStatus: allocated >= requested ? "IN_STOCK" : "OUT_OF_STOCK",
+              courierName: null,
+              trackId: null,
+              direction: "OUT",
+              userId,
+              saleId: sale.id,
+              saleItemId: saleItem.id,
+              shipmentGroupId,
+              shipmentType: "SHIP_COMPLETE",
+            },
+            { transaction: t }
+          )
+        : null;
 
       createdLines.push({ saleItem, product, courier });
     }
 
-    // Fulfills the group immediately if every line was fully allocated (the common
-    // single/all-in-stock case) — a no-op if anything above came back backordered.
-    await inventoryService.tryFulfillReadyGroup(shipmentGroupId, { userId, transaction: t });
+    if (createCourierEntry) {
+      // Fulfills the group immediately if every line was fully allocated (the common
+      // single/all-in-stock case) — a no-op if anything above came back backordered.
+      await inventoryService.tryFulfillReadyGroup(shipmentGroupId, { userId, transaction: t });
+    } else {
+      // No courier/shipment to coordinate around — fulfill each line's allocated quantity as
+      // soon as it's reserved instead of waiting on group readiness. Anything still backordered
+      // stays that way and gets picked up by the normal backorder sweep when stock arrives.
+      for (const { saleItem } of createdLines) {
+        if (saleItem.allocatedQuantity > 0) {
+          await inventoryService.fulfillStock(
+            { productId: saleItem.productId, saleItemId: saleItem.id, quantity: saleItem.allocatedQuantity, userId },
+            { transaction: t }
+          );
+        }
+      }
+    }
 
     const itemsResult = [];
     for (const { saleItem, product, courier } of createdLines) {
       await saleItem.reload({ transaction: t });
-      itemsResult.push({ ...saleItem.toJSON(), productName: product.name, productType: product.productType, courierId: courier.id });
+      itemsResult.push({ ...saleItem.toJSON(), productName: product.name, productType: product.productType, courierId: courier ? courier.id : null });
     }
 
     await inventoryService.recomputeSaleFulfillmentStatus(sale.id, { transaction: t });
@@ -287,15 +353,18 @@ const createOrder = async ({
     }
 
     // Every Sale automatically creates exactly one Account → Income entry, in the same
-    // transaction as the sale itself (see incomeSync.service.js#createIncomeForSale).
-    const incomeEntryDate = await createIncomeForSale(sale, { transaction: t, userId });
+    // transaction as the sale itself (see incomeSync.service.js#createIncomeForSale) — unless
+    // the caller opted out (e.g. a Lead auto-creating its placeholder Sale with nothing to book
+    // yet). The entry is created later instead, the first time real amounts are saved — see
+    // incomeSync.service.js#syncIncomeForSaleUpdate.
+    const incomeEntryDate = createAccountEntry ? await createIncomeForSale(sale, { transaction: t, userId }) : null;
 
     await t.commit();
 
     // Feed the Account daily balance rollup (runs its own transaction — see
     // dailyBalance.service.js). Kept out of the transaction above so the shared per-day
     // balance row isn't locked for the whole order-creation transaction.
-    await recalculateDay(incomeEntryDate);
+    if (incomeEntryDate) await recalculateDay(incomeEntryDate);
 
     const creatorName = "Sells Member";
     const dateFormatted = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
@@ -322,17 +391,22 @@ const createOrder = async ({
         event: "new_sale",
         payload: { sale: { id: sale.id, invoiceNumber, customerName, sellingAmount: selling, collectedAmount: collected, pendingAmount: pending } },
       },
-      {
-        recipientModule: "couriers",
-        type: "NEW_SALE",
-        title: "New Sales Entry",
-        message: `Customer: ${customerName}\nCity: ${city || "—"}\nProducts: ${productSummary}\nAmount: ₹${selling.toFixed(2)}\nPayment: ${paymentMethod || "—"}`,
-        referenceType: "sale",
-        referenceId: sale.id,
-        event: "new_sale",
-        payload: { sale: { id: sale.id, invoiceNumber, customerName, city } },
-      },
-    ]);
+      // Nothing for the couriers module to act on when no Courier record was created for this sale.
+      ...(createCourierEntry
+        ? [
+            {
+              recipientModule: "couriers",
+              type: "NEW_SALE",
+              title: "New Sales Entry",
+              message: `Customer: ${customerName}\nCity: ${city || "—"}\nProducts: ${productSummary}\nAmount: ₹${selling.toFixed(2)}\nPayment: ${paymentMethod || "—"}`,
+              referenceType: "sale",
+              referenceId: sale.id,
+              event: "new_sale",
+              payload: { sale: { id: sale.id, invoiceNumber, customerName, city } },
+            },
+          ]
+        : []),
+    ].filter((n) => createAccountEntry || n.recipientModule !== "account"));
 
     return { ...sale.toJSON(), items: itemsResult };
   } catch (err) {
@@ -704,11 +778,314 @@ const returnItem = async ({ saleItemId, quantity, userId, reason, refundAmount, 
   }
 };
 
+// Adds a new product line to an existing, non-cancelled Sale — lets a Sales member finish
+// filling in a Sale after the fact (e.g. a Lead-originated Sale that started with just one
+// placeholder line — see lead.controller.js#ensureSaleForLead). Mirrors the per-item logic in
+// createOrder: reserves stock and, only if the sale already has active Courier tracking for its
+// other lines (mirroring whatever "Create Courier Entry" currently resolves to for this sale —
+// see setCourierEntryForSale), adds this line to the same shipment group; otherwise fulfills
+// whatever was allocated directly, same as a courier-less sale.
+const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialNumbers, userId }) => {
+  const t = await sequelize.transaction();
+  try {
+    const sale = await Sale.findByPk(saleId, { transaction: t, lock: true });
+    if (!sale) {
+      const err = new Error("Sale not found");
+      err.statusCode = 404;
+      throw err;
+    }
+    if (sale.status === "CANCELLED") {
+      const err = new Error("Cannot add items to a cancelled sale");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const requested = parseInt(quantity);
+    if (!productId || !requested || requested < 1) {
+      const err = new Error("A valid productId and quantity >= 1 are required");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const product = await Product.findByPk(productId, { transaction: t });
+    if (!product) {
+      const err = new Error(`Product ID ${productId} not found`);
+      err.statusCode = 404;
+      throw err;
+    }
+    if (serialNumbers && product.productType !== "SERIALIZED") {
+      const err = new Error(`${product.name} is not a serial-tracked product — remove the selected serial numbers`);
+      err.statusCode = 400;
+      throw err;
+    }
+    if (serialNumbers && serialNumbers.length !== requested) {
+      const err = new Error(`Selected serial numbers (${serialNumbers.length}) must match the quantity (${requested})`);
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const saleItem = await SaleItem.create(
+      {
+        saleId: sale.id,
+        productId,
+        quantity: requested,
+        sellingPrice: parseFloat(sellingPrice) || 0,
+        fulfillmentStatus: "PENDING",
+        allocatedQuantity: 0,
+        fulfilledQuantity: 0,
+        backorderedQuantity: 0,
+      },
+      { transaction: t }
+    );
+
+    const reserveResult = await inventoryService.reserveStock(
+      { productId, saleItemId: saleItem.id, quantity: requested, userId, serialNumbers },
+      { transaction: t }
+    );
+    saleItem.allocatedQuantity = reserveResult.allocated;
+    saleItem.backorderedQuantity = reserveResult.backordered;
+    saleItem.fulfillmentStatus = inventoryService.computeItemFulfillmentStatus(saleItem);
+    await saleItem.save({ transaction: t });
+
+    const existingActiveCourier = await Courier.findOne({
+      where: { saleId: sale.id, status: { [Op.ne]: "CANCELLED" } },
+      transaction: t,
+    });
+
+    let courier = null;
+    if (existingActiveCourier) {
+      const shipmentGroupId = existingActiveCourier.shipmentGroupId || `SALE-${sale.id}`;
+      const ready = saleItem.backorderedQuantity === 0;
+      courier = await Courier.create(
+        {
+          customerName: sale.customerName,
+          name: sale.customerName,
+          address: sale.fromAddress || null,
+          city: sale.city || null,
+          mobileNo: sale.customerNumber,
+          phone: sale.customerNumber,
+          productName: product.name,
+          quantity: requested,
+          pending: true,
+          status: ready ? "PENDING" : "WAITING_FOR_STOCK",
+          productStockStatus: ready ? "IN_STOCK" : "OUT_OF_STOCK",
+          courierName: null,
+          trackId: null,
+          direction: "OUT",
+          userId,
+          saleId: sale.id,
+          saleItemId: saleItem.id,
+          shipmentGroupId,
+          shipmentType: "SHIP_COMPLETE",
+        },
+        { transaction: t }
+      );
+      if (ready) {
+        await inventoryService.tryFulfillReadyGroup(shipmentGroupId, { userId, transaction: t });
+      }
+    } else if (saleItem.allocatedQuantity > 0) {
+      await inventoryService.fulfillStock(
+        { productId, saleItemId: saleItem.id, quantity: saleItem.allocatedQuantity, userId },
+        { transaction: t }
+      );
+    }
+
+    await inventoryService.recomputeSaleFulfillmentStatus(sale.id, { transaction: t });
+    await saleItem.reload({ transaction: t });
+
+    await t.commit();
+    return { ...saleItem.toJSON(), productName: product.name, productType: product.productType, courierId: courier ? courier.id : null };
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+};
+
+// Updates an existing, non-cancelled line item's price and/or quantity — the other half of
+// letting a Sales member finish a Sale after the fact (see addOrderItem above). Price never
+// touches stock. A quantity increase reserves the extra units (backordering whatever isn't
+// available, same as a fresh order line); a decrease releases whatever's still only reserved —
+// it can never drop below what's already been shipped (use the dedicated Return flow for that).
+const updateOrderItem = async ({ saleId, saleItemId, quantity, sellingPrice, userId }) => {
+  const t = await sequelize.transaction();
+  try {
+    const item = await SaleItem.findOne({ where: { id: saleItemId, saleId }, transaction: t, lock: true });
+    if (!item) {
+      const err = new Error("Order item not found");
+      err.statusCode = 404;
+      throw err;
+    }
+    if (item.fulfillmentStatus === "CANCELLED") {
+      const err = new Error("Cannot edit a cancelled order item");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    if (sellingPrice !== undefined) {
+      item.sellingPrice = parseFloat(sellingPrice) || 0;
+    }
+
+    let newlyAllocated = 0;
+    if (quantity !== undefined) {
+      const newQuantity = parseInt(quantity);
+      if (!newQuantity || newQuantity < 1) {
+        const err = new Error("quantity must be at least 1");
+        err.statusCode = 400;
+        throw err;
+      }
+      if (newQuantity < item.fulfilledQuantity) {
+        const err = new Error(`Cannot set quantity below the ${item.fulfilledQuantity} unit(s) already shipped — use Return instead`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const delta = newQuantity - item.quantity;
+      if (delta > 0) {
+        const reserveResult = await inventoryService.reserveStock(
+          { productId: item.productId, saleItemId: item.id, quantity: delta, userId },
+          { transaction: t }
+        );
+        item.allocatedQuantity += reserveResult.allocated;
+        item.backorderedQuantity += reserveResult.backordered;
+        newlyAllocated = reserveResult.allocated;
+      } else if (delta < 0) {
+        let toRelease = -delta;
+        const releaseFromBackorder = Math.min(toRelease, item.backorderedQuantity);
+        item.backorderedQuantity -= releaseFromBackorder;
+        toRelease -= releaseFromBackorder;
+        if (toRelease > 0) {
+          await inventoryService.releaseReservation(
+            { productId: item.productId, saleItemId: item.id, quantity: toRelease, userId, reason: "Order item quantity reduced" },
+            { transaction: t }
+          );
+          item.allocatedQuantity -= toRelease;
+        }
+      }
+      item.quantity = newQuantity;
+    }
+
+    item.fulfillmentStatus = inventoryService.computeItemFulfillmentStatus(item);
+    await item.save({ transaction: t });
+
+    if (quantity !== undefined) {
+      const courier = await Courier.findOne({ where: { saleItemId: item.id, status: { [Op.ne]: "CANCELLED" } }, transaction: t });
+      if (courier) {
+        courier.quantity = item.quantity;
+        const ready = item.backorderedQuantity === 0;
+        if (courier.status !== "DONE") {
+          courier.status = ready ? "PENDING" : "WAITING_FOR_STOCK";
+          courier.productStockStatus = ready ? "IN_STOCK" : "OUT_OF_STOCK";
+        }
+        await courier.save({ transaction: t });
+        if (ready && courier.shipmentGroupId) {
+          await inventoryService.tryFulfillReadyGroup(courier.shipmentGroupId, { userId, transaction: t });
+        }
+      } else if (newlyAllocated > 0) {
+        // No courier tracking this line — fulfill the newly-reserved units directly, same as
+        // createOrder's courier-less path.
+        await inventoryService.fulfillStock(
+          { productId: item.productId, saleItemId: item.id, quantity: newlyAllocated, userId },
+          { transaction: t }
+        );
+      }
+    }
+
+    await inventoryService.recomputeSaleFulfillmentStatus(saleId, { transaction: t });
+    await item.reload({ transaction: t });
+
+    await t.commit();
+    return item;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+};
+
+// Toggles whether a Sale has Courier (shipment-tracking) record(s) for its items — lets the
+// "Create Courier Entry" checkbox be flipped after the sale already exists (see
+// sells.controller.js#updateSale). Never touches stock/fulfillment (that's already resolved at
+// creation time — see createOrder above), and is idempotent in both directions: turning on only
+// creates a row for an item that doesn't already have an active one (no duplicates), and turning
+// off only cancels currently-active (non-DONE) rows, leaving already-shipped ones as history.
+const setCourierEntryForSale = async ({ saleId, createCourierEntry, userId }, { transaction: t }) => {
+  const sale = await Sale.findByPk(saleId, { transaction: t, lock: true });
+  if (!sale) {
+    const err = new Error("Sale not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const items = await SaleItem.findAll({
+    where: { saleId, fulfillmentStatus: { [Op.ne]: "CANCELLED" } },
+    transaction: t,
+  });
+  const existingActiveCouriers = await Courier.findAll({
+    where: { saleId, status: { [Op.ne]: "CANCELLED" } },
+    transaction: t,
+  });
+
+  if (createCourierEntry) {
+    const itemsWithCourier = new Set(existingActiveCouriers.map((c) => c.saleItemId));
+    const shipmentGroupId = `SALE-${sale.id}`;
+
+    for (const item of items) {
+      if (itemsWithCourier.has(item.id)) continue;
+
+      const product = await Product.findByPk(item.productId, { transaction: t });
+      // No outstanding backorder means this line's stock need was already fully resolved at
+      // creation (either reserved-and-waiting or already fulfilled directly, since no courier
+      // existed to defer fulfillment) — either way there's nothing left to wait on here.
+      const ready = item.backorderedQuantity === 0;
+
+      await Courier.create(
+        {
+          customerName: sale.customerName,
+          name: sale.customerName,
+          address: sale.fromAddress || null,
+          city: sale.city || null,
+          mobileNo: sale.customerNumber,
+          phone: sale.customerNumber,
+          productName: product ? product.name : null,
+          quantity: item.quantity,
+          pending: true,
+          status: ready ? "PENDING" : "WAITING_FOR_STOCK",
+          productStockStatus: ready ? "IN_STOCK" : "OUT_OF_STOCK",
+          courierName: null,
+          trackId: null,
+          direction: "OUT",
+          userId,
+          saleId: sale.id,
+          saleItemId: item.id,
+          shipmentGroupId,
+          shipmentType: "SHIP_COMPLETE",
+        },
+        { transaction: t }
+      );
+    }
+  } else if (existingActiveCouriers.length > 0) {
+    // A courier that already reached DONE (already shipped/delivered) is left alone — same rule
+    // as cancelOrder's courier handling.
+    const cancellable = existingActiveCouriers.filter((c) => c.status !== "DONE");
+    if (cancellable.length > 0) {
+      const entryDates = cancellable.map((c) => c.entryDate);
+      await Courier.update(
+        { status: "CANCELLED", pending: false },
+        { where: { id: { [Op.in]: cancellable.map((c) => c.id) } }, transaction: t }
+      );
+      await recalculateCourierChargeForDates(entryDates, { transaction: t });
+    }
+  }
+};
+
 module.exports = {
   computePaymentStatus,
+  normalizeBankPayments,
   createOrder,
   recordPayment,
   cancelOrder,
   cancelOrderItem,
   returnItem,
+  addOrderItem,
+  updateOrderItem,
+  setCourierEntryForSale,
 };

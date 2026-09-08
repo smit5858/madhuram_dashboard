@@ -1,4 +1,4 @@
-const { Sale, SaleItem, Product, Customer, User, SerialUnit, Courier, Payment, BankAccount } = require("../models");
+const { Sale, SaleItem, Product, Customer, User, SerialUnit, Courier, Payment, BankAccount, SaleBankAccount } = require("../models");
 const sequelize = require("../config/db");
 const { Op } = require("sequelize");
 const orderService = require("../services/order.service");
@@ -20,6 +20,28 @@ const attachLedgerBalances = async (sales) => {
       ? balances.get(sale.customerId) || { amount: 0, status: "SETTLED", label: "Settled" }
       : null;
     return json;
+  });
+};
+
+// Attaches `hasCourierEntries` (whether the sale currently has at least one active,
+// non-CANCELLED Courier record) — the frontend uses this to correctly initialize the "Create
+// Courier Entry" checkbox when opening Edit Sell. One batched query for the whole list, not
+// N+1 — see orderService.setCourierEntryForSale for the toggle this flag reflects.
+const attachCourierEntryFlags = async (sales) => {
+  const saleIds = sales.map((s) => s.id).filter(Boolean);
+  if (saleIds.length === 0) return sales;
+
+  const rows = await Courier.findAll({
+    where: { saleId: { [Op.in]: saleIds }, status: { [Op.ne]: "CANCELLED" } },
+    attributes: ["saleId"],
+    group: ["saleId"],
+    raw: true,
+  });
+  const withCourier = new Set(rows.map((r) => r.saleId));
+
+  return sales.map((sale) => {
+    sale.hasCourierEntries = withCourier.has(sale.id);
+    return sale;
   });
 };
 
@@ -96,11 +118,17 @@ exports.getSales = async (req, res) => {
         },
         { model: User, as: "creator", attributes: ["id", "name", "email"] },
         { model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] },
+        {
+          model: SaleBankAccount,
+          as: "bankPayments",
+          attributes: ["id", "bankAccountId", "amount"],
+          include: [{ model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] }],
+        },
       ],
       order: [["createdAt", "DESC"]],
     });
 
-    const data = await attachLedgerBalances(sales);
+    const data = await attachCourierEntryFlags(await attachLedgerBalances(sales));
     return res.status(200).json({ success: true, data });
   } catch (err) {
     return errorResponse(res, err);
@@ -272,6 +300,12 @@ exports.getSaleById = async (req, res) => {
         { model: User, as: "creator", attributes: ["id", "name", "email"] },
         { model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] },
         {
+          model: SaleBankAccount,
+          as: "bankPayments",
+          attributes: ["id", "bankAccountId", "amount"],
+          include: [{ model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] }],
+        },
+        {
           model: Payment,
           as: "payments",
           include: [
@@ -291,7 +325,7 @@ exports.getSaleById = async (req, res) => {
       return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to view this sale" });
     }
 
-    const [data] = await attachLedgerBalances([sale]);
+    const [data] = await attachCourierEntryFlags(await attachLedgerBalances([sale]));
     return res.status(200).json({ success: true, data });
   } catch (err) {
     return errorResponse(res, err);
@@ -312,7 +346,7 @@ exports.updateSale = async (req, res) => {
       customerName,
       customerNumber,
       paymentMethod,
-      bankAccountId,
+      bankPayments,
       city,
       fromAddress,
       pincode,
@@ -320,6 +354,7 @@ exports.updateSale = async (req, res) => {
       collectedAmount,
       status,
       notes,
+      createCourierEntry,
     } = req.body || {};
 
     const sale = await Sale.findByPk(id, { transaction: t, lock: true });
@@ -333,14 +368,15 @@ exports.updateSale = async (req, res) => {
       return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to update this sale" });
     }
 
+    // Captured before any mutation below — used after save() to log the actual change (if any)
+    // against Payment history and the customer ledger, same as a real "Record Payment" would.
+    const previousCollectedAmount = parseFloat(sale.collectedAmount) || 0;
+
     if (platform !== undefined) sale.platform = platform;
     if (customerId !== undefined) sale.customerId = customerId;
     if (customerName !== undefined) sale.customerName = customerName;
     if (customerNumber !== undefined) sale.customerNumber = customerNumber;
     if (paymentMethod !== undefined) sale.paymentMethod = paymentMethod;
-    if (bankAccountId !== undefined) {
-      sale.bankAccountId = sale.paymentMethod === "BankTransfer" ? bankAccountId || null : null;
-    }
     if (city !== undefined) sale.city = city;
     if (fromAddress !== undefined) sale.fromAddress = fromAddress;
     if (pincode !== undefined) sale.pincode = pincode;
@@ -356,6 +392,18 @@ exports.updateSale = async (req, res) => {
       refundedAmount: parseFloat(sale.refundedAmount),
     });
 
+    // Bank Account field — shown every time regardless of Payment Method, optional, and lets
+    // the sale's collected amount be split across multiple bank accounts (each with its own
+    // amount — see saleBankAccount.model.js). Validated against the sale's (possibly
+    // just-updated) collectedAmount so the rows never claim more than was actually paid.
+    // bankAccountId stays in sync as the first allocation's bank for any reader that still
+    // uses the legacy single-account column.
+    let bankPaymentRows;
+    if (bankPayments !== undefined) {
+      bankPaymentRows = orderService.normalizeBankPayments(bankPayments, parseFloat(sale.collectedAmount) || 0);
+      sale.bankAccountId = bankPaymentRows[0]?.bankAccountId || null;
+    }
+
     // Keep the customer's ledger debit in sync with this sale's own amount — otherwise editing
     // sellingAmount here leaves the original CustomerLedgerEntry stale and the two screens
     // (Sells vs. Debited/CustomerLedger) silently disagree on how much the customer owes.
@@ -367,6 +415,66 @@ exports.updateSale = async (req, res) => {
     }
 
     await sale.save({ transaction: t });
+
+    if (bankPaymentRows !== undefined) {
+      await SaleBankAccount.destroy({ where: { saleId: sale.id }, transaction: t });
+      if (bankPaymentRows.length > 0) {
+        await SaleBankAccount.bulkCreate(
+          bankPaymentRows.map((row) => ({ saleId: sale.id, bankAccountId: row.bankAccountId, amount: row.amount })),
+          { transaction: t }
+        );
+      }
+    }
+
+    // Collected Amount is directly editable here (not just via "Record Payment") — e.g. the
+    // Sales member finishing a Lead-originated sale that started at ₹0 fills in the actual
+    // amount collected right in this form. Log the actual delta as a Payment row (Payment
+    // model: "the itemized history that Sale.collectedAmount is the running total of") and a
+    // matching customer-ledger entry, so payment history and the customer's running balance
+    // never drift from this edit. An increase is a real payment received (recordPayment, same
+    // ledger entry type the dedicated "Record Payment" flow creates) — a decrease is a
+    // correction, not a payment, so it's logged as an adjustment instead (recordPayment is
+    // credit-only and would reject a negative amount).
+    const collectedAmountDelta = parseFloat(sale.collectedAmount) - previousCollectedAmount;
+    if (collectedAmount !== undefined && Math.abs(collectedAmountDelta) > 0.001) {
+      const isPayment = collectedAmountDelta > 0;
+      await Payment.create(
+        {
+          saleId: sale.id,
+          amount: collectedAmountDelta,
+          method: sale.paymentMethod || null,
+          bankAccountId: sale.bankAccountId || null,
+          notes: isPayment ? "Payment recorded via sale edit" : "Collected amount corrected via sale edit",
+          createdBy: user.id,
+        },
+        { transaction: t }
+      );
+
+      if (sale.customerId) {
+        const ledgerRecordFn = isPayment ? customerLedgerService.recordPayment : customerLedgerService.recordAdjustment;
+        await ledgerRecordFn(
+          {
+            customerId: sale.customerId,
+            saleId: sale.id,
+            amount: collectedAmountDelta,
+            paymentMethod: sale.paymentMethod || null,
+            bankAccountId: sale.bankAccountId || null,
+            note: isPayment ? "Payment recorded via sale edit" : "Collected amount corrected via sale edit",
+            userId: user.id,
+          },
+          { transaction: t }
+        );
+      }
+    }
+
+    // "Create Courier Entry" toggle — create/cancel Courier tracking rows to match, never
+    // duplicating an existing one. See orderService.setCourierEntryForSale.
+    if (createCourierEntry !== undefined) {
+      await orderService.setCourierEntryForSale(
+        { saleId: sale.id, createCourierEntry: !!createCourierEntry, userId: user.id },
+        { transaction: t }
+      );
+    }
 
     // Keep the linked Account → Income entry in sync with this edit (customer/payment/amount,
     // or removed outright if this update just cancelled the sale) — see
@@ -380,6 +488,55 @@ exports.updateSale = async (req, res) => {
     return res.status(200).json({ success: true, message: "Sale updated successfully", data: sale });
   } catch (err) {
     if (!t.finished) await t.rollback();
+    return errorResponse(res, err);
+  }
+};
+
+// POST /sells/:id/items — adds a new product line to an existing sale, e.g. a Sales member
+// finishing a Lead-originated sale that started with just one placeholder line (see
+// lead.controller.js#ensureSaleForLead). Same ownership guard as updateSale.
+exports.addSaleItem = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = req.user;
+    const canViewAll = user && (await canViewAllRecords(user, "/sells"));
+
+    const sale = await Sale.findByPk(id);
+    if (!sale) {
+      return res.status(404).json({ success: false, message: "Sale not found" });
+    }
+    if (!canViewAll && sale.createdBy !== user.id) {
+      return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to update this sale" });
+    }
+
+    const { productId, quantity, sellingPrice, serialNumbers } = req.body || {};
+    const item = await orderService.addOrderItem({ saleId: sale.id, productId, quantity, sellingPrice, serialNumbers, userId: user.id });
+    return res.status(201).json({ success: true, message: "Product added to sale", data: item });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// PUT /sells/:id/items/:itemId — edits an existing line's price and/or quantity (the other half
+// of finishing a Sale's product details after the fact — see addSaleItem above).
+exports.updateSaleItem = async (req, res) => {
+  try {
+    const { id, itemId } = req.params;
+    const user = req.user;
+    const canViewAll = user && (await canViewAllRecords(user, "/sells"));
+
+    const sale = await Sale.findByPk(id);
+    if (!sale) {
+      return res.status(404).json({ success: false, message: "Sale not found" });
+    }
+    if (!canViewAll && sale.createdBy !== user.id) {
+      return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to update this sale" });
+    }
+
+    const { quantity, sellingPrice } = req.body || {};
+    const item = await orderService.updateOrderItem({ saleId: sale.id, saleItemId: itemId, quantity, sellingPrice, userId: user.id });
+    return res.status(200).json({ success: true, message: "Sale item updated", data: item });
+  } catch (err) {
     return errorResponse(res, err);
   }
 };

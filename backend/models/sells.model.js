@@ -34,9 +34,12 @@ const Sale = sequelize.define(
       allowNull: true,
     },
     paymentMethod: {
-      type: DataTypes.ENUM("Cash", "UPI", "Card", "COD", "BankTransfer", "Other"),
+      type: DataTypes.ENUM("Cash", "UPI", "Card", "BankTransfer", "Other"),
       allowNull: true,
     },
+    // Legacy single-account column, superseded by the sale_bank_accounts join table (see
+    // models/index.js) which allows selecting multiple accounts. Kept in sync as the first
+    // selected account for any code that still reads it directly.
     bankAccountId: {
       type: DataTypes.INTEGER,
       allowNull: true,
@@ -107,12 +110,24 @@ const Sale = sequelize.define(
         key: "id",
       },
     },
+    // Set once, at creation, for a Sale auto-created from a Lead marked Complete (see
+    // lead.controller.js#ensureSaleForLead). Null for every ordinary manually-created sale.
+    // The unique index is the authoritative guard against creating a second Sale for the same
+    // Lead (multiple NULLs are treated as distinct by MySQL, so it never affects other sales).
+    leadId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: "leads",
+        key: "id",
+      },
+    },
   },
   {
     tableName: "sells",
     timestamps: true,
     // Named index, not inline unique:true — see role.model.js for why.
-    indexes: [{ unique: true, fields: ["invoiceNumber"] }],
+    indexes: [{ unique: true, fields: ["invoiceNumber"] }, { unique: true, fields: ["leadId"] }],
   }
 );
 

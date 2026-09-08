@@ -24,6 +24,9 @@ import StockShortageModal, { type StockShortageItem } from "@/pages/sells/compon
 import { blurNumberInputOnWheel } from "@/shared/utils/input";
 
 interface FormItem {
+  /** Set only for a line that already exists as a SaleItem on the backend (populated when
+   *  opening Edit) — undefined for a row added locally in this session, not yet persisted. */
+  id?: number;
   productId: number | "";
   quantity: number | "";
   sellingPrice: number | "";
@@ -33,7 +36,6 @@ const PAYMENT_METHODS = [
   "Cash",
   "UPI",
   "Card",
-  "COD",
   "BankTransfer",
   "Other",
 ] as const;
@@ -122,7 +124,7 @@ const Sells = () => {
 
   // Lets the Sales/Admin dashboard's "Pending Orders"/"Completed Orders" KPIs land here
   // pre-filtered (e.g. ?status=PENDING).
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const initialStatus = searchParams.get("status") || "";
 
   // Filters State
@@ -197,12 +199,6 @@ const Sells = () => {
     snapshotItems: FormItem[];
   } | null>(null);
 
-  // Quick Product Modal State
-  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
-  const [newProductName, setNewProductName] = useState("");
-  const [newProductDesc, setNewProductDesc] = useState("");
-  const [saveAsNewProduct, setSaveAsNewProduct] = useState(false);
-
   // Form State
   const [customerId, setCustomerId] = useState<number | null>(null);
   const [customerLookupStatus, setCustomerLookupStatus] = useState<
@@ -216,19 +212,38 @@ const Sells = () => {
   const [customerNumber, setCustomerNumber] = useState("");
   const [platform, setPlatform] = useState("Direct Store");
   const [paymentMethod, setPaymentMethod] = useState<string>("UPI");
-  const [bankAccountId, setBankAccountId] = useState<number | "">("");
+  // Bank Account field — shown every time regardless of Payment Method, optional, and splits
+  // the collected amount across bank accounts. Each row is a {bankAccountId, amount} pair; the
+  // same bank account can appear in more than one row (rows are never merged).
+  const [bankPayments, setBankPayments] = useState<{ bankAccountId: number | ""; amount: string }[]>([]);
   const [city, setCity] = useState("");
   const [fromAddress, setFromAddress] = useState("");
   const [pincode, setPincode] = useState("");
   const [collectedAmount, setCollectedAmount] = useState<string>("0");
-  const [manualSellingAmount, setManualSellingAmount] = useState<string>("");
+  // Total Selling Amount — always a plain numeric string (never mixes a derived number with a
+  // typed string, which is what let the field render literal "0" and mangle typed digits into
+  // "05"-style values). `sellingAmountManuallyEdited` tracks whether the user has taken control
+  // of the field (typed into it directly, or opened an existing sale) — while false, the effect
+  // below keeps it mirroring the live items total; once true, it stops auto-tracking so a
+  // deliberate override (e.g. a discount) sticks. Clearing the field hands control back to the
+  // items total.
+  const [manualSellingAmount, setManualSellingAmount] = useState<string>("0");
+  const [sellingAmountManuallyEdited, setSellingAmountManuallyEdited] = useState(false);
   const [notes, setNotes] = useState("");
+  // Checked by default so the existing courier-entry behavior is unchanged unless the user
+  // explicitly opts out (e.g. a walk-in sale that isn't shipped). On Edit, this is re-initialized
+  // from the sale's actual current state (see openEditModal) instead of always defaulting true.
+  const [createCourierEntry, setCreateCourierEntry] = useState(true);
 
   // Cancel-sale confirmation (with the defective/write-off option) — id of the sale awaiting confirmation.
   const [cancelSaleId, setCancelSaleId] = useState<number | null>(null);
   const [items, setItems] = useState<FormItem[]>([
     { productId: "", quantity: 1, sellingPrice: "" },
   ]);
+  // Snapshot of each existing line's quantity/price as loaded into Edit — lets handleSubmit
+  // diff against the live `items` state and only send updateSaleItem for lines the user
+  // actually changed.
+  const [originalItemsById, setOriginalItemsById] = useState<Record<number, { quantity: number; sellingPrice: number }>>({});
 
   // Debounced Customer Phone Lookup & Autocomplete for Sells Entry
   const debouncedCustomerPhone = useDebounce(customerNumber, 350);
@@ -313,45 +328,32 @@ const Sells = () => {
     }, 0);
   }, [items]);
 
-  const effectiveSellingAmount =
-    manualSellingAmount !== ""
-      ? Number(manualSellingAmount) || 0
-      : calculatedItemsTotal;
+  // Keeps the Total Selling Amount field mirroring the items total in real time, as long as the
+  // user hasn't taken manual control of it (see the state declaration above). This is the single
+  // source of truth for what the field displays — it never falls back to computing a different
+  // value at render time, which is what previously let the field show a stale/incorrect amount.
+  // Adjusted during render (React's recommended pattern for "derive state from a changed value")
+  // rather than in an Effect, so the field never flashes the stale amount for one frame.
+  const [lastSyncedItemsTotal, setLastSyncedItemsTotal] = useState(calculatedItemsTotal);
+  if (calculatedItemsTotal !== lastSyncedItemsTotal) {
+    setLastSyncedItemsTotal(calculatedItemsTotal);
+    if (!sellingAmountManuallyEdited) {
+      setManualSellingAmount(String(calculatedItemsTotal));
+    }
+  }
 
-  const pendingAmount = Math.max(
-    0,
-    effectiveSellingAmount - (Number(collectedAmount) || 0)
+  const effectiveSellingAmount = Number(manualSellingAmount) || 0;
+
+  const bankPaymentsTotal = useMemo(
+    () => bankPayments.reduce((sum, row) => sum + (Number(row.amount) || 0), 0),
+    [bankPayments]
   );
 
-  // Mutation: Create Product (Quick Add) — always NON_SERIAL, this quick-add flow has no type selector
-  const createProductMutation = useMutation({
-    mutationFn: (data: { name: string; description?: string }) =>
-      productService.createProduct({ ...data, productType: "NON_SERIAL" }),
-    onSuccess: (res) => {
-      toast.success("Product created successfully");
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      setIsProductModalOpen(false);
-      setNewProductName("");
-      setNewProductDesc("");
-      setSaveAsNewProduct(false);
-      // Automatically select in the latest item row if empty
-      if (res.data?.data?.id) {
-        setItems((prev) => {
-          const copy = [...prev];
-          const lastIdx = copy.length - 1;
-          if (copy[lastIdx] && !copy[lastIdx].productId) {
-            copy[lastIdx].productId = res.data.data.id;
-          }
-          return copy;
-        });
-      }
-    },
-    onError: (err: any) => {
-      toast.error(
-        err.response?.data?.message || err.message || "Failed to create product"
-      );
-    },
-  });
+  // Once any bank split rows exist, they define the collected amount directly — the field is
+  // just a readOnly reflection of their sum instead of independently-tracked state.
+  const effectiveCollectedAmount = bankPayments.length > 0 ? bankPaymentsTotal : Number(collectedAmount) || 0;
+
+  const pendingAmount = Math.max(0, effectiveSellingAmount - effectiveCollectedAmount);
 
   // Mutation: Create Sale
   const createSaleMutation = useMutation({
@@ -400,6 +402,21 @@ const Sells = () => {
         err.response?.data?.message || err.message || "Failed to update sale"
       );
     },
+  });
+
+  // Mutation: Add a product line to an existing sale (Edit flow only — new sales send their
+  // full item list with the create call instead). No standalone toast/invalidate here; these
+  // run as a batch from handleSubmit, which handles success/error once for the whole batch.
+  const addSaleItemMutation = useMutation({
+    mutationFn: ({ saleId, data }: { saleId: number; data: { productId: number; quantity: number; sellingPrice: number } }) =>
+      saleService.addSaleItem(saleId, data),
+  });
+
+  // Mutation: Edit an existing sale line's price and/or quantity (Edit flow only). Same
+  // batch-from-handleSubmit pattern as addSaleItemMutation above.
+  const updateSaleItemMutation = useMutation({
+    mutationFn: ({ saleId, itemId, data }: { saleId: number; itemId: number; data: { quantity?: number; sellingPrice?: number } }) =>
+      saleService.updateSaleItem(saleId, itemId, data),
   });
 
   // Mutation: Delete Sale
@@ -467,14 +484,17 @@ const Sells = () => {
     setCustomerNumber("");
     setPlatform("Direct Store");
     setPaymentMethod("UPI");
-    setBankAccountId("");
+    setBankPayments([]);
     setCity("");
     setFromAddress("");
     setPincode("");
     setCollectedAmount("0");
-    setManualSellingAmount("");
+    setManualSellingAmount("0");
+    setSellingAmountManuallyEdited(false);
     setNotes("");
+    setCreateCourierEntry(true);
     setItems([{ productId: "", quantity: 1, sellingPrice: "" }]);
+    setOriginalItemsById({});
     setSelectedSale(null);
   };
 
@@ -494,26 +514,84 @@ const Sells = () => {
     setCustomerNumber(sale.customerNumber || "");
     setPlatform(sale.platform || "Direct Store");
     setPaymentMethod(sale.paymentMethod || "UPI");
-    setBankAccountId(sale.bankAccountId || "");
+    setBankPayments(
+      sale.bankPayments && sale.bankPayments.length > 0
+        ? sale.bankPayments.map((bp) => ({ bankAccountId: bp.bankAccountId, amount: String(bp.amount) }))
+        : sale.bankAccountId
+        ? [{ bankAccountId: sale.bankAccountId, amount: String(sale.collectedAmount ?? 0) }]
+        : []
+    );
     setCity(sale.city || "");
     setFromAddress(sale.fromAddress || "");
     setPincode(sale.pincode || "");
     setCollectedAmount(String(sale.collectedAmount ?? 0));
-    setManualSellingAmount(String(sale.sellingAmount ?? 0));
+    // Prefer the saved sellingAmount, but fall back to the items' own total if it's missing/zero
+    // (a legacy/bad record) so the field never opens showing an incorrect 0 — computed directly
+    // from `sale.items` rather than the `calculatedItemsTotal` memo, since the `items` state
+    // update below hasn't taken effect yet at this point in the function.
+    const saleItemsTotal = (sale.items || []).reduce(
+      (sum, i) => sum + (Number(i.quantity) || 0) * (Number(i.sellingPrice) || 0),
+      0
+    );
+    const savedSellingAmount = Number(sale.sellingAmount) || 0;
+    setManualSellingAmount(String(savedSellingAmount > 0 ? savedSellingAmount : saleItemsTotal));
+    // Nothing meaningful saved yet (e.g. a Lead-originated sale that starts at ₹0 — see
+    // lead.controller.js#ensureSaleForLead) — keep tracking the live items total as the Sales
+    // member fills in real prices, instead of locking the field at the stale 0 they opened with.
+    // A sale that already has a real recorded amount keeps it fixed (true) so editing items
+    // doesn't silently overwrite an intentional discount/override.
+    setSellingAmountManuallyEdited(savedSellingAmount > 0);
     setNotes(sale.notes || "");
+    setCreateCourierEntry(sale.hasCourierEntries ?? true);
     if (sale.items && sale.items.length > 0) {
       setItems(
         sale.items.map((i) => ({
+          id: i.id,
           productId: i.productId,
           quantity: i.quantity,
           sellingPrice: i.sellingPrice,
         }))
       );
+      setOriginalItemsById(
+        Object.fromEntries(
+          sale.items.filter((i) => i.id != null).map((i) => [i.id as number, { quantity: Number(i.quantity), sellingPrice: Number(i.sellingPrice) }])
+        )
+      );
     } else {
       setItems([{ productId: "", quantity: 1, sellingPrice: "" }]);
+      setOriginalItemsById({});
     }
     setIsModalOpen(true);
   };
+
+  // Deep-link from the Leads page: a lead auto-creates its own Sell once marked Complete (see
+  // backend lead.controller.js#ensureSaleForLead), and Leads.tsx sends the user here via
+  // ?openSaleId=<id> so they can review/finish it in the same Edit modal used everywhere else.
+  useEffect(() => {
+    const openSaleId = searchParams.get("openSaleId");
+    if (!openSaleId) return;
+
+    saleService
+      .getSaleById(Number(openSaleId))
+      .then((res) => {
+        const sale = res.data?.data;
+        if (sale) openEditModal(sale);
+      })
+      .catch(() => {
+        toast.error("Could not open the linked Sell");
+      })
+      .finally(() => {
+        setSearchParams(
+          (prev) => {
+            const next = new URLSearchParams(prev);
+            next.delete("openSaleId");
+            return next;
+          },
+          { replace: true }
+        );
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const closeModal = () => {
     setIsModalOpen(false);
@@ -579,7 +657,54 @@ const Sells = () => {
     });
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleAddBankPaymentRow = () => {
+    setBankPayments((prev) => [...prev, { bankAccountId: "", amount: "" }]);
+  };
+
+  const handleRemoveBankPaymentRow = (index: number) => {
+    setBankPayments((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleBankPaymentChange = (
+    index: number,
+    field: "bankAccountId" | "amount",
+    value: number | "" | string
+  ) => {
+    setBankPayments((prev) => {
+      const copy = [...prev];
+      copy[index] = { ...copy[index], [field]: value } as { bankAccountId: number | ""; amount: string };
+      return copy;
+    });
+  };
+
+  // Validates the bank payment rows against the sale's total paid amount (the live
+  // Collected Amount input, editable both while creating and while editing). Returns the
+  // sanitized rows to submit, or null (after showing a toast) if invalid.
+  const validateBankPayments = (totalPaid: number) => {
+    if (paymentMethod === "Cash" || paymentMethod === "Other") return [];
+
+    for (let i = 0; i < bankPayments.length; i++) {
+      const row = bankPayments[i];
+      if (!row.bankAccountId) {
+        toast.error(`Select a bank account for payment row #${i + 1}`);
+        return null;
+      }
+      if (!row.amount || Number(row.amount) <= 0) {
+        toast.error(`Enter a valid amount for payment row #${i + 1}`);
+        return null;
+      }
+    }
+
+    const total = bankPayments.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+    if (total > totalPaid + 0.01) {
+      toast.error("Bank account payment amounts cannot exceed the total paid amount");
+      return null;
+    }
+
+    return bankPayments.map((row) => ({ bankAccountId: Number(row.bankAccountId), amount: Number(row.amount) }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!customerName.trim()) {
@@ -600,22 +725,82 @@ const Sells = () => {
       }
     }
 
+    // Bank payment rows split the total paid amount across bank accounts — validated against
+    // the live Collected Amount (editable both while creating and while editing).
+    const validatedBankPayments = validateBankPayments(effectiveCollectedAmount);
+    if (validatedBankPayments === null) return;
+
     if (selectedSale?.id) {
+      const saleId = selectedSale.id;
+
+      // Persist product line changes first — new rows (no `id`) via addSaleItem, edited
+      // existing rows via updateSaleItem — before the header update below, since Total Selling
+      // Amount is derived from the (already locally-updated) items total.
+      try {
+        for (let idx = 0; idx < items.length; idx++) {
+          const row = items[idx];
+          if (!row.productId || !row.quantity) continue;
+          if (!row.id) {
+            const res = await addSaleItemMutation.mutateAsync({
+              saleId,
+              data: {
+                productId: Number(row.productId),
+                quantity: Number(row.quantity),
+                sellingPrice: Number(row.sellingPrice) || 0,
+              },
+            });
+            // Tag the row with its new SaleItem id so that if the header update below fails
+            // and the user resubmits, this row is treated as existing instead of being
+            // added a second time.
+            const newId = res.data?.data?.id;
+            if (newId) {
+              const savedIndex = idx;
+              setItems((prev) => prev.map((r, i) => (i === savedIndex ? { ...r, id: newId } : r)));
+            }
+            continue;
+          }
+
+          const original = originalItemsById[row.id];
+          const newQuantity = Number(row.quantity);
+          const newPrice = Number(row.sellingPrice) || 0;
+          const quantityChanged = original && newQuantity !== original.quantity;
+          const priceChanged = original && newPrice !== original.sellingPrice;
+          if (quantityChanged || priceChanged) {
+            await updateSaleItemMutation.mutateAsync({
+              saleId,
+              itemId: row.id,
+              data: {
+                quantity: quantityChanged ? newQuantity : undefined,
+                sellingPrice: priceChanged ? newPrice : undefined,
+              },
+            });
+            const savedId = row.id;
+            setOriginalItemsById((prev) => ({ ...prev, [savedId]: { quantity: newQuantity, sellingPrice: newPrice } }));
+          }
+        }
+      } catch (err: any) {
+        toast.error(err.response?.data?.message || err.message || "Failed to update product items");
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+
       // Update existing sale
       updateSaleMutation.mutate({
-        id: selectedSale.id,
+        id: saleId,
         data: {
           customerId: customerId || undefined,
           customerName: customerName.trim(),
           customerNumber: customerNumber || undefined,
           platform,
           paymentMethod: paymentMethod as any,
-          bankAccountId: paymentMethod === "BankTransfer" ? (bankAccountId || null) : null,
+          bankPayments: validatedBankPayments,
           city: city || undefined,
           fromAddress: fromAddress || undefined,
           pincode: pincode || undefined,
           sellingAmount: effectiveSellingAmount,
+          collectedAmount: effectiveCollectedAmount,
           notes: notes || undefined,
+          createCourierEntry,
         },
       });
       return;
@@ -653,7 +838,17 @@ const Sells = () => {
       (sum, i) => sum + (Number(i.quantity) || 0) * (Number(i.sellingPrice) || 0),
       0
     );
-    const sellingAmountForItems = manualSellingAmount !== "" ? Number(manualSellingAmount) || 0 : itemsTotal;
+    const sellingAmountForItems = sellingAmountManuallyEdited ? Number(manualSellingAmount) || 0 : itemsTotal;
+
+    // Bank Account isn't applicable to Cash/Other — never submit a stale selection carried
+    // over from a different payment method. Rows were already validated in handleSubmit before
+    // this is called (including via the stock-shortage resolution paths, which run after it).
+    const bankPaymentsPayload =
+      paymentMethod === "Cash" || paymentMethod === "Other"
+        ? []
+        : bankPayments
+            .filter((row) => row.bankAccountId && Number(row.amount) > 0)
+            .map((row) => ({ bankAccountId: Number(row.bankAccountId), amount: Number(row.amount) }));
 
     return {
       customerId: customerId || undefined,
@@ -661,13 +856,14 @@ const Sells = () => {
       customerNumber: customerNumber || undefined,
       platform,
       paymentMethod,
-      bankAccountId: paymentMethod === "BankTransfer" ? (bankAccountId || undefined) : undefined,
+      bankPayments: bankPaymentsPayload,
       city: city || undefined,
       fromAddress: fromAddress || undefined,
       pincode: pincode || undefined,
       sellingAmount: sellingAmountForItems,
-      collectedAmount: Number(collectedAmount) || 0,
+      collectedAmount: effectiveCollectedAmount,
       notes: notes || undefined,
+      createCourierEntry,
       items: payloadItems,
     };
   };
@@ -1365,7 +1561,13 @@ const Sells = () => {
                     </label>
                     <select
                       value={paymentMethod}
-                      onChange={(e) => setPaymentMethod(e.target.value)}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setPaymentMethod(value);
+                        // Bank Account isn't applicable to Cash/Other — clear any rows entered
+                        // while a different method was active.
+                        if (value === "Cash" || value === "Other") setBankPayments([]);
+                      }}
                       className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                     >
                       {PAYMENT_METHODS.map((m) => (
@@ -1376,30 +1578,89 @@ const Sells = () => {
                     </select>
                   </div>
 
-                  {paymentMethod === "BankTransfer" && (
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Bank Account
-                      </label>
-                      <select
-                        value={bankAccountId}
-                        onChange={(e) => setBankAccountId(e.target.value ? Number(e.target.value) : "")}
-                        className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
-                      >
-                        <option value="">Select bank account</option>
-                        {bankAccountsList.map((acc) => (
-                          <option key={acc.id} value={acc.id}>
-                            {acc.bankName} — {acc.accountNumber}
-                          </option>
-                        ))}
-                      </select>
-                      {bankAccountsList.length === 0 && (
-                        <p className="mt-1 text-[10px] text-amber-600">
-                          No bank accounts configured yet — add one under Account → Manage Bank Account Details.
-                        </p>
-                      )}
-                    </div>
-                  )}
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Bank Account Split{" "}
+                      <span className="font-normal text-slate-400">(optional — split the paid amount across bank accounts)</span>
+                    </label>
+                    {(() => {
+                      const isBankPaymentsDisabled = paymentMethod === "Cash" || paymentMethod === "Other";
+                      return (
+                        <div
+                          className={`rounded-lg border border-slate-200 bg-slate-50 p-2.5 ${
+                            isBankPaymentsDisabled ? "opacity-50" : ""
+                          }`}
+                        >
+                          {isBankPaymentsDisabled ? (
+                            <p className="text-[10px] text-slate-400">Not applicable for {paymentMethod} payments.</p>
+                          ) : bankAccountsList.length === 0 ? (
+                            <p className="text-[10px] text-amber-600">
+                              No bank accounts configured yet — add one under Account → Manage Bank Account Details.
+                            </p>
+                          ) : (
+                            <>
+                              {bankPayments.length === 0 && (
+                                <p className="text-[10px] text-slate-400 mb-2">
+                                  No bank account rows added — add one to record which bank(s) the payment went into.
+                                </p>
+                              )}
+                              <div className="space-y-2">
+                                {bankPayments.map((row, index) => (
+                                  <div key={index} className="flex items-center gap-2">
+                                    <select
+                                      value={row.bankAccountId}
+                                      onChange={(e) =>
+                                        handleBankPaymentChange(
+                                          index,
+                                          "bankAccountId",
+                                          e.target.value ? Number(e.target.value) : ""
+                                        )
+                                      }
+                                      className="flex-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                                    >
+                                      <option value="">-- Select Bank Account --</option>
+                                      {bankAccountsList.map((acc) => (
+                                        <option key={acc.id} value={acc.id}>
+                                          {acc.bankName} — {acc.accountNumber}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="0.01"
+                                      value={row.amount}
+                                      onChange={(e) => handleBankPaymentChange(index, "amount", e.target.value)}
+                                      onWheel={blurNumberInputOnWheel}
+                                      placeholder="Amount"
+                                      className="w-28 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveBankPaymentRow(index)}
+                                      className="rounded p-1 text-slate-400 hover:text-rose-600 transition"
+                                      title="Remove Row"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-2">
+                                <button
+                                  type="button"
+                                  onClick={handleAddBankPaymentRow}
+                                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                                >
+                                  <Plus className="h-3 w-3" /> Add Payment Row
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
                 </div>
 
               </div>
@@ -1414,20 +1675,18 @@ const Sells = () => {
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => setIsProductModalOpen(true)}
-                      className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      <Plus className="h-3 w-3" /> Quick Add Product
-                    </button>
-                    <button
-                      type="button"
                       onClick={handleAddItemRow}
                       className="inline-flex items-center gap-1 rounded-md bg-[#3d6fe0] px-3 py-1 text-xs font-semibold text-white shadow-sm hover:bg-[#3162d2]"
                     >
-                      <Plus className="h-3 w-3" /> Add Item Row
+                      <Plus className="h-3 w-3" /> Add Product
                     </button>
                   </div>
                 </div>
+                {selectedSale && (
+                  <p className="mb-3 text-[10px] text-slate-400">
+                    Quantity and price can be edited, and new products added, at any time. An existing line's product can't be swapped — remove it isn't available either; cancel the affected item instead if it was added in error.
+                  </p>
+                )}
 
                 <div className="space-y-3">
                   {items.map((row, index) => {
@@ -1458,7 +1717,9 @@ const Sells = () => {
                             value={row.productId}
                             onChange={(e) => handleProductSelect(index, e.target.value ? Number(e.target.value) : "")}
                             required
-                            className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                            disabled={!!row.id}
+                            title={row.id ? "An existing line's product can't be changed — add a new product row instead" : undefined}
+                            className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
                           >
                             <option value="">-- Select Product --</option>
                             {productsList.map((p) => (
@@ -1506,7 +1767,7 @@ const Sells = () => {
                               )
                             }
                             onWheel={blurNumberInputOnWheel}
-                            className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                            className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
                           />
                         </div>
 
@@ -1529,7 +1790,7 @@ const Sells = () => {
                             }
                             onWheel={blurNumberInputOnWheel}
                             placeholder="0.00"
-                            className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                            className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
                           />
                         </div>
 
@@ -1544,17 +1805,20 @@ const Sells = () => {
                           </span>
                         </div>
 
-                        {/* Remove Row Button */}
-                        <div className="sm:pt-4">
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveItemRow(index)}
-                            className="rounded p-1 text-slate-400 hover:text-rose-600 transition"
-                            title="Remove Row"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
+                        {/* Remove Row Button — only for a row not yet saved as a SaleItem;
+                            an existing line is removed via the dedicated Cancel Item flow instead. */}
+                        {!row.id && (
+                          <div className="sm:pt-4">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveItemRow(index)}
+                              className="rounded p-1 text-slate-400 hover:text-rose-600 transition"
+                              title="Remove Row"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        )}
                       </div>
                       </div>
                     );
@@ -1578,14 +1842,26 @@ const Sells = () => {
                       type="number"
                       min="0"
                       step="0.01"
-                      value={
-                        manualSellingAmount !== ""
-                          ? manualSellingAmount
-                          : calculatedItemsTotal
-                      }
-                      onChange={(e) => setManualSellingAmount(e.target.value)}
+                      value={manualSellingAmount}
+                      onFocus={(e) => {
+                        // Typing into the default "0" appends after it (e.g. "0" + "5" = "05")
+                        // instead of replacing it — clear it on focus so the first keystroke starts fresh.
+                        if (e.target.value === "0") setManualSellingAmount("");
+                      }}
+                      onBlur={() => {
+                        // Clearing the field hands control back to the live items total instead
+                        // of getting stuck on a blank/invalid value.
+                        if (manualSellingAmount.trim() === "") {
+                          setManualSellingAmount(String(calculatedItemsTotal));
+                          setSellingAmountManuallyEdited(false);
+                        }
+                      }}
+                      onChange={(e) => {
+                        setManualSellingAmount(e.target.value);
+                        setSellingAmountManuallyEdited(true);
+                      }}
                       onWheel={blurNumberInputOnWheel}
-                      placeholder={calculatedItemsTotal.toString()}
+                      placeholder="0.00"
                       className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
                     />
                     <p className="mt-0.5 text-[10px] text-slate-400">
@@ -1596,36 +1872,40 @@ const Sells = () => {
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Collected Amount (₹) {!selectedSale && "*"}
+                      Collected Amount (₹) *
                     </label>
-                    {selectedSale ? (
-                      <div className="w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-bold text-emerald-600">
-                        ₹{Number(collectedAmount || 0).toLocaleString("en-IN")}
-                      </div>
-                    ) : (
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        required
-                        value={collectedAmount}
-                        onFocus={(e) => {
-                          // Typing into the default "0" appends after it (e.g. "0" + "5" = "05")
-                          // instead of replacing it — clear it on focus so the first keystroke starts fresh.
-                          if (e.target.value === "0") setCollectedAmount("");
-                        }}
-                        onBlur={() => {
-                          if (collectedAmount.trim() === "") setCollectedAmount("0");
-                        }}
-                        onChange={(e) => setCollectedAmount(e.target.value)}
-                        onWheel={blurNumberInputOnWheel}
-                        placeholder="0.00"
-                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-emerald-600 focus:border-[#3d6fe0] focus:outline-none"
-                      />
-                    )}
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      required
+                      readOnly={bankPayments.length > 0}
+                      value={bankPayments.length > 0 ? String(effectiveCollectedAmount) : collectedAmount}
+                      onFocus={(e) => {
+                        // Typing into the default "0" appends after it (e.g. "0" + "5" = "05")
+                        // instead of replacing it — clear it on focus so the first keystroke starts fresh.
+                        if (e.target.value === "0") setCollectedAmount("");
+                      }}
+                      onBlur={() => {
+                        if (collectedAmount.trim() === "") setCollectedAmount("0");
+                      }}
+                      onChange={(e) => setCollectedAmount(e.target.value)}
+                      onWheel={blurNumberInputOnWheel}
+                      placeholder="0.00"
+                      className={`w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-emerald-600 focus:border-[#3d6fe0] focus:outline-none ${
+                        bankPayments.length > 0 ? "bg-slate-100" : "bg-white"
+                      }`}
+                    />
                     {selectedSale && (
                       <p className="mt-0.5 text-[10px] text-slate-400">
-                        Use "Record Payment" in the sale details to add more.
+                        {Number(selectedSale.collectedAmount ?? 0) === 0
+                          ? "Enter the amount actually collected — it's recorded as this sale's payment automatically."
+                          : "Increasing this records an additional payment; decreasing it records a correction. To log a same-day payment with its own method/notes instead, use \"Record Payment\" in the sale details."}
+                      </p>
+                    )}
+                    {bankPayments.length > 0 && (
+                      <p className="mt-0.5 text-[10px] text-slate-400">
+                        Auto-filled from the bank split rows below.
                       </p>
                     )}
                   </div>
@@ -1660,6 +1940,24 @@ const Sells = () => {
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none resize-none"
                   />
                 </div>
+
+                <div className="mt-3 flex items-center gap-2">
+                  <input
+                    id="createCourierEntry"
+                    type="checkbox"
+                    checked={createCourierEntry}
+                    onChange={(e) => setCreateCourierEntry(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-[#3d6fe0] focus:ring-[#3d6fe0]"
+                  />
+                  <label htmlFor="createCourierEntry" className="text-xs font-semibold text-slate-700">
+                    Create Courier Entry
+                  </label>
+                </div>
+                {selectedSale && (
+                  <p className="mt-0.5 text-[10px] text-slate-400">
+                    Changing this creates or cancels the shipment tracking entries for this sale's items.
+                  </p>
+                )}
               </div>
 
               {/* Action Buttons */}
@@ -1674,11 +1972,17 @@ const Sells = () => {
                 <button
                   type="submit"
                   disabled={
-                    createSaleMutation.isPending || updateSaleMutation.isPending
+                    createSaleMutation.isPending ||
+                    updateSaleMutation.isPending ||
+                    addSaleItemMutation.isPending ||
+                    updateSaleItemMutation.isPending
                   }
                   className="rounded-lg bg-[#3d6fe0] px-5 py-2 text-xs font-bold text-white shadow-md shadow-blue-500/20 hover:bg-[#3162d2] disabled:opacity-50"
                 >
-                  {createSaleMutation.isPending || updateSaleMutation.isPending
+                  {createSaleMutation.isPending ||
+                  updateSaleMutation.isPending ||
+                  addSaleItemMutation.isPending ||
+                  updateSaleItemMutation.isPending
                     ? "Processing..."
                     : selectedSale
                       ? "Update sells Entry"
@@ -1690,102 +1994,6 @@ const Sells = () => {
         </div>
       )}
 
-      {/* QUICK ADD PRODUCT MODAL */}
-      {isProductModalOpen && (
-        <div
-          className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-sm"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setIsProductModalOpen(false);
-              setSaveAsNewProduct(false);
-            }
-          }}
-        >
-          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl border border-slate-200">
-            <h3 className="text-sm font-bold text-slate-900 mb-1">
-              Add New Master Product
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              Create a new product record. Initial stock will be set to 0.
-            </p>
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!newProductName.trim()) return;
-                if (!saveAsNewProduct) {
-                  toast.error("Check \"Save as New Product\" to save this product");
-                  return;
-                }
-                createProductMutation.mutate({
-                  name: newProductName.trim(),
-                  description: newProductDesc.trim() || undefined,
-                });
-              }}
-              className="space-y-3"
-            >
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Product Name *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={newProductName}
-                  onChange={(e) => setNewProductName(e.target.value)}
-                  placeholder="e.g. Engine Oil 15W-40"
-                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Description
-                </label>
-                <textarea
-                  value={newProductDesc}
-                  onChange={(e) => setNewProductDesc(e.target.value)}
-                  rows={2}
-                  placeholder="Optional details..."
-                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none resize-none"
-                />
-              </div>
-
-              <div className="flex items-center justify-between gap-2 pt-2">
-                <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
-                  <input
-                    type="checkbox"
-                    checked={saveAsNewProduct}
-                    onChange={(e) => setSaveAsNewProduct(e.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-slate-300 text-[#3d6fe0] focus:ring-[#3d6fe0]"
-                  />
-                  Save as New Product
-                </label>
-
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsProductModalOpen(false);
-                      setSaveAsNewProduct(false);
-                    }}
-                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={createProductMutation.isPending}
-                    className="rounded-lg bg-[#3d6fe0] px-4 py-1.5 text-xs font-bold text-white hover:bg-[#3162d2] disabled:opacity-50"
-                  >
-                    {createProductMutation.isPending ? "Creating..." : "Save Product"}
-                  </button>
-                </div>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* DETAIL MODAL */}
       {isDetailOpen && selectedSale && detail && (
@@ -1830,7 +2038,7 @@ const Sells = () => {
                   </span>
                   <span className="font-semibold text-slate-800">
                     {detail.paymentMethod || "—"}
-                    {detail.paymentMethod === "BankTransfer" && detail.bankAccount && (
+                    {(!detail.bankPayments || detail.bankPayments.length === 0) && detail.bankAccount && (
                       <span className="block text-[10px] font-normal text-slate-500">
                         {detail.bankAccount.bankName} — {detail.bankAccount.accountNumber}
                       </span>
@@ -1910,6 +2118,36 @@ const Sells = () => {
                   </span>
                 </div>
               </div>
+
+              {detail.bankPayments && detail.bankPayments.length > 0 && (
+                <div>
+                  <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px] mb-2">
+                    Bank Account Split
+                  </h4>
+                  <div className="rounded-xl border border-slate-200 overflow-hidden">
+                    <table className="w-full text-left">
+                      <thead className="bg-slate-100 text-[10px] font-bold uppercase text-slate-600">
+                        <tr>
+                          <th className="p-2.5">Bank Account</th>
+                          <th className="p-2.5 text-right">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {detail.bankPayments.map((bp) => (
+                          <tr key={bp.id}>
+                            <td className="p-2.5 text-slate-600">
+                              {bp.bankAccount ? `${bp.bankAccount.bankName} — ${bp.bankAccount.accountNumber}` : "—"}
+                            </td>
+                            <td className="p-2.5 text-right font-bold text-emerald-600">
+                              ₹{Number(bp.amount).toLocaleString("en-IN")}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px] mb-2">

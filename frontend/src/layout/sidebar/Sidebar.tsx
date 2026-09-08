@@ -130,29 +130,28 @@ const Sidebar = () => {
     };
 
     return (
-        <div className="flex h-screen w-75 flex-col justify-between border-r border-[#e0e0e0] bg-[#1e293b] text-slate-300">
-            <div>
-                {/* Branding/Header */}
-                <div className="flex items-center gap-3 border-b border-slate-700 px-6 py-5">
-                    <img
-                        src={LOGO}
-                        alt="Madhuram Motors Logo"
-                        className="h-10 w-10 rounded-full object-cover border-2 border-blue-500"
-                    />
-                    <div>
-                        <h2 className="text-base font-bold text-white tracking-wide">
-                            Madhuram Motors
-                        </h2>
-                        <span className="text-xs text-blue-400 font-medium uppercase tracking-wider">
-                            CRM Dashboard
-                        </span>
-                    </div>
+        <div className="flex h-screen w-75 flex-col overflow-hidden border-r border-[#e0e0e0] bg-[#1e293b] text-slate-300">
+            {/* Branding/Header */}
+            <div className="flex items-center gap-3 border-b border-slate-700 px-6 py-5 shrink-0">
+                <img
+                    src={LOGO}
+                    alt="Madhuram Motors Logo"
+                    className="h-10 w-10 rounded-full object-cover border-2 border-blue-500"
+                />
+                <div>
+                    <h2 className="text-base font-bold text-white tracking-wide">
+                        Madhuram Motors
+                    </h2>
+                    <span className="text-xs text-blue-400 font-medium uppercase tracking-wider">
+                        CRM Dashboard
+                    </span>
                 </div>
+            </div>
 
-                {/* Navigation Menu */}
-                <nav className="mt-6 px-4 space-y-1.5">
-                    {visibleSidebarItems.length > 0 ? (
-                        visibleSidebarItems.map((item) => {
+            {/* Navigation Menu */}
+            <nav className="flex-1 min-h-0 overflow-y-auto mt-6 px-4 pb-4 space-y-1.5">
+                {visibleSidebarItems.length > 0 ? (
+                    visibleSidebarItems.map((item) => {
                             if (item.children && item.children.length > 0) {
                                 const hasActiveChild = item.children.some(
                                     (child) => location.pathname.toLowerCase() === child.path.toLowerCase()
@@ -227,10 +226,9 @@ const Sidebar = () => {
                         </div>
                     )}
                 </nav>
-            </div>
 
             {/* Profile & Logout Footer */}
-            <div className="border-t border-slate-700 p-4">
+            <div className="border-t border-slate-700 p-4 shrink-0">
                 <div className="flex items-center justify-between rounded-lg bg-slate-800/60 p-3">
                     <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold text-white">

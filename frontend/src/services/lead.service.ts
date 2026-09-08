@@ -48,6 +48,17 @@ export interface LeadData {
   createdBy?: number;
   salesEmployee?: LeadRefData | null;
   approver?: LeadRefData | null;
+  /** The Sell auto-created once this lead's status is set to Complete (and approved) — see
+   *  backend lead.controller.js#ensureSaleForLead. Null until then. */
+  saleId?: number | null;
+  sale?: {
+    id: number;
+    invoiceNumber?: string | null;
+    status?: string;
+    sellingAmount?: number;
+    collectedAmount?: number;
+    pendingAmount?: number;
+  } | null;
   createdAt?: string;
   updatedAt?: string;
 }

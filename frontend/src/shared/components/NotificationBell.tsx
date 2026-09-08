@@ -13,6 +13,7 @@ import notificationService, {
   type NotificationData,
 } from "@/services/notification.service";
 import { initSocket } from "@/services/socket.service";
+import { playNotificationSound } from "@/shared/utils/notificationSound";
 
 interface NotificationBellProps {
   moduleName?: "couriers" | "account" | "admin" | "all";
@@ -67,6 +68,9 @@ const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
   const { userId, role } = useSelector((state: RootState) => state.auth);
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  // Tracks notification ids we've already played a sound for, so a socket reconnect or a
+  // duplicate emit for the same notification never plays the sound twice.
+  const playedSoundIdsRef = useRef<Set<number>>(new Set());
 
   // Fetch initial notifications
   useEffect(() => {
@@ -100,6 +104,12 @@ const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
     const handleNotification = (payload: { notification: NotificationData }) => {
       if (payload?.notification) {
         dispatch(addNotification(payload.notification));
+
+        const notifId = payload.notification.id;
+        if (notifId != null && !playedSoundIdsRef.current.has(notifId)) {
+          playedSoundIdsRef.current.add(notifId);
+          playNotificationSound();
+        }
       }
     };
 

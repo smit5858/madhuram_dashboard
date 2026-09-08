@@ -19,6 +19,7 @@ import {
   Barcode,
   PackageCheck,
   PlusCircle,
+  Receipt,
 } from "lucide-react";
 import { useDebounce } from "@/hook/useDebounce";
 import { type RootState } from "../../store/store";
@@ -53,10 +54,6 @@ interface ApiErrorLike {
 
 interface UnitRowValues {
   serialNumber: string;
-  purchasePrice: number | "";
-  sellingPrice: number | "";
-  purchaseDate: string;
-  dealerId: number | "";
 }
 
 interface ProductFormValues {
@@ -72,7 +69,7 @@ interface ProductFormValues {
   units: UnitRowValues[];
 }
 
-const EMPTY_UNIT_ROW: UnitRowValues = { serialNumber: "", purchasePrice: "", sellingPrice: "", purchaseDate: getTodayISODate(), dealerId: "" };
+const EMPTY_UNIT_ROW: UnitRowValues = { serialNumber: "" };
 
 const EMPTY_FORM_VALUES: ProductFormValues = {
   name: "",
@@ -306,10 +303,16 @@ const EMPTY_RECEIVE_NON_SERIAL_VALUES: ReceiveNonSerialFormValues = {
 };
 
 interface ReceiveSerializedFormValues {
+  purchasePrice: number | "";
+  sellingPrice: number | "";
+  dealerId: number | "";
   units: UnitRowValues[];
 }
 
 const EMPTY_RECEIVE_SERIALIZED_VALUES: ReceiveSerializedFormValues = {
+  purchasePrice: "",
+  sellingPrice: "",
+  dealerId: "",
   units: [{ ...EMPTY_UNIT_ROW }],
 };
 
@@ -453,10 +456,9 @@ const ReceiveStockModal = ({
                     .filter((u) => u.serialNumber.trim())
                     .map((u) => ({
                       serialNumber: u.serialNumber.trim(),
-                      purchasePrice: u.purchasePrice === "" ? undefined : Number(u.purchasePrice),
-                      sellingPrice: u.sellingPrice === "" ? undefined : Number(u.sellingPrice),
-                      purchaseDate: u.purchaseDate || undefined,
-                      dealerId: u.dealerId === "" ? undefined : Number(u.dealerId),
+                      purchasePrice: values.purchasePrice === "" ? undefined : Number(values.purchasePrice),
+                      sellingPrice: values.sellingPrice === "" ? undefined : Number(values.sellingPrice),
+                      dealerId: values.dealerId === "" ? undefined : Number(values.dealerId),
                     })),
                 },
                 { onSettled: () => helpers.setSubmitting(false) }
@@ -465,10 +467,32 @@ const ReceiveStockModal = ({
           >
             {({ values, setFieldValue, isSubmitting }) => (
               <Form className="space-y-3">
+                <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field name="purchasePrice" type="number" label="Purchase Price" placeholder="0.00" component={FormikInput} />
+                    <Field name="sellingPrice" type="number" label="Selling Price" placeholder="0.00" component={FormikInput} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Dealer / Supplier</label>
+                    <select
+                      value={values.dealerId}
+                      onChange={(e) => setFieldValue("dealerId", e.target.value ? Number(e.target.value) : "")}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                    >
+                      <option value="">-- No dealer --</option>
+                      {dealers.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
                 <FieldArray name="units">
                   {({ push, remove }) => (
                     <div className="space-y-3">
-                      {values.units.map((row, idx) => (
+                      {values.units.map((_, idx) => (
                         <div key={idx} className="rounded-lg bg-slate-50 border border-slate-200 p-3 space-y-2">
                           <div className="flex items-center justify-between">
                             <span className="text-[11px] font-bold text-slate-400">Unit #{idx + 1}</span>
@@ -478,54 +502,12 @@ const ReceiveStockModal = ({
                               </button>
                             )}
                           </div>
-                          <div className="grid grid-cols-2 gap-2">
-                            <Field
-                              name={`units.${idx}.serialNumber`}
-                              label="Serial Number"
-                              placeholder="e.g. TC001"
-                              component={FormikInput}
-                            />
-                            <Field
-                              name={`units.${idx}.purchasePrice`}
-                              type="number"
-                              label="Purchase Price"
-                              placeholder="0.00"
-                              component={FormikInput}
-                            />
-                            <Field
-                              name={`units.${idx}.sellingPrice`}
-                              type="number"
-                              label="Selling Price"
-                              placeholder="0.00"
-                              component={FormikInput}
-                            />
-                            <div>
-                              <label className="block text-xs font-semibold text-slate-700 mb-1">Purchase Date</label>
-                              <input
-                                type="date"
-                                value={row.purchaseDate}
-                                onChange={(e) => setFieldValue(`units.${idx}.purchaseDate`, e.target.value)}
-                                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-xs font-semibold text-slate-700 mb-1">Dealer</label>
-                              <select
-                                value={row.dealerId}
-                                onChange={(e) =>
-                                  setFieldValue(`units.${idx}.dealerId`, e.target.value ? Number(e.target.value) : "")
-                                }
-                                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
-                              >
-                                <option value="">--</option>
-                                {dealers.map((d) => (
-                                  <option key={d.id} value={d.id}>
-                                    {d.name}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          </div>
+                          <Field
+                            name={`units.${idx}.serialNumber`}
+                            label="Serial Number"
+                            placeholder="e.g. TC001"
+                            component={FormikInput}
+                          />
                         </div>
                       ))}
                       <button
@@ -759,7 +741,9 @@ const Products = () => {
   const [pageSize, setPageSize] = useState(10);
 
   const queryFilters = useMemo<ProductFilters>(
-    () => ({ ...appliedFilters, page: appliedFilters.page ?? 1, limit: pageSize }),
+    // The master catalog never shows products quick-added from the Sells form without
+    // "Save as New Product" — those exist only to back one sale's line item.
+    () => ({ ...appliedFilters, masterOnly: true, page: appliedFilters.page ?? 1, limit: pageSize }),
     [appliedFilters, pageSize]
   );
 
@@ -797,7 +781,7 @@ const Products = () => {
   const [dealerQuickAdd, setDealerQuickAdd] = useState<{
     open: boolean;
     mode: "create" | "edit";
-    target: "product" | number | null;
+    target: "product" | null;
     dealerId: number | null;
   }>({
     open: false,
@@ -920,10 +904,9 @@ const Products = () => {
               .filter((u) => u.serialNumber.trim())
               .map((u) => ({
                 serialNumber: u.serialNumber.trim(),
-                purchasePrice: u.purchasePrice === "" ? undefined : Number(u.purchasePrice),
-                sellingPrice: u.sellingPrice === "" ? undefined : Number(u.sellingPrice),
-                purchaseDate: u.purchaseDate || undefined,
-                dealerId: u.dealerId === "" ? undefined : Number(u.dealerId),
+                purchasePrice: values.purchasePrice === "" ? undefined : Number(values.purchasePrice),
+                sellingPrice: values.sellingPrice === "" ? undefined : Number(values.sellingPrice),
+                dealerId: values.dealerId === "" ? undefined : Number(values.dealerId),
               })),
           }
         : {
@@ -1410,10 +1393,41 @@ const Products = () => {
                     {!selectedProduct && values.productType === "SERIALIZED" && (
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
                         <p className="text-xs font-semibold text-slate-600">Serial Units (optional — you can also add these later)</p>
+                        <div className="rounded-lg bg-white border border-slate-200 p-3 space-y-2">
+                          <div className="grid grid-cols-2 gap-2">
+                            <Field name="purchasePrice" type="number" label="Purchase Price" placeholder="0.00" component={FormikInput} />
+                            <Field name="sellingPrice" type="number" label="Selling Price" placeholder="0.00" component={FormikInput} />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">Dealer / Supplier</label>
+                            <div className="flex gap-2">
+                              <select
+                                value={values.dealerId}
+                                onChange={(e) => setFieldValue("dealerId", e.target.value ? Number(e.target.value) : "")}
+                                className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                              >
+                                <option value="">-- No dealer --</option>
+                                {dealers.map((d) => (
+                                  <option key={d.id} value={d.id}>
+                                    {d.name}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() => setDealerQuickAdd({ open: true, mode: "create", target: "product", dealerId: null })}
+                                title="Add new dealer"
+                                className="rounded-lg border border-slate-200 px-2 text-slate-500 hover:bg-slate-100"
+                              >
+                                <PlusCircle className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
                         <FieldArray name="units">
                           {({ push, remove }) => (
                             <div className="space-y-3">
-                              {values.units.map((row, idx) => (
+                              {values.units.map((_, idx) => (
                                 <div key={idx} className="rounded-lg bg-white border border-slate-200 p-3 space-y-2">
                                   <div className="flex items-center justify-between">
                                     <span className="text-[11px] font-bold text-slate-400">Unit #{idx + 1}</span>
@@ -1423,64 +1437,12 @@ const Products = () => {
                                       </button>
                                     )}
                                   </div>
-                                  <div className="grid grid-cols-2 gap-2">
-                                    <Field
-                                      name={`units.${idx}.serialNumber`}
-                                      label="Serial Number"
-                                      placeholder="e.g. TC001"
-                                      component={FormikInput}
-                                    />
-                                    <Field
-                                      name={`units.${idx}.purchasePrice`}
-                                      type="number"
-                                      label="Purchase Price"
-                                      placeholder="0.00"
-                                      component={FormikInput}
-                                    />
-                                    <Field
-                                      name={`units.${idx}.sellingPrice`}
-                                      type="number"
-                                      label="Selling Price"
-                                      placeholder="0.00"
-                                      component={FormikInput}
-                                    />
-                                    <div>
-                                      <label className="block text-xs font-semibold text-slate-700 mb-1">Purchase Date</label>
-                                      <input
-                                        type="date"
-                                        value={row.purchaseDate}
-                                        onChange={(e) => setFieldValue(`units.${idx}.purchaseDate`, e.target.value)}
-                                        className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="block text-xs font-semibold text-slate-700 mb-1">Dealer</label>
-                                      <div className="flex gap-2">
-                                        <select
-                                          value={row.dealerId}
-                                          onChange={(e) =>
-                                            setFieldValue(`units.${idx}.dealerId`, e.target.value ? Number(e.target.value) : "")
-                                          }
-                                          className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
-                                        >
-                                          <option value="">--</option>
-                                          {dealers.map((d) => (
-                                            <option key={d.id} value={d.id}>
-                                              {d.name}
-                                            </option>
-                                          ))}
-                                        </select>
-                                        <button
-                                          type="button"
-                                          onClick={() => setDealerQuickAdd({ open: true, mode: "create", target: idx, dealerId: null })}
-                                          title="Add new dealer"
-                                          className="rounded-lg border border-slate-200 px-2 text-slate-500 hover:bg-slate-100"
-                                        >
-                                          <PlusCircle className="h-4 w-4" />
-                                        </button>
-                                      </div>
-                                    </div>
-                                  </div>
+                                  <Field
+                                    name={`units.${idx}.serialNumber`}
+                                    label="Serial Number"
+                                    placeholder="e.g. TC001"
+                                    component={FormikInput}
+                                  />
                                 </div>
                               ))}
                               <button
@@ -1591,8 +1553,6 @@ const Products = () => {
                     onCreated={(dealer) => {
                       if (dealerQuickAdd.target === "product") {
                         setFieldValue("dealerId", dealer.id);
-                      } else if (typeof dealerQuickAdd.target === "number") {
-                        setFieldValue(`units.${dealerQuickAdd.target}.dealerId`, dealer.id);
                       }
                     }}
                   />
@@ -1696,6 +1656,42 @@ const Products = () => {
                     </div>
                   )}
 
+                  {detailProduct.productType === "NON_SERIAL" && (
+                    <div className="rounded-xl bg-slate-50 p-4 border border-slate-100">
+                      <div className="flex items-center gap-2 text-slate-500 font-medium mb-2">
+                        <Receipt className="h-3.5 w-3.5" /> Purchase History
+                      </div>
+                      {!detailProduct.purchases || detailProduct.purchases.length === 0 ? (
+                        <p className="text-slate-400">No purchases recorded yet.</p>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-[11px]">
+                            <thead className="text-slate-400 uppercase tracking-wide">
+                              <tr>
+                                <th className="py-1.5 pr-3 whitespace-nowrap">Sr. No.</th>
+                                <th className="py-1.5 pr-3 whitespace-nowrap">Purchase Date</th>
+                                <th className="py-1.5 pr-3 whitespace-nowrap">Quantity</th>
+                                <th className="py-1.5 pr-3 whitespace-nowrap">Purchase Amount</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200">
+                              {detailProduct.purchases.map((p, idx) => (
+                                <tr key={p.id}>
+                                  <td className="py-1.5 pr-3 whitespace-nowrap">{idx + 1}</td>
+                                  <td className="py-1.5 pr-3 whitespace-nowrap">
+                                    {p.purchaseDate ? new Date(p.purchaseDate).toLocaleDateString("en-IN") : "—"}
+                                  </td>
+                                  <td className="py-1.5 pr-3 whitespace-nowrap">{p.quantity}</td>
+                                  <td className="py-1.5 pr-3 whitespace-nowrap">{formatCurrency(p.purchaseAmount)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {detailProduct.productType === "SERIALIZED" && (
                     <div className="rounded-xl bg-slate-50 p-4 border border-slate-100">
                       <div className="flex items-center gap-2 text-slate-500 font-medium mb-2">
@@ -1708,35 +1704,48 @@ const Products = () => {
                           <table className="w-full text-left text-[11px]">
                             <thead className="text-slate-400 uppercase tracking-wide">
                               <tr>
+                                <th className="py-1.5 pr-3 whitespace-nowrap">Sr. No.</th>
                                 <th className="py-1.5 pr-3 whitespace-nowrap">Serial No.</th>
-                                <th className="py-1.5 pr-3 whitespace-nowrap">Purchase Price</th>
                                 <th className="py-1.5 pr-3 whitespace-nowrap">Purchase Date</th>
+                                <th className="py-1.5 pr-3 whitespace-nowrap">Purchase Amount</th>
                                 <th className="py-1.5 pr-3 whitespace-nowrap">Dealer</th>
                                 <th className="py-1.5 pr-3 whitespace-nowrap">Status</th>
-                                <th className="py-1.5 pr-3 whitespace-nowrap">Customer</th>
-                                <th className="py-1.5 pr-3 whitespace-nowrap">Selling Price</th>
+                                <th className="py-1.5 pr-3 whitespace-nowrap">Customer Name</th>
                                 <th className="py-1.5 pr-3 whitespace-nowrap">Selling Date</th>
+                                <th className="py-1.5 pr-3 whitespace-nowrap">Selling Amount</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-200">
-                              {detailProduct.units.map((u) => (
-                                <tr key={u.id}>
-                                  <td className="py-1.5 pr-3 font-mono text-slate-700 whitespace-nowrap">{u.serialNumber}</td>
-                                  <td className="py-1.5 pr-3 whitespace-nowrap">{formatCurrency(u.purchasePrice)}</td>
-                                  <td className="py-1.5 pr-3 whitespace-nowrap">{u.purchaseDate || "—"}</td>
-                                  <td className="py-1.5 pr-3 whitespace-nowrap">{u.dealer?.name || "—"}</td>
-                                  <td className="py-1.5 pr-3 whitespace-nowrap">
-                                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold border ${SERIAL_STATUS_BADGE_CLASS[u.status]}`}>
-                                      {u.status}
-                                    </span>
-                                  </td>
-                                  <td className="py-1.5 pr-3 whitespace-nowrap">{u.customerName || "—"}</td>
-                                  <td className="py-1.5 pr-3 whitespace-nowrap">{formatCurrency(u.sellingPrice)}</td>
-                                  <td className="py-1.5 pr-3 whitespace-nowrap">
-                                    {u.sellingDate ? new Date(u.sellingDate).toLocaleDateString("en-IN") : "—"}
-                                  </td>
-                                </tr>
-                              ))}
+                              {detailProduct.units.map((u, idx) => {
+                                const isSold = u.status === "SOLD";
+                                return (
+                                  <tr key={u.id}>
+                                    <td className="py-1.5 pr-3 whitespace-nowrap">{idx + 1}</td>
+                                    <td className="py-1.5 pr-3 font-mono text-slate-700 whitespace-nowrap">{u.serialNumber}</td>
+                                    <td className="py-1.5 pr-3 whitespace-nowrap">{u.purchaseDate || "—"}</td>
+                                    <td className="py-1.5 pr-3 whitespace-nowrap">{formatCurrency(u.purchasePrice)}</td>
+                                    <td className="py-1.5 pr-3 whitespace-nowrap">{u.dealer?.name || "—"}</td>
+                                    <td className="py-1.5 pr-3 whitespace-nowrap">
+                                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold border ${SERIAL_STATUS_BADGE_CLASS[u.status]}`}>
+                                        {u.status}
+                                      </span>
+                                    </td>
+                                    <td className="py-1.5 pr-3 whitespace-nowrap">
+                                      {isSold ? u.customerName || "—" : <span className="italic text-slate-400">Not Sold</span>}
+                                    </td>
+                                    <td className="py-1.5 pr-3 whitespace-nowrap">
+                                      {isSold ? (
+                                        u.sellingDate ? new Date(u.sellingDate).toLocaleDateString("en-IN") : "—"
+                                      ) : (
+                                        <span className="italic text-slate-400">Not Sold</span>
+                                      )}
+                                    </td>
+                                    <td className="py-1.5 pr-3 whitespace-nowrap">
+                                      {isSold ? formatCurrency(u.sellingPrice) : <span className="italic text-slate-400">Not Sold</span>}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>

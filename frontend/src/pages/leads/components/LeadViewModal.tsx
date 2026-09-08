@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
+import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
   AlertTriangle,
@@ -12,6 +13,7 @@ import {
   Package,
   Phone,
   ShieldCheck,
+  ShoppingBag,
   User,
   XCircle,
 } from "lucide-react";
@@ -126,6 +128,7 @@ interface LeadViewModalProps {
 
 const LeadViewModal = ({ leadId, onClose }: LeadViewModalProps) => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const { role } = useSelector((state: RootState) => state.auth);
   const isAdmin = role === "Admin";
 
@@ -232,6 +235,27 @@ const LeadViewModal = ({ leadId, onClose }: LeadViewModalProps) => {
               <DetailItem icon={Calendar} label="Created" value={formatDateTime(lead.createdAt)} />
               <DetailItem icon={Calendar} label="Last Updated" value={formatDateTime(lead.updatedAt)} />
             </Section>
+
+            {lead.status === "COMPLETED" && lead.sale?.id && (
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 p-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white text-emerald-500 ring-1 ring-emerald-200">
+                    <ShoppingBag className="h-3.5 w-3.5" />
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600">Sell Created</div>
+                    <div className="text-sm font-medium text-slate-800">{lead.sale.invoiceNumber || `Sale #${lead.sale.id}`}</div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/sells?openSaleId=${lead.sale!.id}`)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+                >
+                  Open Sell
+                </button>
+              </div>
+            )}
 
             {lead.approvalStatus !== "PENDING" && (
               <Section title="Approval">

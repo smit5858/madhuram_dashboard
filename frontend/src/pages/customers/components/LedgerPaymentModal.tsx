@@ -122,7 +122,7 @@ const LedgerPaymentModal = ({ customerId, customerName, entry, saleId, onClose }
                     name="bankAccountId"
                     label="Bank Account"
                     placeholder="Select bank account"
-                    options={bankAccountsList.map((acc) => ({ value: acc.id!, label: `${acc.bankName} — ${acc.accountNumber}` }))}
+                    options={bankAccountsList.map((acc) => ({ value: acc.id!, label: `${acc.bankName}  ${acc.accountNumber ? '—' + acc.accountNumber : ''}` }))}
                     component={FormikSelect}
                   />
                 )}

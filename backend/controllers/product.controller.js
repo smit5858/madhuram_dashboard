@@ -34,6 +34,7 @@ const serializeProduct = (p, serialCounts) => {
     description: p.description,
     productType: p.productType,
     isActive: p.isActive,
+    isMasterProduct: p.isMasterProduct,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
   };
@@ -70,7 +71,7 @@ const serializeProduct = (p, serialCounts) => {
 // GET /products?search=&productType=&status=&page=&limit=
 exports.getProducts = async (req, res) => {
   try {
-    const { search, productType, status, page, limit } = req.query;
+    const { search, productType, status, masterOnly, page, limit } = req.query;
 
     const where = {};
 
@@ -87,6 +88,14 @@ exports.getProducts = async (req, res) => {
       where.isActive = true;
     } else if (status === "inactive") {
       where.isActive = false;
+    }
+
+    // Excludes products quick-added from the Sells form without "Save as New Product" — those
+    // rows exist only to back one sale's line item and aren't meant to show up in the master
+    // product catalog. Callers that need every real product row (e.g. the Sells item picker,
+    // which must still resolve/display one it just quick-added) simply omit this filter.
+    if (masterOnly === "true") {
+      where.isMasterProduct = true;
     }
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
@@ -142,7 +151,32 @@ exports.getProductById = async (req, res) => {
     }
 
     if (product.productType === "NON_SERIAL") {
-      const data = serializeProduct(product, {});
+      const purchaseMovements = await StockMovement.findAll({
+        where: { productId: id, type: "PURCHASE" },
+        order: [
+          ["purchaseDate", "ASC"],
+          ["id", "ASC"],
+        ],
+      });
+
+      // Same-day restocks are collapsed into one ledger row: quantities add up, and the
+      // amount is the combined cost (qty * price per movement) so an average price falls
+      // out naturally when the day's batches were bought at different rates.
+      const groupsByDate = new Map();
+      for (const m of purchaseMovements) {
+        const key = m.purchaseDate ?? `__no-date-${m.id}`;
+        if (!groupsByDate.has(key)) {
+          groupsByDate.set(key, { id: m.id, purchaseDate: m.purchaseDate, quantity: 0, purchaseAmount: 0 });
+        }
+        const group = groupsByDate.get(key);
+        group.quantity += m.quantity;
+        group.purchaseAmount += m.purchasePrice != null ? Number(m.purchasePrice) * m.quantity : 0;
+      }
+
+      const data = {
+        ...serializeProduct(product, {}),
+        purchases: Array.from(groupsByDate.values()),
+      };
       return res.status(200).json({ success: true, data });
     }
 
@@ -197,7 +231,7 @@ exports.createProduct = async (req, res) => {
   const t = await sequelize.transaction();
   try {
     const user = req.user;
-    const { name, description, productType, quantity, purchasePrice, sellingPrice, dealerId, purchaseDate, units } =
+    const { name, description, productType, quantity, purchasePrice, sellingPrice, dealerId, purchaseDate, units, isMasterProduct } =
       req.body || {};
 
     if (!name || !name.trim()) {
@@ -209,6 +243,12 @@ exports.createProduct = async (req, res) => {
       return res.status(400).json({ success: false, message: `productType must be one of ${VALID_PRODUCT_TYPES.join(", ")}` });
     }
     const resolvedType = productType || "NON_SERIAL";
+    // Defaults to true so every existing caller (the Products page "Add Product" flow) keeps
+    // creating real master products — only the Sells quick-add modal ever sends `false`.
+    const resolvedIsMaster = isMasterProduct === false ? false : true;
+    const successMessage = resolvedIsMaster
+      ? "Product created successfully"
+      : "Product saved for this sale only — not added to the master product catalog";
 
     let dealer = null;
     if (dealerId) {
@@ -220,7 +260,7 @@ exports.createProduct = async (req, res) => {
     }
 
     const product = await Product.create(
-      { name: name.trim(), description: description || null, productType: resolvedType },
+      { name: name.trim(), description: description || null, productType: resolvedType, isMasterProduct: resolvedIsMaster },
       { transaction: t }
     );
 
@@ -293,7 +333,7 @@ exports.createProduct = async (req, res) => {
 
       return res.status(201).json({
         success: true,
-        message: "Product created successfully",
+        message: successMessage,
         data: serializeProduct({ ...product.toJSON(), Stock: stock.toJSON() }, {}),
       });
     }
@@ -321,7 +361,7 @@ exports.createProduct = async (req, res) => {
             status: "AVAILABLE",
             purchasePrice: u.purchasePrice ?? null,
             sellingPrice: u.sellingPrice ?? null,
-            purchaseDate: u.purchaseDate ?? null,
+            purchaseDate: u.purchaseDate ?? new Date(),
             dealerId: u.dealerId ?? null,
             receivedAt: new Date(),
             createdBy: user.id,
@@ -388,7 +428,7 @@ exports.createProduct = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: "Product created successfully",
+      message: successMessage,
       data: {
         ...serializeProduct(product, {}),
         units: createdUnits.map((u) => ({

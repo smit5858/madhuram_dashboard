@@ -14,9 +14,9 @@ const MainLayout = React.memo(({ children }: IMainLayoutProps) => {
     useDocumentTitle(RouteTitles[pathname] ?? "Dashboard");
 
     return (
-        <div className='main-layout'>
-            <div className="flex">
-                <div className="sidebar-main relative">
+        <div className='main-layout h-screen overflow-hidden'>
+            <div className="flex h-full">
+                <div className="sidebar-main relative h-full">
                     <SidebarMain />
                 </div>
                 <div className='main-content-container'>

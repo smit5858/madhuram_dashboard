@@ -354,6 +354,81 @@ const ensurePendingBillPaymentFieldsBackfilled = async () => {
   });
 };
 
+// The Sales module's "COD" payment method was retired in favor of "Cash" (already a distinct
+// option). Removing "COD" from the ENUM before sync({alter:true}) would leave any existing
+// rows still storing 'COD' pointing at a value the column no longer accepts — backfill them
+// first. Idempotent: a no-op once no row stores 'COD' anymore.
+const ensureCodPaymentMethodBackfilled = async () => {
+  const queryInterface = sequelize.getQueryInterface();
+  const tables = await queryInterface.showAllTables();
+  const tableNames = tables.map((table) => (typeof table === "string" ? table : table.tableName));
+
+  if (tableNames.includes("sells")) {
+    await sequelize.query("UPDATE sells SET paymentMethod = 'Cash' WHERE paymentMethod = 'COD'");
+  }
+  if (tableNames.includes("sale_payments")) {
+    await sequelize.query("UPDATE sale_payments SET method = 'Cash' WHERE method = 'COD'");
+  }
+};
+
+// The Sale ↔ BankAccount relationship moved from a single bankAccountId column to a
+// sale_bank_accounts table of (bank account, amount) payment allocations (the Bank Account
+// field now supports splitting the collected amount across multiple accounts). Runs after sync
+// (the table must exist first) and copies any existing sells.bankAccountId — with the sale's
+// full collectedAmount, the only allocation we know for a sale created before this change — so
+// old sales keep showing their previously selected bank account. Idempotent: only inserts rows
+// that don't exist yet.
+const backfillSaleBankAccounts = async () => {
+  const queryInterface = sequelize.getQueryInterface();
+  const tables = await queryInterface.showAllTables();
+  const tableNames = tables.map((table) => (typeof table === "string" ? table : table.tableName));
+  if (!tableNames.includes("sale_bank_accounts")) return;
+
+  await sequelize.query(`
+    INSERT INTO sale_bank_accounts (saleId, bankAccountId, amount, createdAt, updatedAt)
+    SELECT s.id, s.bankAccountId, s.collectedAmount, NOW(), NOW()
+    FROM sells s
+    WHERE s.bankAccountId IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM sale_bank_accounts sba
+        WHERE sba.saleId = s.id AND sba.bankAccountId = s.bankAccountId
+      )
+  `);
+};
+
+// sale_bank_accounts used to enforce one row per (sale, bank account) before this table grew an
+// `amount` column — now that a sale's paid amount can be split across several rows for the same
+// bank account (see saleBankAccount.model.js), that unique index has to go. sync({alter:true})
+// doesn't reliably drop indexes no longer declared on the model, so this removes it explicitly.
+// Idempotent: a no-op once the index is already gone (including on a table created fresh, which
+// never had it).
+const ensureSaleBankAccountsAllowDuplicates = async () => {
+  const queryInterface = sequelize.getQueryInterface();
+  const tables = await queryInterface.showAllTables();
+  const tableNames = tables.map((table) => (typeof table === "string" ? table : table.tableName));
+  if (!tableNames.includes("sale_bank_accounts")) return;
+
+  const indexes = await queryInterface.showIndex("sale_bank_accounts");
+  const duplicateIndex = indexes.find(
+    (idx) =>
+      idx.unique &&
+      idx.fields.some((f) => f.attribute === "saleId") &&
+      idx.fields.some((f) => f.attribute === "bankAccountId")
+  );
+  if (!duplicateIndex) return;
+
+  // The saleId foreign key relies on this composite index to satisfy InnoDB's "FK columns must
+  // be indexed" requirement — MySQL refuses to drop it until a replacement index on saleId
+  // exists.
+  const hasPlainSaleIdIndex = indexes.some(
+    (idx) => idx.name !== duplicateIndex.name && idx.fields[0]?.attribute === "saleId"
+  );
+  if (!hasPlainSaleIdIndex) {
+    await queryInterface.addIndex("sale_bank_accounts", ["saleId"]);
+  }
+  await queryInterface.removeIndex("sale_bank_accounts", duplicateIndex.name);
+};
+
 sequelize
   .authenticate()
   .then(() => {
@@ -371,10 +446,17 @@ sequelize
     return ensurePendingBillPaymentFieldsBackfilled();
   })
   .then(() => {
+    return ensureCodPaymentMethodBackfilled();
+  })
+  .then(() => {
+    return ensureSaleBankAccountsAllowDuplicates();
+  })
+  .then(() => {
     return sequelize.sync({ alter: true });
   })
   .then(async () => {
     logger.info("Models synced");
+    await backfillSaleBankAccounts();
     await ensureAllRoles();
     await ensureAllRoutesAndPermissions();
     await pruneObsoleteRoutes();

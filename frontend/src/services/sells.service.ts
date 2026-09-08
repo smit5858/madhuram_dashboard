@@ -28,7 +28,7 @@ export interface PaymentData {
   id: number;
   saleId: number;
   amount: number;
-  method?: "Cash" | "UPI" | "Card" | "COD" | "BankTransfer" | "Other" | null;
+  method?: "Cash" | "UPI" | "Card" | "BankTransfer" | "Other" | null;
   bankAccountId?: number | null;
   bankAccount?: { id: number; bankName: string; accountHolderName: string; accountNumber: string } | null;
   notes?: string | null;
@@ -44,9 +44,16 @@ export interface SaleData {
   customerId?: number;
   customerName: string;
   customerNumber?: string;
-  paymentMethod?: "Cash" | "UPI" | "Card" | "COD" | "BankTransfer" | "Other";
+  paymentMethod?: "Cash" | "UPI" | "Card" | "BankTransfer" | "Other";
+  /** Legacy single-account fields — superseded by `bankPayments` (amount per bank), kept for
+   *  backend responses that still mirror the first allocation's bank. */
   bankAccountId?: number | null;
   bankAccount?: { id: number; bankName: string; accountHolderName: string; accountNumber: string } | null;
+  /** The sale's collected amount, split across bank accounts — each row is one (bank account,
+   *  amount) allocation, and the same bank account can appear more than once (rows are never
+   *  merged). `id`/`bankAccount` are populated on the hydrated read shape and omitted on the
+   *  write shape sent on create/update. */
+  bankPayments?: { id?: number; bankAccountId: number; amount: number; bankAccount?: { id: number; bankName: string; accountHolderName: string; accountNumber: string } }[];
   city?: string;
   fromAddress?: string;
   pincode?: string;
@@ -57,6 +64,14 @@ export interface SaleData {
   status?: "PENDING" | "CONFIRMED" | "FULFILLED" | "CANCELLED";
   paymentStatus?: "UNPAID" | "PARTIALLY_PAID" | "PAID" | "REFUNDED" | "PARTIALLY_REFUNDED";
   fulfillmentStatus?: "PENDING" | "PARTIALLY_FULFILLED" | "FULFILLED" | "BACKORDERED" | "CANCELLED";
+  /** Whether this sale currently has at least one active (non-cancelled) Courier record —
+   *  read-only, computed by the backend (see sells.controller.js#attachCourierEntryFlags). Used
+   *  to initialize the "Create Courier Entry" checkbox correctly when opening Edit Sell. */
+  hasCourierEntries?: boolean;
+  /** Write-only on update: flips whether the sale should have Courier record(s) for its items —
+   *  created/cancelled to match, without duplicating an existing one (see
+   *  orderService.setCourierEntryForSale). Omit to leave courier entries untouched. */
+  createCourierEntry?: boolean;
   notes?: string;
   createdBy?: number;
   items?: SaleItemData[];
@@ -85,13 +100,19 @@ export interface CreateSalePayload {
   customerName: string;
   customerNumber?: string;
   paymentMethod?: string;
-  bankAccountId?: number | null;
+  /** Splits the sale's collected amount across bank accounts — one {bankAccountId, amount} row
+   *  per allocation. The same bank account may appear in more than one row (never merged), and
+   *  the rows' amounts must not exceed the collected amount. */
+  bankPayments?: { bankAccountId: number; amount: number }[];
   city?: string;
   fromAddress?: string;
   pincode?: string;
   sellingAmount: number;
   collectedAmount: number;
   notes?: string;
+  /** Whether to create a Courier record for each order line after the sale is created.
+   *  Defaults to true on the backend when omitted. */
+  createCourierEntry?: boolean;
   items: Array<{
     productId: number;
     quantity: number;
@@ -169,6 +190,17 @@ const getPayments = (saleId: number) =>
 const recordPayment = (saleId: number, data: { amount: number; method?: string; bankAccountId?: number | null; notes?: string }) =>
   httpService.post<{ success: boolean; message: string; data: SaleData }>(`/sells/${saleId}/payments`, data);
 
+// Adds a new product line to an existing sale — lets a Sales member finish filling in a sale
+// after the fact (e.g. a Lead-originated sale that started with just one placeholder line).
+const addSaleItem = (
+  saleId: number,
+  data: { productId: number; quantity: number; sellingPrice: number; serialNumbers?: string[] }
+) => httpService.post<{ success: boolean; message: string; data: SaleItemData }>(`/sells/${saleId}/items`, data);
+
+// Edits an existing line's price and/or quantity — the other half of addSaleItem above.
+const updateSaleItem = (saleId: number, itemId: number, data: { quantity?: number; sellingPrice?: number }) =>
+  httpService.put<{ success: boolean; message: string; data: SaleItemData }>(`/sells/${saleId}/items/${itemId}`, data);
+
 export default {
   getSales,
   getSellsTotals,
@@ -180,4 +212,6 @@ export default {
   exportSales,
   getPayments,
   recordPayment,
+  addSaleItem,
+  updateSaleItem,
 };

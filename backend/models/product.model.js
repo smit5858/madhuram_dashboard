@@ -26,6 +26,14 @@ const Product = sequelize.define(
       type: DataTypes.BOOLEAN,
       defaultValue: true,
     },
+    // false for products quick-added from the Sells form without "Save as New Product" — the
+    // row still exists (a SaleItem needs a real productId to track stock/fulfillment) but it's
+    // scoped to that one transaction and left out of the master product catalog and its filters.
+    isMasterProduct: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+    },
   },
   {
     tableName: "products",
