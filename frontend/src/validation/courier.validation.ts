@@ -46,6 +46,26 @@ export const courierEditSchema = z.object({
 
 export type CourierEditFormValues = z.infer<typeof courierEditSchema>;
 
+// Dedicated Incoming Courier create/edit form — deliberately a smaller field set than
+// courierEditSchema above: no charge/freePickup/kg/quantity/deliveryMode/serial numbers, none of
+// which apply to a manually-logged "customer sent us a product" record (see
+// IncomingCourierFormModal.tsx).
+export const incomingCourierEditSchema = z.object({
+  customerName: customerNameField,
+  mobileNo: optionalMobileField,
+  city: z.string().max(100, "City must be under 100 characters").optional(),
+  pincode: z.string().max(12, "Pincode must be under 12 characters").optional(),
+  productName: z.string().max(150, "Product name must be under 150 characters").optional(),
+  address: z.string().max(500, "Address must be under 500 characters").optional(),
+  courierCompany: z.string().max(100, "Courier company must be under 100 characters").optional(),
+  trackId: z.string().max(60, "Track ID must be under 60 characters").optional(),
+  reason: z.string().max(500, "Reason must be under 500 characters").optional(),
+  note: z.string().max(1000, "Note must be under 1000 characters").optional(),
+  entryDate: z.string().optional(),
+});
+
+export type IncomingCourierEditFormValues = z.infer<typeof incomingCourierEditSchema>;
+
 export const courierFilterSchema = z.object({
   search: z.string().optional(),
   startDate: z.string().optional(),
@@ -57,6 +77,9 @@ export type CourierFilterValues = z.infer<typeof courierFilterSchema>;
 
 export const incomingCourierFilterSchema = z.object({
   search: z.string().max(150, "Search term is too long").optional(),
+  status: z.string().optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
 });
 
 export type IncomingCourierFilterValues = z.infer<typeof incomingCourierFilterSchema>;

@@ -354,7 +354,7 @@ exports.createCourier = async (req, res) => {
       name, email, phone,
       customerName, address, city, mobileNo, pincode,
       productName, charge, freePickup,
-      courierName, trackId, kg, note, entryDate, quantity,
+      courierName, trackId, kg, note, reason, entryDate, quantity,
       direction, deliveryMode,
     } = req.body || {};
 
@@ -398,6 +398,7 @@ exports.createCourier = async (req, res) => {
       status: "PENDING",
       pending: true,
       note: note || null,
+      reason: reason || null,
       completedDate: null,
       entryDate: entryDate || null,
       quantity: quantity !== undefined && quantity !== "" ? quantity : null,
@@ -431,7 +432,7 @@ exports.updateCourier = async (req, res) => {
       name, email, phone,
       customerName, address, city, mobileNo, pincode,
       productName, charge, freePickup,
-      courierName, trackId, kg, note, entryDate, quantity,
+      courierName, trackId, kg, note, reason, entryDate, quantity,
       status, serialNumbers, direction, deliveryMode,
     } = req.body || {};
 
@@ -495,6 +496,7 @@ exports.updateCourier = async (req, res) => {
     if (trackId !== undefined) courier.trackId = trackId;
     if (kg !== undefined) courier.kg = kg;
     if (note !== undefined) courier.note = note;
+    if (reason !== undefined) courier.reason = reason;
     if (entryDate !== undefined) courier.entryDate = entryDate;
     if (quantity !== undefined) courier.quantity = quantity !== "" ? quantity : null;
     if (direction !== undefined) courier.direction = direction;

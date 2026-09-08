@@ -101,6 +101,13 @@ const Courier = sequelize.define(
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    // Why the customer sent this in (repair/replacement/inspection/service/other) — Incoming
+    // Courier records only; free text, not enforced against a fixed list. Distinct from `note`
+    // (general remarks) so the Incoming Courier form/view can show it as its own field.
+    reason: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
     completedDate: {
       type: DataTypes.DATEONLY,
       allowNull: true,

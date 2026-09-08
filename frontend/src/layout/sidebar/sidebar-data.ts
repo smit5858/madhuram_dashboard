@@ -10,16 +10,24 @@
  */
 
 export interface SidebarItem {
-    /** Matches the routePath in the DB routes table */
+    /** Matches the routePath in the DB routes table — used for the permission check and icon
+     *  lookup. Not necessarily a real mounted frontend route (see `navPath` below). */
     path: string;
     /** Display label */
     name: string;
     /**
-     * Optional query string appended to `path` when navigating (e.g. "?tab=foo").
-     * Permission checks and icon lookup still key off `path` alone — this is purely
-     * for distinguishing children that share one underlying permission-guarded route.
+     * Optional query string appended to the nav target (`navPath ?? path`) when navigating
+     * (e.g. "?tab=foo"). Permission checks and icon lookup still key off `path` alone.
      */
     search?: string;
+    /**
+     * Overrides `path` for the actual `<NavLink to>` target when the permission-check path
+     * isn't itself a mounted route — e.g. Incoming Courier is independently permissioned as
+     * "/couriers/incoming" (a distinct DB route) but both Outgoing and Incoming render through
+     * the single "/couriers" route, distinguished by `search`. Omit when `path` is itself the
+     * real route (the common case).
+     */
+    navPath?: string;
     /** Optional child routes for grouped modules */
     children?: SidebarItem[];
 }
@@ -38,7 +46,7 @@ export const ALL_SIDEBAR_ITEMS: SidebarItem[] = [
         name: "Couriers",
         children: [
             { path: "/couriers", name: "Outgoing Couriers", search: "?direction=OUT" },
-            { path: "/couriers/incoming", name: "Incoming Couriers", search: "?direction=IN" },
+            { path: "/couriers/incoming", navPath: "/couriers", name: "Incoming Couriers", search: "?direction=IN" },
             { path: "/couriers-companies", name: "Courier Companies" },
         ],
     },

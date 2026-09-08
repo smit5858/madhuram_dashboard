@@ -19,7 +19,7 @@ const Error = () => {
     };
 
     const handleDashboard = () => {
-        navigate("/");
+        navigate("/dashboard");
     };
 
     return (

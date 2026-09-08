@@ -76,7 +76,7 @@ const Sidebar = () => {
     const [openGroupPath, setOpenGroupPath] = useState<string | null>(() => {
         const activeGroup = ALL_SIDEBAR_ITEMS.find((item) =>
             item.children?.some(
-                (child) => location.pathname.toLowerCase() === child.path.toLowerCase()
+                (child) => location.pathname.toLowerCase() === (child.navPath ?? child.path).toLowerCase()
             )
         );
         return activeGroup?.path ?? null;
@@ -154,7 +154,7 @@ const Sidebar = () => {
                     visibleSidebarItems.map((item) => {
                             if (item.children && item.children.length > 0) {
                                 const hasActiveChild = item.children.some(
-                                    (child) => location.pathname.toLowerCase() === child.path.toLowerCase()
+                                    (child) => location.pathname.toLowerCase() === (child.navPath ?? child.path).toLowerCase()
                                 );
                                 const isOpen = openGroupPath === item.path;
 
@@ -177,11 +177,12 @@ const Sidebar = () => {
 
                                         <div className={`${isOpen ? "block" : "hidden"} space-y-1 pt-1`}>
                                             {item.children.map((child) => {
-                                                const childHref = child.search ? `${child.path}${child.search}` : child.path;
+                                                const childTarget = child.navPath ?? child.path;
+                                                const childHref = child.search ? `${childTarget}${child.search}` : childTarget;
                                                 const currentHref = `${location.pathname}${location.search}`;
                                                 const isChildActive = child.search
                                                     ? currentHref.toLowerCase() === childHref.toLowerCase()
-                                                    : location.pathname.toLowerCase() === child.path.toLowerCase();
+                                                    : location.pathname.toLowerCase() === childTarget.toLowerCase();
 
                                                 return (
                                                     <NavLink

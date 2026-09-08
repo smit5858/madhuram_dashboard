@@ -29,6 +29,9 @@ export interface CourierData {
     status?: CourierStatus;
     pincode?: string | null;
     note?: string | null;
+    /** Why the customer sent this in (repair/replacement/inspection/service/other) — Incoming
+     *  Courier records only; free text. */
+    reason?: string | null;
     /** Auto-stamped server-side the moment status reaches DONE — not manually editable. */
     completedDate?: string;
     /** Date the parcel was created/handed to the courier company (defaults to today). */
