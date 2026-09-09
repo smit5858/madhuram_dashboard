@@ -8,10 +8,10 @@ import platformService from "@/services/platform.service";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
 import FormikDate from "@/shared/components/formik-fields/FormikDate";
 import FormikSelect from "@/shared/components/formik-fields/FormikSelect";
-import FormikPhoneInput from "@/shared/components/formik-fields/FormikPhoneInput";
 import { leadEntrySchema, LEAD_STATUSES, type LeadEntryFormValues } from "@/validation/lead.validation";
 import { getTodayISODate } from "@/shared/utils/date";
 import ProductAutocompleteField from "./ProductAutocompleteField";
+import CustomerAutocompleteField from "./CustomerAutocompleteField";
 
 interface ApiErrorLike {
   response?: { data?: { message?: string } };
@@ -139,7 +139,18 @@ const LeadFormModal = ({ lead, onClose }: LeadFormModalProps) => {
                   <Field name="status" label="Status" options={STATUS_OPTIONS} component={FormikSelect} />
                   <Field name="customerName" label="Customer Name" placeholder="e.g. John Doe" component={FormikInput} />
                   <Field name="companyName" label="Company Name (optional)" placeholder="e.g. ABC Industries" component={FormikInput} />
-                  <Field name="phone" label="Phone Number" placeholder="10-digit number" component={FormikPhoneInput} />
+                  <CustomerAutocompleteField
+                    label="Phone Number"
+                    value={values.phone}
+                    onPhoneChange={(phone) => setFieldValue("phone", phone)}
+                    onSelectCustomer={(customer) => {
+                      setFieldValue("phone", customer.phone);
+                      setFieldValue("customerName", customer.name);
+                      if (customer.address) setFieldValue("address", customer.address);
+                      if (customer.city) setFieldValue("city", customer.city);
+                    }}
+                    error={touched.phone ? errors.phone : undefined}
+                  />
                   <Field name="city" label="City (optional)" placeholder="e.g. Ahmedabad" component={FormikInput} />
                   <div className="sm:col-span-2">
                     <Field name="address" label="Address (optional)" placeholder="Optional address" multiline component={FormikInput} />
