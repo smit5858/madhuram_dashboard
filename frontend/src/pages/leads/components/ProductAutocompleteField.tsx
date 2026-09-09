@@ -53,7 +53,7 @@ const ProductAutocompleteField = ({ label = "Product", value, initialLabel, onCh
     <div ref={wrapperRef} className="relative">
       <label className="form-input-label">{label}</label>
       <div className="form-input-wrapper relative">
-        <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+        <SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
         <input
           type="text"
           value={query}
@@ -64,7 +64,11 @@ const ProductAutocompleteField = ({ label = "Product", value, initialLabel, onCh
             setIsOpen(true);
             if (!e.target.value) onChange(0, "");
           }}
-          className={`form-input pl-8 ${error ? "form-input-error" : ""}`}
+          // `.form-input`'s plain-CSS `padding: 0 14px` (custom.css) loads after Tailwind's
+          // utilities and overrides a `pl-*` class of the same specificity — inline style is the
+          // only reliable way to widen just the left padding without touching that shared class.
+          style={{ paddingLeft: "2.25rem" }}
+          className={`form-input ${error ? "form-input-error" : ""}`}
         />
       </div>
       {error && <div className="formik-input-error">{error}</div>}

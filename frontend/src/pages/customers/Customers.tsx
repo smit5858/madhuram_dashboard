@@ -24,6 +24,7 @@ import customerService, {
   type CustomerFilters,
 } from "../../services/customer.service";
 import { useDebounce } from "@/hook/useDebounce";
+import { formatDisplayDate } from "@/shared/utils/date";
 
 const CITIES = ["Rajkot", "Ahmedabad", "Surat", "Vadodara", "Morbi", "Jamnagar", "Bhavnagar", "Other"];
 
@@ -422,7 +423,7 @@ const Customers = () => {
                     </td>
 
                     <td className="px-4 py-3.5 whitespace-nowrap text-[11px] text-slate-400">
-                      {customer.createdAt ? new Date(customer.createdAt).toLocaleDateString("en-IN") : "—"}
+                      {customer.createdAt ? formatDisplayDate(customer.createdAt) : "—"}
                     </td>
 
                     <td className="px-4 py-3.5 text-right whitespace-nowrap">
@@ -688,7 +689,7 @@ const Customers = () => {
                   <span className="text-slate-400 font-medium block">Registered On:</span>
                   <span className="text-slate-800 font-semibold">
                     {selectedCustomer.createdAt
-                      ? new Date(selectedCustomer.createdAt).toLocaleDateString("en-IN")
+                      ? formatDisplayDate(selectedCustomer.createdAt)
                       : "—"}
                   </span>
                 </div>

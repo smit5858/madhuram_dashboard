@@ -28,8 +28,13 @@ const Route = sequelize.define(
   {
     tableName: "routes",
     timestamps: true,
-    // Named index, not inline unique:true — see role.model.js for why.
-    indexes: [{ unique: true, fields: ["path"] }],
+    // Named index, not inline unique:true — see role.model.js for why. The name index is
+    // defense-in-depth against the same route/module being seeded twice under a different path
+    // (see server.js#ensureAllRoutesAndPermissions) — every system route has a distinct name.
+    indexes: [
+      { unique: true, fields: ["path"] },
+      { unique: true, fields: ["name"] },
+    ],
   }
 );
 

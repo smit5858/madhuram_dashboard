@@ -18,7 +18,7 @@ const Product = sequelize.define(
       allowNull: true,
     },
     productType: {
-      type: DataTypes.ENUM("NON_SERIAL", "SERIALIZED"),
+      type: DataTypes.ENUM("NON_SERIAL", "SERIALIZED", "SOFTWARE", "HARDWARE_ORDER_BASED"),
       allowNull: false,
       defaultValue: "NON_SERIAL",
     },

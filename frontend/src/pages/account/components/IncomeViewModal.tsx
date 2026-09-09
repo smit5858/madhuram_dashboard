@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Banknote, Calendar, FileText, Hash, IndianRupee, Package, Phone, User, Wallet, XCircle } from "lucide-react";
 import type { IncomeEntryData } from "@/services/income.service";
 import { PAYMENT_METHOD_LABEL } from "@/shared/constants/paymentMethod";
-import { formatDateTime } from "@/shared/utils/date";
+import { formatDateTime, formatDisplayDate } from "@/shared/utils/date";
 
 const DetailItem = ({
   icon: Icon,
@@ -87,7 +87,7 @@ const IncomeViewModal = ({ entry, onClose }: IncomeViewModalProps) => {
 
             <Section title="Transaction">
               <DetailItem icon={IndianRupee} label="Amount" value={formatCurrency(entry.amount)} />
-              <DetailItem icon={Calendar} label="Date" value={entry.entryDate} />
+              <DetailItem icon={Calendar} label="Date" value={formatDisplayDate(entry.entryDate)} />
               <DetailItem
                 icon={Banknote}
                 label="Payment Method"

@@ -1,5 +1,6 @@
 const ExcelJS = require("exceljs");
 const PDFDocument = require("pdfkit");
+const dayjs = require("dayjs");
 const fs = require("fs");
 const path = require("path");
 
@@ -28,7 +29,7 @@ const SALES_EXPORT_COLUMNS = [
   { key: "collectedAmount", header: "Collected Amount", width: 16, pdfWidth: 60, get: (s) => Number(s.collectedAmount || 0).toFixed(2) },
   { key: "pendingAmount", header: "Pending Amount", width: 15, pdfWidth: 60, get: (s) => Number(s.pendingAmount || 0).toFixed(2) },
   { key: "status", header: "Status", width: 14, pdfWidth: 55, get: (s) => s.status || "" },
-  { key: "createdAt", header: "Date", width: 14, pdfWidth: 55, get: (s) => (s.createdAt ? new Date(s.createdAt).toLocaleDateString() : "") },
+  { key: "createdAt", header: "Date", width: 14, pdfWidth: 55, get: (s) => (s.createdAt ? dayjs(s.createdAt).format("DD-MM-YYYY") : "") },
 ];
 
 async function generateSalesExcel(sales, res) {
@@ -54,7 +55,7 @@ async function generateSalesExcel(sales, res) {
 
   sheet.mergeCells(`B2:${lastColLetter}2`);
   const subtitleCell = sheet.getCell("B2");
-  subtitleCell.value = `Sales Export Report — Generated on ${new Date().toLocaleString()}`;
+  subtitleCell.value = `Sales Export Report — Generated on ${dayjs().format("DD-MM-YYYY, hh:mm A")}`;
   subtitleCell.font = { italic: true, size: 10, color: { argb: "FF666666" } };
   subtitleCell.alignment = { vertical: "top", horizontal: "left", indent: 1 };
 

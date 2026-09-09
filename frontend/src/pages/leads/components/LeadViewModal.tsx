@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import type { RootState } from "@/store/store";
 import leadService from "@/services/lead.service";
-import { formatDateTime, getTodayISODate } from "@/shared/utils/date";
+import { formatDateTime, formatDisplayDate, getTodayISODate } from "@/shared/utils/date";
 import LeadStatusBadge from "./LeadStatusBadge";
 import LeadApprovalBadge from "./LeadApprovalBadge";
 
@@ -106,7 +106,7 @@ const FollowUpRow = ({
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-semibold text-slate-800">
-            {date}
+            {formatDisplayDate(date)}
             {time ? ` · ${time}` : ""}
           </span>
           {state && (

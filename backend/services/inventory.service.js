@@ -7,6 +7,13 @@ const pendingBillService = require("./pendingBill.service");
 // trivial to promote to a Product column later if the business wants it configurable.
 const LOW_STOCK_THRESHOLD = 5;
 
+// Product types that carry a Stock row and go through the exact same reserve/fulfill/receive
+// mechanics. HARDWARE_ORDER_BASED is stock-tracked identically to NON_SERIAL — it just always
+// starts at quantity 0 and is expected to sit backordered until "Receive Stock" is used against
+// it once the hardware has been arranged/purchased for a specific order. SOFTWARE and SERIALIZED
+// are each handled by their own dedicated branch wherever this constant is checked.
+const STOCK_TRACKED_TYPES = ["NON_SERIAL", "HARDWARE_ORDER_BASED"];
+
 // Every exported function accepts an optional { transaction }. If omitted, the function
 // opens and commits/rolls back its own transaction (self-contained, callable directly from
 // a controller). If passed, it participates in the caller's transaction and never
@@ -32,14 +39,15 @@ const assertProduct = (product) => {
   }
 };
 
-// Stock (quantity/reserved) only exists for NON_SERIAL products — SERIALIZED availability
-// is always derived from serial_units, never from a stored counter. Callers that only make
-// sense against a Stock row (manual quantity adjustment) must use this instead of assertProduct.
+// Stock (quantity/reserved) only exists for stock-tracked products (NON_SERIAL and
+// HARDWARE_ORDER_BASED) — SERIALIZED availability is always derived from serial_units, never
+// from a stored counter, and SOFTWARE has no stock concept at all. Callers that only make sense
+// against a Stock row (manual quantity adjustment) must use this instead of assertProduct.
 const assertNonSerial = (product) => {
   assertProduct(product);
-  if (product.productType !== "NON_SERIAL") {
+  if (!STOCK_TRACKED_TYPES.includes(product.productType)) {
     const err = new Error(
-      "This operation is only available for NON_SERIAL products — use serial unit receive/inspect operations instead"
+      "This operation is only available for stock-tracked products — use serial unit receive/inspect operations instead"
     );
     err.statusCode = 400;
     throw err;
@@ -142,7 +150,13 @@ const reserveStock = async ({ productId, saleItemId, quantity, userId, serialNum
     const product = await Product.findByPk(productId, { transaction: t });
     assertProduct(product);
 
-    if (product.productType === "NON_SERIAL") {
+    // SOFTWARE: no Stock/SerialUnit row ever exists — nothing physical to run out of, so every
+    // request is always fully allocated immediately, no backorder possible.
+    if (product.productType === "SOFTWARE") {
+      return { allocated: quantity, backordered: 0, serialUnitIds: [], available: null };
+    }
+
+    if (STOCK_TRACKED_TYPES.includes(product.productType)) {
       const [stock] = await Stock.findOrCreate({
         where: { productId },
         defaults: { productId, quantity: 0, reserved: 0 },
@@ -258,7 +272,10 @@ const releaseReservation = async ({ productId, saleItemId, quantity, userId, rea
     const product = await Product.findByPk(productId, { transaction: t });
     assertProduct(product);
 
-    if (product.productType === "NON_SERIAL") {
+    // SOFTWARE never reserves against a Stock row (see reserveStock) — nothing to release.
+    if (product.productType === "SOFTWARE") return;
+
+    if (STOCK_TRACKED_TYPES.includes(product.productType)) {
       const stock = await Stock.findOne({ where: { productId }, transaction: t, lock: true });
       if (!stock) return;
 
@@ -320,7 +337,10 @@ const writeOffReservation = async ({ productId, saleItemId, quantity, userId, re
     const product = await Product.findByPk(productId, { transaction: t });
     assertProduct(product);
 
-    if (product.productType === "NON_SERIAL") {
+    // SOFTWARE never reserves against a Stock row (see reserveStock) — nothing to write off.
+    if (product.productType === "SOFTWARE") return;
+
+    if (STOCK_TRACKED_TYPES.includes(product.productType)) {
       const stock = await Stock.findOne({ where: { productId }, transaction: t, lock: true });
       if (!stock) return;
 
@@ -386,7 +406,11 @@ const fulfillStock = async ({ productId, saleItemId, quantity, userId, serialNum
     let available;
     let serialUnitIds = [];
 
-    if (product.productType === "NON_SERIAL") {
+    if (product.productType === "SOFTWARE") {
+      // No Stock/SerialUnit row to touch — "fulfilling" a software line is purely the shared
+      // SaleItem bookkeeping below (fulfilledQuantity/allocatedQuantity/fulfillmentStatus).
+      available = null;
+    } else if (STOCK_TRACKED_TYPES.includes(product.productType)) {
       const stock = await Stock.findOne({ where: { productId }, transaction: t, lock: true });
       if (!stock || stock.reserved < quantity) {
         throw new Error("Cannot fulfill more than is currently reserved for this order line");
@@ -466,7 +490,12 @@ const fulfillStock = async ({ productId, saleItemId, quantity, userId, serialNum
       await recomputeItemAndSaleStatus(item, { transaction: t });
     }
 
-    return { fulfilled: quantity, serialUnitIds, available, lowStock: available <= LOW_STOCK_THRESHOLD };
+    return {
+      fulfilled: quantity,
+      serialUnitIds,
+      available,
+      lowStock: available !== null && available <= LOW_STOCK_THRESHOLD,
+    };
   });
 };
 
@@ -640,7 +669,13 @@ const receiveStock = async (
     const product = await Product.findByPk(productId, { transaction: t });
     assertProduct(product);
 
-    if (product.productType === "NON_SERIAL") {
+    if (product.productType === "SOFTWARE") {
+      const err = new Error("Receive Stock is not applicable to Software products");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    if (STOCK_TRACKED_TYPES.includes(product.productType)) {
       if (!quantity || quantity <= 0) {
         throw new Error("quantity must be positive");
       }
@@ -813,7 +848,7 @@ const allocateBackorders = async (productId, { transaction } = {}) => {
       if (result.becameReady) readyShipmentGroupIds.add(courier.shipmentGroupId);
     };
 
-    if (product.productType === "NON_SERIAL") {
+    if (STOCK_TRACKED_TYPES.includes(product.productType)) {
       const stock = await Stock.findOne({ where: { productId }, transaction: t, lock: true });
       if (!stock) return { allocations: [], readyShipmentGroupIds: [] };
 
@@ -987,6 +1022,7 @@ const updateSerialStatus = async ({ serialUnitId, status, userId, notes }, { tra
 
 module.exports = {
   LOW_STOCK_THRESHOLD,
+  STOCK_TRACKED_TYPES,
   getOrCreateStock,
   getSerialAvailability,
   reserveStock,

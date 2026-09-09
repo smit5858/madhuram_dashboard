@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import type { RootState } from "@/store/store";
 import pendingBillService, { type PendingBillPaymentData, type PendingBillPaymentStatus } from "@/services/pendingBill.service";
-import { formatDateTime } from "@/shared/utils/date";
+import { formatDateTime, formatDisplayDate } from "@/shared/utils/date";
 import PendingBillStatusBadge from "./PendingBillStatusBadge";
 import PendingBillPaymentVerifyModal from "./PendingBillPaymentVerifyModal";
 
@@ -164,7 +164,7 @@ const PendingBillViewModal = ({ billId, onClose }: PendingBillViewModalProps) =>
             <Section title="Details">
               <DetailItem icon={FileText} label="Name" value={bill.name} />
               <DetailItem icon={Store} label="Dealer Name" value={bill.dealerName} />
-              <DetailItem icon={Calendar} label="Date" value={bill.billDate} />
+              <DetailItem icon={Calendar} label="Date" value={formatDisplayDate(bill.billDate)} />
               <DetailItem icon={FileText} label="Bill / Invoice Number" value={bill.billNumber} />
               {isRestock && <DetailItem icon={Package} label="Quantity" value={bill.quantity} />}
               {isRestock && (
@@ -225,7 +225,7 @@ const PendingBillViewModal = ({ billId, onClose }: PendingBillViewModalProps) =>
                         <tr key={p.id}>
                           <td className="px-2 py-2 font-semibold text-slate-800 whitespace-nowrap">{formatCurrency(p.amount)}</td>
                           <td className="px-2 py-2 text-slate-600 whitespace-nowrap">{p.paymentMethod}</td>
-                          <td className="px-2 py-2 text-slate-600 whitespace-nowrap">{p.paymentDate}</td>
+                          <td className="px-2 py-2 text-slate-600 whitespace-nowrap">{formatDisplayDate(p.paymentDate)}</td>
                           <td className="px-2 py-2 text-slate-600 whitespace-nowrap">{p.transactionRef || "—"}</td>
                           <td className="px-2 py-2 whitespace-nowrap">
                             <PaymentStatusBadge status={p.status} />

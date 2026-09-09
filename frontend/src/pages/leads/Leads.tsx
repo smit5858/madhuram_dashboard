@@ -12,7 +12,7 @@ import userService from "@/services/user.service";
 import { leadFilterSchema, LEAD_STATUSES, type LeadFilterValues } from "@/validation/lead.validation";
 import { useDebounce } from "@/hook/useDebounce";
 import { initSocket } from "@/services/socket.service";
-import { getTodayISODate } from "@/shared/utils/date";
+import { getTodayISODate, formatDisplayDate } from "@/shared/utils/date";
 import LeadStatusBadge from "./components/LeadStatusBadge";
 import LeadApprovalBadge from "./components/LeadApprovalBadge";
 import LeadViewModal from "./components/LeadViewModal";
@@ -227,12 +227,12 @@ const Leads = () => {
             <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
               <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
                 <div className="relative flex-1 min-w-64 max-w-xs">
-                  <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                  <SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
                   <Field
                     name="search"
                     type="text"
                     placeholder="Search name, company, phone, lead #..."
-                    className="w-full rounded-full border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-3 text-xs text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                    className="w-full rounded-full border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-xs text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                   />
                 </div>
 
@@ -382,7 +382,7 @@ const Leads = () => {
                       {canViewAll && <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{lead.salesEmployee?.name || "—"}</td>}
                       <td className="px-4 py-3 whitespace-nowrap">
                         {nextFollowUp ? (
-                          <span className={nextFollowUp.overdue ? "font-semibold text-rose-600" : "text-gray-800"}>{nextFollowUp.date}</span>
+                          <span className={nextFollowUp.overdue ? "font-semibold text-rose-600" : "text-gray-800"}>{formatDisplayDate(nextFollowUp.date)}</span>
                         ) : (
                           "—"
                         )}

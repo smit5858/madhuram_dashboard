@@ -17,7 +17,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { CourierData } from "../../../services/courier.service";
 import courierCompanyService, { buildTrackingLink } from "../../../services/courierCompany.service";
 import { STATUS_LABEL, STATUS_BADGE_CLASS } from "../../../shared/constants/courierStatus";
-import { formatDateTime } from "../../../shared/utils/date";
+import { formatDateTime, formatDisplayDate } from "../../../shared/utils/date";
 
 const Badge = ({ className, children }: { className: string; children: ReactNode }) => (
   <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${className}`}>
@@ -159,12 +159,12 @@ const IncomingCourierViewModal = ({ courier, onClose }: IncomingCourierViewModal
             </Section>
 
             <Section title="Timeline">
-              <DetailItem icon={Calendar} label="Date" value={courier.entryDate} />
+              <DetailItem icon={Calendar} label="Date" value={formatDisplayDate(courier.entryDate)} />
               <DetailItem icon={Calendar} label="Submitted" value={formatDateTime(courier.createdAt)} />
               {courier.updatedAt && courier.updatedAt !== courier.createdAt && (
                 <DetailItem icon={Clock} label="Last Updated" value={formatDateTime(courier.updatedAt)} />
               )}
-              <DetailItem icon={CalendarCheck} label="Completed Date" value={courier.completedDate} />
+              <DetailItem icon={CalendarCheck} label="Completed Date" value={formatDisplayDate(courier.completedDate)} />
             </Section>
 
             {courier.note && (

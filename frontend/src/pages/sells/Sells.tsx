@@ -21,7 +21,9 @@ import customerService, { type CustomerData } from "../../services/customer.serv
 import bankAccountService from "../../services/bankAccount.service";
 import CancelSaleModal from "@/shared/components/CancelSaleModal";
 import StockShortageModal, { type StockShortageItem } from "@/pages/sells/components/StockShortageModal";
+import ProductSearchSelect from "@/pages/sells/components/ProductSearchSelect";
 import { blurNumberInputOnWheel } from "@/shared/utils/input";
+import { formatDisplayDate } from "@/shared/utils/date";
 
 interface FormItem {
   /** Set only for a line that already exists as a SaleItem on the backend (populated when
@@ -30,6 +32,9 @@ interface FormItem {
   productId: number | "";
   quantity: number | "";
   sellingPrice: number | "";
+  /** Product name captured from the sale record itself — used as the autocomplete's display
+   *  fallback when this product isn't in the loaded active-catalog list (e.g. now inactive). */
+  productName?: string;
 }
 
 const PAYMENT_METHODS = [
@@ -163,7 +168,7 @@ const Sells = () => {
 
   // Query: Products List (for dropdowns and stock display) — only active/sellable products,
   // and the max page size since this dropdown needs the full catalog, not one page of it.
-  const { data: productsResponse } = useQuery({
+  const { data: productsResponse, isLoading: isProductsLoading } = useQuery({
     queryKey: ["products", "active-catalog"],
     queryFn: () => productService.getProducts({ status: "active", limit: 100 }),
   });
@@ -550,6 +555,7 @@ const Sells = () => {
           productId: i.productId,
           quantity: i.quantity,
           sellingPrice: i.sellingPrice,
+          productName: i.productName,
         }))
       );
       setOriginalItemsById(
@@ -807,10 +813,13 @@ const Sells = () => {
     }
 
     // Create new sale — check stock before submitting so a shortage can be resolved explicitly
-    // instead of silently backordering.
+    // instead of silently backordering. Skipped for SOFTWARE (no stock concept at all) and
+    // HARDWARE_ORDER_BASED (permanently-until-procured "shortage" is the expected steady state
+    // for this type, not an error to interrupt the sale for).
     const shortages: StockShortageItem[] = [];
     items.forEach((item) => {
       const prod = productsList.find((p) => p.id === Number(item.productId));
+      if (prod && (prod.productType === "SOFTWARE" || prod.productType === "HARDWARE_ORDER_BASED")) return;
       const available = prod?.available ?? 0;
       const requested = Number(item.quantity) || 0;
       if (available < requested) {
@@ -873,6 +882,10 @@ const Sells = () => {
     const adjusted = stockShortagePrompt.snapshotItems
       .map((item) => {
         const prod = productsList.find((p) => p.id === Number(item.productId));
+        // SOFTWARE/HARDWARE_ORDER_BASED were never counted as a "shortage" in the first place
+        // (see handleSubmit) — leave their requested quantity untouched here too, rather than
+        // trimming them to 0 just because some other line in the same sale was short.
+        if (prod && (prod.productType === "SOFTWARE" || prod.productType === "HARDWARE_ORDER_BASED")) return item;
         const available = prod?.available ?? 0;
         const requested = Number(item.quantity) || 0;
         return { ...item, quantity: Math.min(requested, available) };
@@ -1294,7 +1307,7 @@ const Sells = () => {
                     </td> */}
                     <td className="px-4 py-3.5 whitespace-nowrap text-[11px] text-slate-500">
                       {sell.createdAt
-                        ? new Date(sell.createdAt).toLocaleDateString()
+                        ? formatDisplayDate(sell.createdAt)
                         : "—"}
                     </td>
                     {/* {isAdmin && ( */}
@@ -1693,8 +1706,10 @@ const Sells = () => {
                     const selectedProd = productsList.find(
                       (p) => p.id === Number(row.productId)
                     );
+                    const isNotStockTracked = selectedProd?.productType === "SOFTWARE" || selectedProd?.productType === "HARDWARE_ORDER_BASED";
                     const stockQty = selectedProd ? (selectedProd.available ?? 0) : 0;
                     const isShort =
+                      !isNotStockTracked &&
                       row.productId &&
                       stockQty < (Number(row.quantity) || 1);
 
@@ -1713,27 +1728,29 @@ const Sells = () => {
                           <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
                             Product *
                           </label>
-                          <select
+                          <ProductSearchSelect
+                            products={productsList}
                             value={row.productId}
-                            onChange={(e) => handleProductSelect(index, e.target.value ? Number(e.target.value) : "")}
-                            required
+                            onChange={(productId) => handleProductSelect(index, productId)}
                             disabled={!!row.id}
+                            isLoading={isProductsLoading}
+                            fallbackLabel={row.productName}
                             title={row.id ? "An existing line's product can't be changed — add a new product row instead" : undefined}
-                            className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
-                          >
-                            <option value="">-- Select Product --</option>
-                            {productsList.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.name} (Available Stock: {p.available})
-                              </option>
-                            ))}
-                          </select>
+                          />
                         </div>
 
                         {/* Stock indicator badge */}
                         {row.productId && (
                           <div className="sm:pt-4">
-                            {stockQty <= 0 ? (
+                            {selectedProd?.productType === "SOFTWARE" ? (
+                              <span className="rounded bg-purple-50 border border-purple-200 px-2 py-1 text-[10px] font-bold text-purple-700 whitespace-nowrap">
+                                No stock tracking
+                              </span>
+                            ) : selectedProd?.productType === "HARDWARE_ORDER_BASED" ? (
+                              <span className="rounded bg-amber-50 border border-amber-200 px-2 py-1 text-[10px] font-bold text-amber-700 whitespace-nowrap">
+                                Arranged per sale
+                              </span>
+                            ) : stockQty <= 0 ? (
                               <span className="rounded bg-red-50 border border-red-200 px-2 py-1 text-[10px] font-bold text-red-700 whitespace-nowrap">
                                 Stock: 0 (Out of Stock / -1)
                               </span>
@@ -2168,7 +2185,7 @@ const Sells = () => {
                         {detail.payments.map((p) => (
                           <tr key={p.id}>
                             <td className="p-2.5 text-slate-600">
-                              {p.createdAt ? new Date(p.createdAt).toLocaleDateString() : "—"}
+                              {p.createdAt ? formatDisplayDate(p.createdAt) : "—"}
                             </td>
                             <td className="p-2.5 text-slate-600">
                               {p.method || "—"}
@@ -2232,7 +2249,7 @@ const Sells = () => {
                         </select>
                       </div>
                     )}
-                    <div className="flex-1 min-w-[120px]">
+                    <div className="flex-1  x">
                       <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-0.5">Note (optional)</label>
                       <input
                         type="text"

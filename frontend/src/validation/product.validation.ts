@@ -65,6 +65,26 @@ export const createSerializedSchema = z.object({
 
 export type CreateSerializedFormValues = z.infer<typeof createSerializedSchema>;
 
+// Create — SOFTWARE: no quantity/stock fields at all, just the selling price.
+export const createSoftwareSchema = z.object({
+  name: nameField,
+  description: descriptionField,
+  sellingPrice: optionalAmountField,
+});
+
+export type CreateSoftwareFormValues = z.infer<typeof createSoftwareSchema>;
+
+// Create — HARDWARE_ORDER_BASED: same shape as NON_SERIAL minus quantity — this type always
+// starts at 0 stock and is procured per order via the existing Receive Stock flow.
+export const createHardwareOrderBasedSchema = z.object({
+  name: nameField,
+  description: descriptionField,
+  purchasePrice: optionalAmountField,
+  sellingPrice: optionalAmountField,
+});
+
+export type CreateHardwareOrderBasedFormValues = z.infer<typeof createHardwareOrderBasedSchema>;
+
 // productType itself is validated separately (a plain required-select check) since it drives
 // which of the two schemas above applies — it isn't a field either of them re-validates.
 export const productTypeRequiredSchema = z.object({ productType: productTypeField });

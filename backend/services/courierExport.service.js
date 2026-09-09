@@ -1,5 +1,6 @@
 const ExcelJS = require("exceljs");
 const PDFDocument = require("pdfkit");
+const dayjs = require("dayjs");
 const fs = require("fs");
 const path = require("path");
 
@@ -57,8 +58,8 @@ const COURIER_EXPORT_COLUMNS = [
     pdfWidth: 65,
     get: (c) => (c.deliveryMode ? DELIVERY_MODE_LABEL[c.deliveryMode] : ""),
   },
-  { key: "entryDate", header: "Entry Date", width: 12, pdfWidth: 55, get: (c) => c.entryDate || "" },
-  { key: "completedDate", header: "Delivered Date", width: 14, pdfWidth: 60, get: (c) => c.completedDate || "" },
+  { key: "entryDate", header: "Entry Date", width: 12, pdfWidth: 55, get: (c) => (c.entryDate ? dayjs(c.entryDate).format("DD-MM-YYYY") : "") },
+  { key: "completedDate", header: "Delivered Date", width: 14, pdfWidth: 60, get: (c) => (c.completedDate ? dayjs(c.completedDate).format("DD-MM-YYYY") : "") },
   { key: "note", header: "Note", width: 24, pdfWidth: null, get: (c) => c.note || "" },
 ];
 
@@ -86,7 +87,7 @@ async function generateCourierExcel(couriers, res) {
 
   sheet.mergeCells(`B2:${lastColLetter}2`);
   const subtitleCell = sheet.getCell("B2");
-  subtitleCell.value = `Outgoing Couriers Export — Generated on ${new Date().toLocaleString()}`;
+  subtitleCell.value = `Outgoing Couriers Export — Generated on ${dayjs().format("DD-MM-YYYY, hh:mm A")}`;
   subtitleCell.font = { italic: true, size: 10, color: { argb: "FF666666" } };
   subtitleCell.alignment = { vertical: "top", horizontal: "left", indent: 1 };
 

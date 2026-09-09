@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useDebounce } from "@/hook/useDebounce";
 import { type RootState } from "../../store/store";
+import { formatDisplayDate } from "@/shared/utils/date";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
 import userService, {
   type UserData,
@@ -486,7 +487,7 @@ const Users = () => {
                     </td>
 
                     <td className="hidden lg:table-cell px-4 py-3.5 whitespace-nowrap text-[11px] text-slate-400">
-                      {user.createdAt ? new Date(user.createdAt).toLocaleDateString("en-IN") : "—"}
+                      {user.createdAt ? formatDisplayDate(user.createdAt) : "—"}
                     </td>
 
                     <td className="px-4 py-3.5 text-right whitespace-nowrap">
@@ -785,7 +786,7 @@ const Users = () => {
                 <div>
                   <span className="text-slate-400 font-medium block">Joined On:</span>
                   <span className="text-slate-800 font-semibold">
-                    {selectedUser.createdAt ? new Date(selectedUser.createdAt).toLocaleDateString("en-IN") : "—"}
+                    {selectedUser.createdAt ? formatDisplayDate(selectedUser.createdAt) : "—"}
                   </span>
                 </div>
               </div>

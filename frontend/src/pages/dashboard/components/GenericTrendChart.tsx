@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { TrendingUp } from "lucide-react";
 import { computeRange, RANGE_OPTIONS, type RangeKey } from "../utils/dateRange";
+import { formatDisplayDate } from "@/shared/utils/date";
 
 export interface TrendSeries {
   dataKey: string;
@@ -36,10 +37,7 @@ interface ChartTooltipProps {
 const ChartTooltip = ({ active, payload, label, series, valueFormatter }: ChartTooltipProps) => {
   if (!active || !payload?.length) return null;
   const seriesByKey = new Map(series.map((s) => [s.dataKey, s]));
-  const date = new Date(label || "");
-  const dateLabel = Number.isNaN(date.getTime())
-    ? label
-    : date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  const dateLabel = label ? formatDisplayDate(label) : label;
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-lg text-xs">

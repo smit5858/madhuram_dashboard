@@ -4,6 +4,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YA
 import { TrendingUp } from "lucide-react";
 import incomeService from "@/services/income.service";
 import { computeRange, RANGE_OPTIONS, type RangeKey } from "../utils/dateRange";
+import { formatDisplayDate } from "@/shared/utils/date";
 
 const formatCurrency = (amount: number) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
@@ -22,10 +23,7 @@ interface TooltipPayloadEntry {
 
 const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: TooltipPayloadEntry[]; label?: string }) => {
   if (!active || !payload?.length) return null;
-  const date = new Date(label || "");
-  const dateLabel = Number.isNaN(date.getTime())
-    ? label
-    : date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  const dateLabel = label ? formatDisplayDate(label) : label;
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-lg text-xs">

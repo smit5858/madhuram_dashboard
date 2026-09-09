@@ -1,6 +1,7 @@
 const { SerialUnit, Product, SaleItem, Sale, Dealer } = require("../models");
 const { Op } = require("sequelize");
 const inventoryService = require("../services/inventory.service");
+const { STOCK_TRACKED_TYPES } = inventoryService;
 const { notify } = require("../services/notification.service");
 
 const errorResponse = (res, err) => {
@@ -45,8 +46,9 @@ const notifyBackorderAllocations = async (allocations, product) => {
 };
 
 // POST /inventory/receive
-// NON_SERIAL: { productId, quantity, purchasePrice, dealerId, purchaseDate, notes }
+// NON_SERIAL / HARDWARE_ORDER_BASED: { productId, quantity, purchasePrice, dealerId, purchaseDate, notes }
 // SERIALIZED: { productId, units: [{ serialNumber, purchasePrice, sellingPrice, purchaseDate, dealerId }], notes }
+// SOFTWARE: not applicable — rejected below.
 exports.receiveStock = async (req, res) => {
   try {
     const user = req.user;
@@ -61,9 +63,13 @@ exports.receiveStock = async (req, res) => {
       return res.status(404).json({ success: false, message: "Product not found" });
     }
 
-    if (product.productType === "NON_SERIAL") {
+    if (product.productType === "SOFTWARE") {
+      return res.status(400).json({ success: false, message: "Receive Stock is not applicable to Software products" });
+    }
+
+    if (STOCK_TRACKED_TYPES.includes(product.productType)) {
       if (!quantity || parseInt(quantity, 10) < 1) {
-        return res.status(400).json({ success: false, message: "quantity >= 1 is required for NON_SERIAL products" });
+        return res.status(400).json({ success: false, message: "quantity >= 1 is required for this product type" });
       }
     } else if (!Array.isArray(units) || units.length === 0) {
       return res.status(400).json({

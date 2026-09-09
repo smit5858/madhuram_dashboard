@@ -27,13 +27,14 @@ const ensureSaleForLead = async (lead) => {
   if (existing) return existing;
 
   try {
-    // Seed the line item at the product's own configured price (its "tag price" — Stock.sellingPrice
-    // for a NON_SERIAL product) instead of ₹0, so the Sales member opens a sale that already
-    // reflects the product's real price and only needs to confirm/adjust it, not look it up and
-    // type it in from scratch. SERIALIZED products have no single product-level price (pricing is
-    // per unit — see product.controller.js#serializeProduct), so those still start at 0.
+    // Seed the line item at the product's own configured price (its "tag price" — Stock.sellingPrice,
+    // which NON_SERIAL, SOFTWARE, and HARDWARE_ORDER_BASED products all carry) instead of ₹0, so
+    // the Sales member opens a sale that already reflects the product's real price and only needs
+    // to confirm/adjust it, not look it up and type it in from scratch. SERIALIZED products have
+    // no single product-level price (pricing is per unit — see product.controller.js#serializeProduct),
+    // so those still start at 0.
     const product = await Product.findByPk(lead.productId, { include: [Stock] });
-    const initialSellingPrice = product && product.productType === "NON_SERIAL" && product.Stock ? parseFloat(product.Stock.sellingPrice) || 0 : 0;
+    const initialSellingPrice = product && product.productType !== "SERIALIZED" && product.Stock ? parseFloat(product.Stock.sellingPrice) || 0 : 0;
 
     const sale = await orderService.createOrder({
       customerName: lead.customerName,

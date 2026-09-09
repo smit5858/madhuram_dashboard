@@ -1,5 +1,6 @@
 const { AccountEntry, User } = require("../models");
 const { Op } = require("sequelize");
+const dayjs = require("dayjs");
 const sequelize = require("../config/db");
 const { recalculateDay } = require("../services/dailyBalance.service");
 const { notify } = require("../services/notification.service");
@@ -153,7 +154,7 @@ exports.createExpense = async (req, res) => {
         recipientModule: "admin",
         type: "EXPENSE_PENDING_APPROVAL",
         title: "New Expense Pending Approval",
-        message: `${req.user.name || "A user"} added a ₹${Number(entry.amount).toLocaleString("en-IN")} expense${entry.customerName ? ` for ${entry.customerName}` : ""} on ${entry.entryDate}, pending your approval.`,
+        message: `${req.user.name || "A user"} added a ₹${Number(entry.amount).toLocaleString("en-IN")} expense${entry.customerName ? ` for ${entry.customerName}` : ""} on ${dayjs(entry.entryDate).format("DD-MM-YYYY")}, pending your approval.`,
         referenceType: "accountEntry",
         referenceId: entry.id,
         event: "expense_pending_approval",

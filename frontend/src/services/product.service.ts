@@ -14,13 +14,14 @@ export interface ProductData {
   isActive: boolean;
   /** false for products quick-added from the Sells form without "Save as New Product". */
   isMasterProduct: boolean;
-  /** Currently on-hand/available count. NON_SERIAL: quantity - reserved. SERIALIZED: count of AVAILABLE units. */
-  currentStock: number;
-  reserved: number;
-  available: number;
+  /** Currently on-hand/available count. NON_SERIAL/HARDWARE_ORDER_BASED: quantity - reserved.
+   *  SERIALIZED: count of AVAILABLE units. SOFTWARE: null — not applicable, no stock concept. */
+  currentStock: number | null;
+  reserved: number | null;
+  available: number | null;
   /** SERIALIZED only. */
   sold?: number;
-  /** NON_SERIAL only — varies per unit for SERIALIZED, so never shown at product level. */
+  /** Varies per unit for SERIALIZED (never shown at product level); not applicable for SOFTWARE. */
   purchasePrice: number | null;
   sellingPrice: number | null;
   dealer: DealerRef | null;
@@ -105,7 +106,7 @@ export interface UpdateProductPayload {
   name?: string;
   description?: string;
   isActive?: boolean;
-  /** NON_SERIAL only. */
+  /** Any type except SERIALIZED (whose pricing is per sale item). */
   sellingPrice?: number;
   dealerId?: number | null;
 }

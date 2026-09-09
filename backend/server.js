@@ -75,6 +75,25 @@ const { Route, Role, UserPermission } = require("./models");
 // Wrap Express in an http.Server so Socket.io can attach
 const httpServer = http.createServer(app);
 
+// Every path below used to be a live system route (see ensureAllRoutesAndPermissions) that was
+// later renamed/removed. Route.findOrCreate matches on path, so renaming a route's path — even
+// though its name/feature stayed the same — left the old row behind instead of updating it,
+// producing a second "Route/Module" entry for the same feature in the Route Setting permission
+// matrix (e.g. "Pending Bills" -> "Pending Bill", a stray "Account" at "/account/account").
+// Shared by ensureNoStaleRoutesBeforeSync (pre-sync, raw SQL) and pruneObsoleteRoutes (post-sync,
+// model-based) so both stay in sync with a single list.
+const STALE_ROUTE_PATHS = [
+  "/reports",
+  "/stock",
+  "/inventory",
+  "/dealers",
+  "/account/restock-bill",
+  "/account/account",
+  "/account/credit",
+  "/account/pending-bills",
+  "/setting",
+];
+
 const ensureAllRoles = async () => {
   // Additive only — never removes/renames existing roles, so this is safe to run against a
   // live DB with existing Admin/User accounts.
@@ -120,13 +139,24 @@ const ensureAllRoutesAndPermissions = async () => {
     ];
 
     for (const rDef of SYSTEM_ROUTES) {
-      const [route] = await Route.findOrCreate({
-        where: { path: rDef.path },
-        defaults: rDef,
-      });
       const moduleValue = rDef.module || null;
-      if (route.name !== rDef.name || route.module !== moduleValue) {
-        await route.update({ name: rDef.name, module: moduleValue });
+
+      let route = await Route.findOne({ where: { path: rDef.path } });
+      if (!route) {
+        // No row at this path — before inserting a new one, check whether this system route's
+        // path just changed (name unchanged). Reusing the existing row instead of creating a
+        // second one is what keeps a path rename from leaving a duplicate Route/Module entry
+        // behind (see STALE_ROUTE_PATHS above for the ones that already got left behind this way).
+        route = await Route.findOne({ where: { name: rDef.name } });
+      }
+
+      if (!route) {
+        await Route.create({ ...rDef, module: moduleValue });
+        continue;
+      }
+
+      if (route.name !== rDef.name || route.path !== rDef.path || route.module !== moduleValue) {
+        await route.update({ name: rDef.name, path: rDef.path, module: moduleValue });
       }
     }
   } catch (e) {
@@ -143,10 +173,7 @@ const ensureAllRoutesAndPermissions = async () => {
 const pruneObsoleteRoutes = async () => {
   try {
     const { Op } = require("sequelize");
-    // "/account/restock-bill" was a short-lived standalone route, folded into Pending Bill
-    // (billType:"RESTOCK") before shipping — prune any row/permissions it left behind.
-    const OBSOLETE_PATHS = ["/reports", "/stock", "/inventory", "/dealers", "/account/restock-bill"];
-    const routes = await Route.findAll({ where: { path: { [Op.in]: OBSOLETE_PATHS } } });
+    const routes = await Route.findAll({ where: { path: { [Op.in]: STALE_ROUTE_PATHS } } });
     if (routes.length === 0) return;
 
     const routeIds = routes.map((r) => r.id);
@@ -429,6 +456,29 @@ const ensureSaleBankAccountsAllowDuplicates = async () => {
   await queryInterface.removeIndex("sale_bank_accounts", duplicateIndex.name);
 };
 
+// Deletes the same stale Route rows as pruneObsoleteRoutes, but with raw SQL and before
+// sync({alter:true}) runs. Route.model.js now declares a unique index on `name`; sync({alter:true})
+// adds it with a plain ALTER TABLE, which fails with ER_DUP_ENTRY if two rows still share a name
+// (e.g. the stray "/account/account" row and the real "/account" row both named "Account") —
+// so these have to be gone before sync, not after. Idempotent: a no-op once they're already gone.
+const ensureNoStaleRoutesBeforeSync = async () => {
+  const queryInterface = sequelize.getQueryInterface();
+  const tables = await queryInterface.showAllTables();
+  const tableNames = tables.map((table) => (typeof table === "string" ? table : table.tableName));
+  if (!tableNames.includes("routes")) return;
+
+  const [rows] = await sequelize.query("SELECT id FROM routes WHERE path IN (?)", {
+    replacements: [STALE_ROUTE_PATHS],
+  });
+  if (rows.length === 0) return;
+
+  const ids = rows.map((r) => r.id);
+  if (tableNames.includes("user_permissions")) {
+    await sequelize.query("DELETE FROM user_permissions WHERE routeId IN (?)", { replacements: [ids] });
+  }
+  await sequelize.query("DELETE FROM routes WHERE id IN (?)", { replacements: [ids] });
+};
+
 sequelize
   .authenticate()
   .then(() => {
@@ -438,6 +488,9 @@ sequelize
   })
   .then(() => {
     return ensureUserRoleIdNullable();
+  })
+  .then(() => {
+    return ensureNoStaleRoutesBeforeSync();
   })
   .then(() => {
     return ensureBankAccountFieldsNullable();

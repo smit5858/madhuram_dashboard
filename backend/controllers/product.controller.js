@@ -2,10 +2,11 @@ const { Product, Stock, SerialUnit, Dealer, SaleItem, Sale, StockMovement } = re
 const sequelize = require("../config/db");
 const { Op } = require("sequelize");
 const inventoryService = require("../services/inventory.service");
+const { STOCK_TRACKED_TYPES } = inventoryService;
 const pendingBillService = require("../services/pendingBill.service");
 const { notify } = require("../services/notification.service");
 
-const VALID_PRODUCT_TYPES = ["NON_SERIAL", "SERIALIZED"];
+const VALID_PRODUCT_TYPES = ["NON_SERIAL", "SERIALIZED", "SOFTWARE", "HARDWARE_ORDER_BASED"];
 
 const DEALER_ATTRS = ["id", "name"];
 
@@ -39,7 +40,27 @@ const serializeProduct = (p, serialCounts) => {
     updatedAt: p.updatedAt,
   };
 
-  if (p.productType === "NON_SERIAL") {
+  if (p.productType === "SOFTWARE") {
+    // No physical/warehouse stock concept — currentStock/reserved/available are reported as
+    // null ("not applicable"), distinct from a real, meaningful 0. The Stock row still exists
+    // (permanently pinned at quantity 0) purely to hold sellingPrice/dealer, same field as
+    // NON_SERIAL/HARDWARE_ORDER_BASED — never touched by any reserve/fulfill/receive logic.
+    const stock = p.Stock;
+    return {
+      ...base,
+      currentStock: null,
+      reserved: null,
+      available: null,
+      purchasePrice: null,
+      sellingPrice: stock ? stock.sellingPrice : null,
+      dealer: null,
+    };
+  }
+
+  if (STOCK_TRACKED_TYPES.includes(p.productType)) {
+    // NON_SERIAL and HARDWARE_ORDER_BASED — identical Stock-row shape. HARDWARE_ORDER_BASED
+    // simply starts (and stays) at quantity 0 until "Receive Stock" is used to arrange/procure
+    // it per order, so these numbers are real and meaningful, just usually 0.
     const stock = p.Stock;
     const quantity = stock ? stock.quantity : 0;
     const reserved = stock ? stock.reserved : 0;
@@ -150,7 +171,12 @@ exports.getProductById = async (req, res) => {
       return res.status(404).json({ success: false, message: "Product not found" });
     }
 
-    if (product.productType === "NON_SERIAL") {
+    if (product.productType === "SOFTWARE") {
+      // No purchase history or serial units — just the base serialized shape.
+      return res.status(200).json({ success: true, data: serializeProduct(product, {}) });
+    }
+
+    if (STOCK_TRACKED_TYPES.includes(product.productType)) {
       const purchaseMovements = await StockMovement.findAll({
         where: { productId: id, type: "PURCHASE" },
         order: [
@@ -263,6 +289,37 @@ exports.createProduct = async (req, res) => {
       { name: name.trim(), description: description || null, productType: resolvedType, isMasterProduct: resolvedIsMaster },
       { transaction: t }
     );
+
+    if (resolvedType === "SOFTWARE") {
+      // No quantity/purchase concept at all — nothing was bought, so no StockMovement/PendingBill.
+      // The Stock row exists solely to hold sellingPrice/dealer, permanently pinned at 0.
+      const stock = await Stock.create(
+        { productId: product.id, quantity: 0, reserved: 0, purchasePrice: null, sellingPrice: sellingPrice ?? null, dealerId: dealerId ?? null },
+        { transaction: t }
+      );
+      await t.commit();
+      return res.status(201).json({
+        success: true,
+        message: successMessage,
+        data: serializeProduct({ ...product.toJSON(), Stock: stock.toJSON() }, {}),
+      });
+    }
+
+    if (resolvedType === "HARDWARE_ORDER_BASED") {
+      // Deliberately never reads req.body.quantity — this type always starts at 0 stock and is
+      // procured per order via the existing Receive Stock flow, not pre-purchased in bulk. No
+      // StockMovement/PendingBill here since nothing has actually been bought yet.
+      const stock = await Stock.create(
+        { productId: product.id, quantity: 0, reserved: 0, purchasePrice: purchasePrice ?? null, sellingPrice: sellingPrice ?? null, dealerId: dealerId ?? null },
+        { transaction: t }
+      );
+      await t.commit();
+      return res.status(201).json({
+        success: true,
+        message: successMessage,
+        data: serializeProduct({ ...product.toJSON(), Stock: stock.toJSON() }, {}),
+      });
+    }
 
     if (resolvedType === "NON_SERIAL") {
       const initialQuantity = parseInt(quantity, 10) || 0;
@@ -469,7 +526,9 @@ exports.updateProduct = async (req, res) => {
 
     await product.save();
 
-    if (product.productType === "NON_SERIAL") {
+    if (product.productType !== "SERIALIZED") {
+      // NON_SERIAL, SOFTWARE, and HARDWARE_ORDER_BASED all carry a Stock row (see
+      // serializeProduct) purely to hold sellingPrice/dealer — this branch covers all three.
       const [stock] = await Stock.findOrCreate({ where: { productId: id }, defaults: { productId: id, quantity: 0, reserved: 0 } });
 
       if (sellingPrice !== undefined) {
@@ -492,7 +551,7 @@ exports.updateProduct = async (req, res) => {
     } else if (sellingPrice !== undefined) {
       return res.status(400).json({
         success: false,
-        message: "sellingPrice can only be set on NON_SERIAL products — SERIALIZED pricing is per sale item",
+        message: "sellingPrice cannot be set on SERIALIZED products — pricing is per sale item",
       });
     }
 

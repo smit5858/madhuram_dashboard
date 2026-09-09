@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { CheckCircle2, XCircle } from "lucide-react";
 import pendingBillService, { type PendingBillData, type PendingBillPaymentData } from "@/services/pendingBill.service";
-import { formatDateTime } from "@/shared/utils/date";
+import { formatDateTime, formatDisplayDate } from "@/shared/utils/date";
 
 interface ApiErrorLike {
   response?: { data?: { message?: string } };
@@ -81,7 +81,7 @@ const PendingBillPaymentVerifyModal = ({ bill, payment, onClose }: PendingBillPa
           </div>
           <div className="flex justify-between">
             <span className="text-slate-500">Payment Date</span>
-            <span className="font-medium text-slate-800">{payment.paymentDate}</span>
+            <span className="font-medium text-slate-800">{formatDisplayDate(payment.paymentDate)}</span>
           </div>
           {payment.transactionRef && (
             <div className="flex justify-between">

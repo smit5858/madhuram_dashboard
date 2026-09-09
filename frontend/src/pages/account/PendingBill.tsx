@@ -9,6 +9,7 @@ import pendingBillService, { type PendingBillData, type PendingBillFilters } fro
 import { pendingBillFilterSchema, type PendingBillFilterValues } from "@/validation/pendingBill.validation";
 import { useDebounce } from "@/hook/useDebounce";
 import { initSocket } from "@/services/socket.service";
+import { formatDisplayDate } from "@/shared/utils/date";
 import PendingBillStatusBadge from "./components/PendingBillStatusBadge";
 import PendingBillViewModal from "./components/PendingBillViewModal";
 import PendingBillFormModal from "./components/PendingBillFormModal";
@@ -334,7 +335,7 @@ const PendingBill = () => {
                     <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap">{formatCurrency(bill.amount)}</td>
                     <td className="px-4 py-3 text-emerald-600 whitespace-nowrap">{formatCurrency(bill.paidAmount)}</td>
                     <td className="px-4 py-3 text-rose-600 whitespace-nowrap">{formatCurrency(bill.remainingAmount)}</td>
-                    <td className="px-4 py-3 whitespace-nowrap text-gray-500">{bill.billDate}</td>
+                    <td className="px-4 py-3 whitespace-nowrap text-gray-500">{formatDisplayDate(bill.billDate)}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <PendingBillStatusBadge status={bill.status} />
                     </td>

@@ -1,4 +1,5 @@
 const { Op } = require("sequelize");
+const dayjs = require("dayjs");
 const sequelize = require("../config/db");
 const { Sale, SaleItem, Product, Stock, StockMovement, SerialUnit, Customer, Courier, Payment, SaleBankAccount } = require("../models");
 const inventoryService = require("./inventory.service");
@@ -274,14 +275,15 @@ const createOrder = async ({
       saleItem.fulfillmentStatus = inventoryService.computeItemFulfillmentStatus(saleItem);
       await saleItem.save({ transaction: t });
 
-      // Every order line gets a Courier record immediately — no separate acceptance step.
-      // Fully-allocated lines start Pending; anything still backordered starts Waiting for
+      // Every physical order line gets a Courier record immediately — no separate acceptance
+      // step. Fully-allocated lines start Pending; anything still backordered starts Waiting for
       // Stock. All lines from this sale share one shipment group (defaulting to "wait for the
       // complete order") until the Courier Employee splits it via updateShipmentType.
-      // Skipped entirely when the caller opted out via createCourierEntry (e.g. a walk-in sale
-      // that doesn't need shipping) — the line is fulfilled directly below instead of waiting
-      // on shipment-group readiness.
-      const courier = createCourierEntry
+      // Skipped when the caller opted out via createCourierEntry (e.g. a walk-in sale that
+      // doesn't need shipping), or unconditionally for SOFTWARE lines — software is fulfilled via
+      // installation/service, never shipped, so it must never produce a Courier. Either way the
+      // line is fulfilled directly below instead of waiting on shipment-group readiness.
+      const courier = createCourierEntry && product.productType !== "SOFTWARE"
         ? await Courier.create(
             {
               customerName: customerName.trim(),
@@ -311,21 +313,22 @@ const createOrder = async ({
       createdLines.push({ saleItem, product, courier });
     }
 
-    if (createCourierEntry) {
-      // Fulfills the group immediately if every line was fully allocated (the common
-      // single/all-in-stock case) — a no-op if anything above came back backordered.
-      await inventoryService.tryFulfillReadyGroup(shipmentGroupId, { userId, transaction: t });
-    } else {
-      // No courier/shipment to coordinate around — fulfill each line's allocated quantity as
-      // soon as it's reserved instead of waiting on group readiness. Anything still backordered
-      // stays that way and gets picked up by the normal backorder sweep when stock arrives.
-      for (const { saleItem } of createdLines) {
-        if (saleItem.allocatedQuantity > 0) {
-          await inventoryService.fulfillStock(
-            { productId: saleItem.productId, saleItemId: saleItem.id, quantity: saleItem.allocatedQuantity, userId },
-            { transaction: t }
-          );
-        }
+    // Fulfills the shipment group immediately if every courier-bearing line was fully allocated
+    // (the common single/all-in-stock case) — a no-op if anything above came back backordered,
+    // and a no-op with an empty group if createCourierEntry was off or every line was SOFTWARE.
+    await inventoryService.tryFulfillReadyGroup(shipmentGroupId, { userId, transaction: t });
+
+    // Any line that didn't get a Courier (createCourierEntry off, or a SOFTWARE line even in an
+    // otherwise courier-bearing mixed sale) has no shipment to coordinate around — fulfill its
+    // allocated quantity directly instead of waiting on group readiness. Anything still
+    // backordered stays that way and gets picked up by the normal backorder sweep when stock
+    // arrives (SOFTWARE can never be backordered, so this only matters for physical products).
+    for (const { saleItem, courier } of createdLines) {
+      if (!courier && saleItem.allocatedQuantity > 0) {
+        await inventoryService.fulfillStock(
+          { productId: saleItem.productId, saleItemId: saleItem.id, quantity: saleItem.allocatedQuantity, userId },
+          { transaction: t }
+        );
       }
     }
 
@@ -367,7 +370,7 @@ const createOrder = async ({
     if (incomeEntryDate) await recalculateDay(incomeEntryDate);
 
     const creatorName = "Sells Member";
-    const dateFormatted = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+    const dateFormatted = dayjs().format("DD-MM-YYYY");
     const productSummary = itemsResult.map((i) => `${i.productName} × ${i.quantity}`).join(", ");
 
     await notify([
@@ -391,8 +394,9 @@ const createOrder = async ({
         event: "new_sale",
         payload: { sale: { id: sale.id, invoiceNumber, customerName, sellingAmount: selling, collectedAmount: collected, pendingAmount: pending } },
       },
-      // Nothing for the couriers module to act on when no Courier record was created for this sale.
-      ...(createCourierEntry
+      // Nothing for the couriers module to act on when no Courier record was created for this sale
+      // (createCourierEntry off, or every line was SOFTWARE).
+      ...(createdLines.some((l) => l.courier)
         ? [
             {
               recipientModule: "couriers",
@@ -508,7 +512,10 @@ const recordPayment = async ({ saleId, amount, method, bankAccountId, userId, no
 const applyReturn = async ({ item, quantity, userId, reason, defective, serialNumbers }, { transaction: t }) => {
   const product = await Product.findByPk(item.productId, { transaction: t });
 
-  if (product.productType === "NON_SERIAL") {
+  if (product.productType === "SOFTWARE") {
+    // No physical/serial unit was ever consumed for a software line — nothing to restock or
+    // write off. Just fall through to the shared returnedQuantity bookkeeping below.
+  } else if (inventoryService.STOCK_TRACKED_TYPES.includes(product.productType)) {
     if (!defective) {
       const stock = await Stock.findOne({ where: { productId: item.productId }, transaction: t, lock: true });
       if (stock) {
@@ -853,7 +860,7 @@ const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialN
     });
 
     let courier = null;
-    if (existingActiveCourier) {
+    if (existingActiveCourier && product.productType !== "SOFTWARE") {
       const shipmentGroupId = existingActiveCourier.shipmentGroupId || `SALE-${sale.id}`;
       const ready = saleItem.backorderedQuantity === 0;
       courier = await Courier.create(
@@ -1032,6 +1039,9 @@ const setCourierEntryForSale = async ({ saleId, createCourierEntry, userId }, { 
       if (itemsWithCourier.has(item.id)) continue;
 
       const product = await Product.findByPk(item.productId, { transaction: t });
+      // SOFTWARE lines are fulfilled directly at creation/add time (see createOrder/addOrderItem)
+      // and must never get a Courier, even retroactively when this flag is toggled back on.
+      if (product && product.productType === "SOFTWARE") continue;
       // No outstanding backorder means this line's stock need was already fully resolved at
       // creation (either reserved-and-waiting or already fulfilled directly, since no courier
       // existed to defer fulfillment) — either way there's nothing left to wait on here.

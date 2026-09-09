@@ -9,6 +9,7 @@ import incomeService, { type IncomeEntryData, type IncomeFilters } from "@/servi
 import { incomeFilterSchema, type IncomeFilterValues } from "@/validation/income.validation";
 import { useDebounce } from "@/hook/useDebounce";
 import { PAYMENT_METHOD_OPTIONS } from "@/shared/constants/paymentMethod";
+import { formatDisplayDate } from "@/shared/utils/date";
 import IncomeViewModal from "./components/IncomeViewModal";
 import IncomeFormModal from "./components/IncomeFormModal";
 import IncomeStatusBadge from "./components/IncomeStatusBadge";
@@ -273,7 +274,7 @@ const Income = () => {
                       {entry.serialNumber && <div className="text-xs text-gray-400">SN: {entry.serialNumber}</div>}
                     </td>
                     <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap">{formatCurrency(entry.amount)}</td>
-                    <td className="px-4 py-3 whitespace-nowrap text-gray-500">{entry.entryDate}</td>
+                    <td className="px-4 py-3 whitespace-nowrap text-gray-500">{formatDisplayDate(entry.entryDate)}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <IncomeStatusBadge status={entry.status} />
                     </td>

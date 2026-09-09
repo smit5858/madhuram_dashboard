@@ -23,7 +23,7 @@ import courierService, { type CourierData } from "../../../services/courier.serv
 import courierCompanyService, { buildTrackingLink } from "../../../services/courierCompany.service";
 import { STATUS_LABEL, SHIPMENT_TYPE_LABEL, STATUS_BADGE_CLASS } from "../../../shared/constants/courierStatus";
 import { STOCK_STATUS_LABEL, STOCK_STATUS_BADGE_CLASS } from "../../../shared/constants/productStockStatus";
-import { formatDateTime } from "../../../shared/utils/date";
+import { formatDateTime, formatDisplayDate } from "../../../shared/utils/date";
 import CourierShareButton from "./CourierShareButton";
 
 const Badge = ({ className, children }: { className: string; children: ReactNode }) => (
@@ -203,7 +203,7 @@ const CourierViewModal = ({ courier, onClose }: CourierViewModalProps) => {
               {courier.updatedAt && courier.updatedAt !== courier.createdAt && (
                 <DetailItem icon={Clock} label="Last Updated" value={formatDateTime(courier.updatedAt)} />
               )}
-              <DetailItem icon={CalendarCheck} label="Delivered Date" value={courier.completedDate} />
+              <DetailItem icon={CalendarCheck} label="Delivered Date" value={formatDisplayDate(courier.completedDate)} />
             </Section>
 
             {courier.note && (

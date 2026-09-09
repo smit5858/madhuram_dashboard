@@ -34,18 +34,20 @@ import productService, {
 import dealerService, { type DealerData, type DealerListResponse } from "../../services/dealer.service";
 import inventoryService, { type ReceiveNonSerialPayload, type ReceiveSerializedPayload } from "../../services/inventory.service";
 import AddressAutocompleteInput from "@/shared/components/AddressAutocompleteInput";
-import { getTodayISODate } from "@/shared/utils/date";
+import { getTodayISODate, formatDisplayDate } from "@/shared/utils/date";
 import {
   productFilterSchema,
   createNonSerialSchema,
   createSerializedSchema,
+  createSoftwareSchema,
+  createHardwareOrderBasedSchema,
   editProductSchema,
   receiveNonSerialStockSchema,
   receiveSerializedStockSchema,
   type ProductFilterValues,
 } from "@/validation/product.validation";
 import { createDealerSchema, type CreateDealerFormValues } from "@/validation/dealer.validation";
-import { PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_LABELS, type ProductType } from "@/shared/enum/product-type";
+import { PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_LABELS, STOCK_TRACKED_PRODUCT_TYPES, type ProductType } from "@/shared/enum/product-type";
 
 interface ApiErrorLike {
   response?: { data?: { message?: string } };
@@ -89,6 +91,8 @@ const PAGE_SIZE_OPTIONS = [10, 25, 50];
 const TYPE_BADGE_CLASS: Record<ProductType, string> = {
   NON_SERIAL: "bg-slate-100 text-slate-700 border-slate-200",
   SERIALIZED: "bg-indigo-50 text-indigo-700 border-indigo-100",
+  SOFTWARE: "bg-purple-50 text-purple-700 border-purple-200",
+  HARDWARE_ORDER_BASED: "bg-amber-50 text-amber-700 border-amber-200",
 };
 
 const SERIAL_STATUS_BADGE_CLASS: Record<string, string> = {
@@ -377,7 +381,7 @@ const ReceiveStockModal = ({
           </button>
         </div>
 
-        {product.productType === "NON_SERIAL" ? (
+        {STOCK_TRACKED_PRODUCT_TYPES.includes(product.productType) ? (
           <Formik<ReceiveNonSerialFormValues>
             initialValues={EMPTY_RECEIVE_NON_SERIAL_VALUES}
             validate={(values) => parseFormikErrors(receiveNonSerialStockSchema.safeParse(values))}
@@ -674,7 +678,7 @@ const SerialLookupModal = ({ onClose }: { onClose: () => void }) => {
                 <div className="pb-1">
                   <div className="text-xs font-semibold text-slate-800">Purchased</div>
                   <div className="text-[11px] text-slate-500">
-                    {detail.purchaseDate ? new Date(detail.purchaseDate).toLocaleDateString("en-IN") : "Date unknown"}
+                    {detail.purchaseDate ? formatDisplayDate(detail.purchaseDate) : "Date unknown"}
                     {" · "}
                     from {detail.dealer?.name || "unknown dealer"}
                     {detail.purchasePrice !== null && detail.purchasePrice !== undefined ? ` · ${formatCurrency(detail.purchasePrice)}` : ""}
@@ -691,7 +695,7 @@ const SerialLookupModal = ({ onClose }: { onClose: () => void }) => {
                   <div className="pb-1">
                     <div className="text-xs font-semibold text-slate-800">Sold</div>
                     <div className="text-[11px] text-slate-500">
-                      {detail.sellingDate ? new Date(detail.sellingDate).toLocaleDateString("en-IN") : "Date unknown"}
+                      {detail.sellingDate ? formatDisplayDate(detail.sellingDate) : "Date unknown"}
                       {" · "}
                       to {detail.customerName || "unknown customer"}
                       {detail.invoiceNumber ? ` · Invoice ${detail.invoiceNumber}` : ""}
@@ -709,7 +713,7 @@ const SerialLookupModal = ({ onClose }: { onClose: () => void }) => {
                   <div>
                     <div className="text-xs font-semibold text-slate-800">Returned</div>
                     <div className="text-[11px] text-slate-500">
-                      {detail.returnedAt ? new Date(detail.returnedAt).toLocaleDateString("en-IN") : "Date unknown"}
+                      {detail.returnedAt ? formatDisplayDate(detail.returnedAt) : "Date unknown"}
                     </div>
                   </div>
                 </li>
@@ -847,6 +851,13 @@ const Products = () => {
   const openDetailModal = (product: ProductData) => setDetailProductId(product.id);
   const closeDetailModal = () => setDetailProductId(null);
 
+  const CREATE_SCHEMA_BY_TYPE: Record<ProductType, typeof createNonSerialSchema | typeof createSerializedSchema | typeof createSoftwareSchema | typeof createHardwareOrderBasedSchema> = {
+    NON_SERIAL: createNonSerialSchema,
+    SERIALIZED: createSerializedSchema,
+    SOFTWARE: createSoftwareSchema,
+    HARDWARE_ORDER_BASED: createHardwareOrderBasedSchema,
+  };
+
   const validateProductForm = (values: ProductFormValues) => {
     if (!selectedProduct && !values.productType) {
       return { productType: "Select a product type" };
@@ -854,9 +865,7 @@ const Products = () => {
 
     const schema = selectedProduct
       ? editProductSchema
-      : values.productType === "SERIALIZED"
-        ? createSerializedSchema
-        : createNonSerialSchema;
+      : CREATE_SCHEMA_BY_TYPE[values.productType as ProductType] ?? createNonSerialSchema;
 
     const result = schema.safeParse(values);
     if (result.success) return {};
@@ -877,11 +886,14 @@ const Products = () => {
         description: values.description.trim() || undefined,
         isActive: values.isActive,
       };
-      if (selectedProduct.productType === "NON_SERIAL") {
+      if (selectedProduct.productType !== "SERIALIZED") {
+        // NON_SERIAL, SOFTWARE, and HARDWARE_ORDER_BASED all carry a Stock row for pricing.
         if (values.sellingPrice !== "") {
           updatePayload.sellingPrice = Number(values.sellingPrice);
         }
-        updatePayload.dealerId = values.dealerId === "" ? null : Number(values.dealerId);
+        if (selectedProduct.productType !== "SOFTWARE") {
+          updatePayload.dealerId = values.dealerId === "" ? null : Number(values.dealerId);
+        }
       }
       updateProductMutation.mutate(
         { id: selectedProduct.id, data: updatePayload },
@@ -896,27 +908,44 @@ const Products = () => {
       productType: values.productType as ProductType,
     };
 
-    const createPayload: CreateProductPayload =
-      values.productType === "SERIALIZED"
-        ? {
-            ...basePayload,
-            units: values.units
-              .filter((u) => u.serialNumber.trim())
-              .map((u) => ({
-                serialNumber: u.serialNumber.trim(),
-                purchasePrice: values.purchasePrice === "" ? undefined : Number(values.purchasePrice),
-                sellingPrice: values.sellingPrice === "" ? undefined : Number(values.sellingPrice),
-                dealerId: values.dealerId === "" ? undefined : Number(values.dealerId),
-              })),
-          }
-        : {
-            ...basePayload,
-            quantity: values.quantity === "" ? undefined : Number(values.quantity),
+    let createPayload: CreateProductPayload;
+    if (values.productType === "SERIALIZED") {
+      createPayload = {
+        ...basePayload,
+        units: values.units
+          .filter((u) => u.serialNumber.trim())
+          .map((u) => ({
+            serialNumber: u.serialNumber.trim(),
             purchasePrice: values.purchasePrice === "" ? undefined : Number(values.purchasePrice),
             sellingPrice: values.sellingPrice === "" ? undefined : Number(values.sellingPrice),
             dealerId: values.dealerId === "" ? undefined : Number(values.dealerId),
-            purchaseDate: values.purchaseDate || undefined,
-          };
+          })),
+      };
+    } else if (values.productType === "SOFTWARE") {
+      // No quantity/purchasePrice/dealer at all — just the selling price.
+      createPayload = {
+        ...basePayload,
+        sellingPrice: values.sellingPrice === "" ? undefined : Number(values.sellingPrice),
+      };
+    } else if (values.productType === "HARDWARE_ORDER_BASED") {
+      // Deliberately never includes `quantity` — this type always starts at 0 stock and is
+      // procured per order via Receive Stock, not pre-purchased in bulk at creation time.
+      createPayload = {
+        ...basePayload,
+        purchasePrice: values.purchasePrice === "" ? undefined : Number(values.purchasePrice),
+        sellingPrice: values.sellingPrice === "" ? undefined : Number(values.sellingPrice),
+        dealerId: values.dealerId === "" ? undefined : Number(values.dealerId),
+      };
+    } else {
+      createPayload = {
+        ...basePayload,
+        quantity: values.quantity === "" ? undefined : Number(values.quantity),
+        purchasePrice: values.purchasePrice === "" ? undefined : Number(values.purchasePrice),
+        sellingPrice: values.sellingPrice === "" ? undefined : Number(values.sellingPrice),
+        dealerId: values.dealerId === "" ? undefined : Number(values.dealerId),
+        purchaseDate: values.purchaseDate || undefined,
+      };
+    }
 
     createProductMutation.mutate(createPayload, { onSettled: () => helpers.setSubmitting(false) });
   };
@@ -1149,18 +1178,26 @@ const Products = () => {
                     </td>
 
                     <td className="px-4 py-3.5 whitespace-nowrap">
-                      <div className="font-semibold text-slate-800">{product.available} pcs</div>
-                      {product.reserved > 0 && <div className="text-[11px] text-slate-400">{product.reserved} reserved</div>}
+                      {product.productType === "SOFTWARE" ? (
+                        <div className="text-slate-400 italic">Not applicable</div>
+                      ) : (
+                        <>
+                          <div className="font-semibold text-slate-800">{product.available} pcs</div>
+                          {!!product.reserved && product.reserved > 0 && (
+                            <div className="text-[11px] text-slate-400">{product.reserved} reserved</div>
+                          )}
+                        </>
+                      )}
                     </td>
 
                     <td className="hidden md:table-cell px-4 py-3.5 whitespace-nowrap">
-                      {product.productType === "NON_SERIAL" ? formatCurrency(product.purchasePrice) : "—"}
+                      {STOCK_TRACKED_PRODUCT_TYPES.includes(product.productType) ? formatCurrency(product.purchasePrice) : "—"}
                     </td>
                     <td className="hidden md:table-cell px-4 py-3.5 whitespace-nowrap">
-                      {product.productType === "NON_SERIAL" ? formatCurrency(product.sellingPrice) : "—"}
+                      {product.productType !== "SERIALIZED" ? formatCurrency(product.sellingPrice) : "—"}
                     </td>
                     <td className="hidden lg:table-cell px-4 py-3.5 whitespace-nowrap">
-                      {product.productType === "NON_SERIAL" ? product.dealer?.name || "—" : "—"}
+                      {STOCK_TRACKED_PRODUCT_TYPES.includes(product.productType) ? product.dealer?.name || "—" : "—"}
                     </td>
 
                     <td className="px-4 py-3.5 whitespace-nowrap">
@@ -1197,7 +1234,7 @@ const Products = () => {
                           </button>
                         )}
 
-                        {pagePermission.canCreate && product.isActive && (
+                        {pagePermission.canCreate && product.isActive && product.productType !== "SOFTWARE" && (
                           <button
                             type="button"
                             onClick={() => setReceiveStockProduct(product)}
@@ -1390,6 +1427,53 @@ const Products = () => {
                       </div>
                     )}
 
+                    {!selectedProduct && values.productType === "SOFTWARE" && (
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                        <p className="text-xs text-slate-500">
+                          Software has no physical stock — it's fulfilled via installation/service, not shipped. Just set a selling price.
+                        </p>
+                        <Field name="sellingPrice" type="number" label="Selling Price" placeholder="0.00" component={FormikInput} />
+                      </div>
+                    )}
+
+                    {!selectedProduct && values.productType === "HARDWARE_ORDER_BASED" && (
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                        <p className="text-xs text-slate-500">
+                          This hardware isn't kept in warehouse stock — it's arranged/purchased per sale. It starts with 0 stock; use
+                          "Receive Stock" once you've bought it for a specific order.
+                        </p>
+                        <div className="grid grid-cols-2 gap-3">
+                          <Field name="purchasePrice" type="number" label="Purchase Price" placeholder="0.00" component={FormikInput} />
+                          <Field name="sellingPrice" type="number" label="Selling Price" placeholder="0.00" component={FormikInput} />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">Dealer / Supplier</label>
+                          <div className="flex gap-2">
+                            <select
+                              value={values.dealerId}
+                              onChange={(e) => setFieldValue("dealerId", e.target.value ? Number(e.target.value) : "")}
+                              className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                            >
+                              <option value="">-- No dealer --</option>
+                              {dealers.map((d) => (
+                                <option key={d.id} value={d.id}>
+                                  {d.name}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() => setDealerQuickAdd({ open: true, mode: "create", target: "product", dealerId: null })}
+                              title="Add new dealer"
+                              className="rounded-lg border border-slate-200 px-2 text-slate-500 hover:bg-slate-100"
+                            >
+                              <PlusCircle className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {!selectedProduct && values.productType === "SERIALIZED" && (
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
                         <p className="text-xs font-semibold text-slate-600">Serial Units (optional — you can also add these later)</p>
@@ -1458,7 +1542,7 @@ const Products = () => {
                       </div>
                     )}
 
-                    {selectedProduct && selectedProduct.productType === "NON_SERIAL" && (
+                    {selectedProduct && STOCK_TRACKED_PRODUCT_TYPES.includes(selectedProduct.productType) && (
                       <>
                         <div className="grid grid-cols-2 gap-3">
                           <Field
@@ -1512,6 +1596,10 @@ const Products = () => {
                           </div>
                         </div>
                       </>
+                    )}
+
+                    {selectedProduct && selectedProduct.productType === "SOFTWARE" && (
+                      <Field name="sellingPrice" type="number" label="Selling Price" placeholder="0.00" component={FormikInput} />
                     )}
 
                     {selectedProduct && (
@@ -1610,12 +1698,22 @@ const Products = () => {
                     <div>
                       <span className="text-slate-400 font-medium block">Created On</span>
                       <span className="text-slate-800 font-semibold">
-                        {detailProduct.createdAt ? new Date(detailProduct.createdAt).toLocaleDateString("en-IN") : "—"}
+                        {detailProduct.createdAt ? formatDisplayDate(detailProduct.createdAt) : "—"}
                       </span>
                     </div>
                   </div>
 
-                  {detailProduct.productType === "NON_SERIAL" ? (
+                  {detailProduct.productType === "SOFTWARE" ? (
+                    <div className="rounded-xl bg-slate-50 p-4 border border-slate-100">
+                      <div className="text-center">
+                        <div className="text-lg font-bold text-slate-800">{formatCurrency(detailProduct.sellingPrice)}</div>
+                        <div className="text-[11px] text-slate-400">Selling Price</div>
+                      </div>
+                      <p className="mt-3 text-center text-slate-400 italic">
+                        No physical stock — fulfilled via installation/update/service, not shipped.
+                      </p>
+                    </div>
+                  ) : STOCK_TRACKED_PRODUCT_TYPES.includes(detailProduct.productType) ? (
                     <div className="rounded-xl bg-slate-50 p-4 border border-slate-100">
                       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 text-center">
                         <div>
@@ -1636,6 +1734,11 @@ const Products = () => {
                         </div>
                       </div>
                       <div className="mt-3 text-center text-slate-500">Dealer: {detailProduct.dealer?.name || "—"}</div>
+                      {detailProduct.productType === "HARDWARE_ORDER_BASED" && (
+                        <p className="mt-3 text-center text-slate-400 italic">
+                          Not kept in warehouse stock — arranged/purchased per order via Receive Stock.
+                        </p>
+                      )}
                     </div>
                   ) : (
                     <div className="rounded-xl bg-slate-50 p-4 border border-slate-100">
@@ -1656,7 +1759,7 @@ const Products = () => {
                     </div>
                   )}
 
-                  {detailProduct.productType === "NON_SERIAL" && (
+                  {STOCK_TRACKED_PRODUCT_TYPES.includes(detailProduct.productType) && (
                     <div className="rounded-xl bg-slate-50 p-4 border border-slate-100">
                       <div className="flex items-center gap-2 text-slate-500 font-medium mb-2">
                         <Receipt className="h-3.5 w-3.5" /> Purchase History
@@ -1679,7 +1782,7 @@ const Products = () => {
                                 <tr key={p.id}>
                                   <td className="py-1.5 pr-3 whitespace-nowrap">{idx + 1}</td>
                                   <td className="py-1.5 pr-3 whitespace-nowrap">
-                                    {p.purchaseDate ? new Date(p.purchaseDate).toLocaleDateString("en-IN") : "—"}
+                                    {p.purchaseDate ? formatDisplayDate(p.purchaseDate) : "—"}
                                   </td>
                                   <td className="py-1.5 pr-3 whitespace-nowrap">{p.quantity}</td>
                                   <td className="py-1.5 pr-3 whitespace-nowrap">{formatCurrency(p.purchaseAmount)}</td>
@@ -1722,7 +1825,7 @@ const Products = () => {
                                   <tr key={u.id}>
                                     <td className="py-1.5 pr-3 whitespace-nowrap">{idx + 1}</td>
                                     <td className="py-1.5 pr-3 font-mono text-slate-700 whitespace-nowrap">{u.serialNumber}</td>
-                                    <td className="py-1.5 pr-3 whitespace-nowrap">{u.purchaseDate || "—"}</td>
+                                    <td className="py-1.5 pr-3 whitespace-nowrap">{u.purchaseDate ? formatDisplayDate(u.purchaseDate) : "—"}</td>
                                     <td className="py-1.5 pr-3 whitespace-nowrap">{formatCurrency(u.purchasePrice)}</td>
                                     <td className="py-1.5 pr-3 whitespace-nowrap">{u.dealer?.name || "—"}</td>
                                     <td className="py-1.5 pr-3 whitespace-nowrap">
@@ -1735,7 +1838,7 @@ const Products = () => {
                                     </td>
                                     <td className="py-1.5 pr-3 whitespace-nowrap">
                                       {isSold ? (
-                                        u.sellingDate ? new Date(u.sellingDate).toLocaleDateString("en-IN") : "—"
+                                        u.sellingDate ? formatDisplayDate(u.sellingDate) : "—"
                                       ) : (
                                         <span className="italic text-slate-400">Not Sold</span>
                                       )}

@@ -10,6 +10,7 @@ import expenseService, { type ExpenseEntryData, type ExpenseFilters } from "@/se
 import { expenseFilterSchema, type ExpenseFilterValues } from "@/validation/expense.validation";
 import { useDebounce } from "@/hook/useDebounce";
 import { initSocket } from "@/services/socket.service";
+import { formatDisplayDate } from "@/shared/utils/date";
 import ExpenseStatusBadge from "./components/ExpenseStatusBadge";
 import ExpenseViewModal from "./components/ExpenseViewModal";
 import ExpenseFormModal from "./components/ExpenseFormModal";
@@ -286,7 +287,7 @@ const Expense = () => {
                     <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">{entry.name}</td>
                     <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{entry.product || "—"}</td>
                     <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap">{formatCurrency(entry.amount)}</td>
-                    <td className="px-4 py-3 whitespace-nowrap text-gray-500">{entry.entryDate}</td>
+                    <td className="px-4 py-3 whitespace-nowrap text-gray-500">{formatDisplayDate(entry.entryDate)}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <ExpenseStatusBadge status={entry.status} />
                     </td>

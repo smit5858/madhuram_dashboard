@@ -31,7 +31,7 @@ export const STATUS_BADGE_CLASS: Record<CourierStatus, string> = {
  *  never one of the manually-selectable options in CourierStatusModal. */
 export const STATUS_HELPER: Record<CourierStatus, string> = {
     PENDING: "Not yet picked up by the courier company.",
-    WAITING_FOR_STOCK: "Waiting for the required product(s) to be back in stock — updates automatically.",
+    WAITING_FOR_STOCK: "Waiting for the required product(s) to become available — restocked, or arranged/procured for this order — updates automatically.",
     IN_PROGRESS: "Parcel created, awaiting pickup/processing.",
     OUT_FOR_DELIVERY: "Tracking ID assigned, on its way to the customer.",
     DONE: "Delivered — the seller will be notified.",

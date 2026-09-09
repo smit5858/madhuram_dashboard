@@ -4,6 +4,7 @@ import { Truck } from "lucide-react";
 import courierService from "@/services/courier.service";
 import { STATUS_LABEL, STATUS_BADGE_CLASS, type CourierStatus } from "@/shared/constants/courierStatus";
 import { Routing } from "@/routes/routing";
+import { formatDisplayDate } from "@/shared/utils/date";
 
 const RecentDeliveries = ({ enabled }: { enabled: boolean }) => {
   const navigate = useNavigate();
@@ -43,7 +44,7 @@ const RecentDeliveries = ({ enabled }: { enabled: boolean }) => {
               >
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-slate-800">{courier.customerName || courier.name}</p>
-                  <p className="text-[11px] text-slate-400">{courier.entryDate || "—"}</p>
+                  <p className="text-[11px] text-slate-400">{courier.entryDate ? formatDisplayDate(courier.entryDate) : "—"}</p>
                 </div>
                 <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_BADGE_CLASS[status]}`}>
                   {STATUS_LABEL[status]}

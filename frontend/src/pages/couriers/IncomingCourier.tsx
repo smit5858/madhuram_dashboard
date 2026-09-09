@@ -9,6 +9,7 @@ import courierService, { type CourierData, type CourierFilters } from "../../ser
 import { useDebounce } from "../../hook/useDebounce";
 import { incomingCourierFilterSchema, type IncomingCourierFilterValues } from "../../validation/courier.validation";
 import { COURIER_STATUSES, STATUS_BADGE_CLASS, STATUS_LABEL } from "../../shared/constants/courierStatus";
+import { formatDisplayDate } from "../../shared/utils/date";
 import FormikInput from "../../shared/components/formik-fields/FormikInput";
 import IncomingCourierFormModal from "./components/IncomingCourierFormModal";
 import IncomingCourierViewModal from "./components/IncomingCourierViewModal";
@@ -348,7 +349,7 @@ const IncomingCourier = () => {
                                                     {courier.trackId || <span className="text-slate-300">—</span>}
                                                 </td>
                                                 <td className="px-4 py-3 whitespace-nowrap">
-                                                    {courier.entryDate || <span className="text-slate-300">—</span>}
+                                                    {courier.entryDate ? formatDisplayDate(courier.entryDate) : <span className="text-slate-300">—</span>}
                                                 </td>
                                                 <td className="px-4 py-3 whitespace-nowrap">
                                                     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${STATUS_BADGE_CLASS[status]}`}>

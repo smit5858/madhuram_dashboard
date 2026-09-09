@@ -1,5 +1,6 @@
 const { Customer, Sale, User, Notification } = require("../models");
 const { Op } = require("sequelize");
+const dayjs = require("dayjs");
 const { getIO } = require("../socket");
 
 // GET /customers
@@ -164,7 +165,7 @@ exports.createCustomer = async (req, res) => {
     // Notify Admin after customer creation
     try {
       const creatorName = user ? (user.name || user.email || `User #${user.id}`) : "Sells Member";
-      const notifDate = new Date().toLocaleString();
+      const notifDate = dayjs().format("DD-MM-YYYY, hh:mm A");
       const notifData = {
         recipientModule: "admin",
         type: "NEW_CUSTOMER",

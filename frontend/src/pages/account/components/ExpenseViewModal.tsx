@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Banknote, Calendar, FileText, IndianRupee, Package, Phone, Receipt, User, XCircle } from "lucide-react";
 import type { ExpenseEntryData } from "@/services/expense.service";
 import { PAYMENT_METHOD_LABEL } from "@/shared/constants/paymentMethod";
-import { formatDateTime } from "@/shared/utils/date";
+import { formatDateTime, formatDisplayDate } from "@/shared/utils/date";
 import ExpenseStatusBadge from "./ExpenseStatusBadge";
 
 const DetailItem = ({
@@ -83,7 +83,7 @@ const ExpenseViewModal = ({ entry, onClose }: ExpenseViewModalProps) => {
               <DetailItem icon={User} label="Name" value={entry.name} />
               <DetailItem icon={Phone} label="Mobile" value={entry.mobile} />
               <DetailItem icon={Package} label="Product" value={entry.product} />
-              <DetailItem icon={Calendar} label="Date" value={entry.entryDate} />
+              <DetailItem icon={Calendar} label="Date" value={formatDisplayDate(entry.entryDate)} />
             </Section>
 
             <Section title="Transaction">

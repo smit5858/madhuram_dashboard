@@ -7,6 +7,7 @@ import expenseService from "@/services/expense.service";
 import IncomeStatusBadge from "@/pages/account/components/IncomeStatusBadge";
 import ExpenseStatusBadge from "@/pages/account/components/ExpenseStatusBadge";
 import { Routing } from "@/routes/routing";
+import { formatDisplayDate } from "@/shared/utils/date";
 
 const formatCurrency = (amount: number | string | undefined) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(Number(amount) || 0);
@@ -85,7 +86,7 @@ const RecentTransactions = ({ canReadIncome, canReadExpense }: { canReadIncome: 
             >
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-slate-800">{row.name}</p>
-                <p className="text-[11px] text-slate-400">{row.entryDate}</p>
+                <p className="text-[11px] text-slate-400">{formatDisplayDate(row.entryDate)}</p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 {row.type === "INCOME" ? (

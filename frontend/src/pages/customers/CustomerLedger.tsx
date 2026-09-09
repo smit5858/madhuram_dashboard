@@ -10,6 +10,7 @@ import BalanceBadge from "@/shared/components/BalanceBadge";
 import LedgerPaymentModal from "./components/LedgerPaymentModal";
 import DeleteLedgerEntryModal from "./components/DeleteLedgerEntryModal";
 import ShareStatementMenu from "./components/ShareStatementMenu";
+import { formatDisplayDate } from "@/shared/utils/date";
 
 const describeEntry = (entry: LedgerEntry) => {
   if (entry.type === "SALE") return `Product Sale${entry.sale?.invoiceNumber ? ` (${entry.sale.invoiceNumber})` : ""}`;
@@ -132,7 +133,7 @@ const CustomerLedger = () => {
                 {entries.map((entry, index) => (
                   <tr key={entry.id} className="hover:bg-slate-50/70 transition-colors">
                     <td className="px-4 py-3.5 font-mono text-slate-400">{index + 1}</td>
-                    <td className="px-4 py-3.5 whitespace-nowrap">{new Date(entry.transactionDate).toLocaleDateString("en-GB")}</td>
+                    <td className="px-4 py-3.5 whitespace-nowrap">{formatDisplayDate(entry.transactionDate)}</td>
                     <td className="px-4 py-3.5">{describeEntry(entry)}</td>
                     <td className={`px-4 py-3.5 text-right font-bold whitespace-nowrap ${entry.amount < 0 ? "text-rose-600" : "text-emerald-600"}`}>
                       {entry.amount < 0 ? "-" : "+"}₹{Math.abs(entry.amount).toLocaleString("en-IN")}

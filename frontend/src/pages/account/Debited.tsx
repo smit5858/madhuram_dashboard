@@ -9,6 +9,7 @@ import customerLedgerService, { type DebtorFilters } from "@/services/customerLe
 import BalanceBadge from "@/shared/components/BalanceBadge";
 import ShareStatementMenu from "@/pages/customers/components/ShareStatementMenu";
 import { useDebounce } from "@/hook/useDebounce";
+import { formatDisplayDate } from "@/shared/utils/date";
 
 const PAGE_SIZE = 10;
 
@@ -208,7 +209,7 @@ const Debited = () => {
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap text-gray-600">{debtor.balance.label}</td>
                     <td className="px-4 py-3 whitespace-nowrap text-gray-600">
-                      {debtor.lastTransactionDate ? new Date(debtor.lastTransactionDate).toLocaleDateString() : "—"}
+                      {debtor.lastTransactionDate ? formatDisplayDate(debtor.lastTransactionDate) : "—"}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-2">

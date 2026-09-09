@@ -1,4 +1,5 @@
 const PDFDocument = require("pdfkit");
+const dayjs = require("dayjs");
 const fs = require("fs");
 const path = require("path");
 
@@ -44,7 +45,7 @@ function generateCustomerStatementPdf(customer, balance, entries, res) {
   y += 16;
   doc.font("Helvetica").fontSize(10).fillColor("#444444").text(`Phone: ${customer.phone || "—"}`, startX, y);
   y += 14;
-  doc.text(`Statement Date: ${new Date().toLocaleDateString("en-GB")}`, startX, y);
+  doc.text(`Statement Date: ${dayjs().format("DD-MM-YYYY")}`, startX, y);
   y += 20;
 
   const balanceColor = balance.status === "ADVANCE" ? "#059669" : balance.status === "PENDING" ? "#e11d48" : "#475569";
@@ -94,7 +95,7 @@ function generateCustomerStatementPdf(customer, balance, entries, res) {
     doc.fillColor("black");
     doc.text(String(index + 1), x, y, { width: columns[0].width });
     x += columns[0].width;
-    doc.text(new Date(entry.transactionDate).toLocaleDateString("en-GB"), x, y, { width: columns[1].width });
+    doc.text(dayjs(entry.transactionDate).format("DD-MM-YYYY"), x, y, { width: columns[1].width });
     x += columns[1].width;
     doc.text(describeEntry(entry), x, y, { width: columns[2].width, ellipsis: true });
     x += columns[2].width;

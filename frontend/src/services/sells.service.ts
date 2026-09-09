@@ -1,5 +1,6 @@
 import httpService from "./http-service";
 import type { LedgerBalance } from "@/shared/utils/ledgerBalance";
+import type { ProductType } from "@/shared/enum/product-type";
 
 export interface SaleItemData {
   id?: number;
@@ -10,7 +11,7 @@ export interface SaleItemData {
     id: number;
     name: string;
     description?: string;
-    productType?: "NON_SERIAL" | "SERIALIZED";
+    productType?: ProductType;
   };
   quantity: number;
   sellingPrice: number;

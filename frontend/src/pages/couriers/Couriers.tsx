@@ -14,6 +14,7 @@ import { DELIVERY_MODE_LABEL, DELIVERY_MODE_BADGE_CLASS, DELIVERY_MODE_OPTIONS }
 import { STOCK_STATUS_LABEL, STOCK_STATUS_BADGE_CLASS } from "../../shared/constants/productStockStatus";
 import { courierFilterSchema, type CourierFilterValues } from "../../validation/courier.validation";
 import { useDebounce } from "../../hook/useDebounce";
+import { formatDisplayDate } from "../../shared/utils/date";
 import CourierEditModal from "./components/CourierEditModal";
 import CourierViewModal from "./components/CourierViewModal";
 import CourierStatusModal from "./components/CourierStatusModal";
@@ -242,7 +243,7 @@ const CourierTable = ({
                                                 {courier.note || <span className="text-slate-300">—</span>}
                                             </td>
                                             <td className="px-4 py-3 whitespace-nowrap text-xs">
-                                                {courier.completedDate || <span className="text-slate-300">—</span>}
+                                                {courier.completedDate ? formatDisplayDate(courier.completedDate) : <span className="text-slate-300">—</span>}
                                             </td>
                                         </>
                                     )}
