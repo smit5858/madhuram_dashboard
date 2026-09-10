@@ -339,6 +339,21 @@ const ensureBankAccountFieldsNullable = async () => {
   }
 };
 
+// Same sync({alter:true}) limitation as ensureUserRoleIdNullable above — leads.productId became
+// optional once the "Other" product-field option (no catalog Product row) shipped. Idempotent.
+const ensureLeadProductIdNullable = async () => {
+  const { DataTypes } = require("sequelize");
+  const queryInterface = sequelize.getQueryInterface();
+  const tables = await queryInterface.showAllTables();
+  const tableNames = tables.map((table) => (typeof table === "string" ? table : table.tableName));
+  if (!tableNames.includes("leads")) return;
+
+  const columns = await queryInterface.describeTable("leads");
+  if (columns.productId && columns.productId.allowNull === false) {
+    await queryInterface.changeColumn("leads", "productId", { type: DataTypes.INTEGER, allowNull: true });
+  }
+};
+
 // pending_bills gained a NOT NULL remainingAmount column (and paidAmount/billType/etc.) when the
 // restock-bill payment flow was merged into it. sequelize.sync({alter:true}) can't safely add a
 // NOT NULL column to a table that already has rows (MySQL has nothing to put in it) — so if the
@@ -494,6 +509,9 @@ sequelize
   })
   .then(() => {
     return ensureBankAccountFieldsNullable();
+  })
+  .then(() => {
+    return ensureLeadProductIdNullable();
   })
   .then(() => {
     return ensurePendingBillPaymentFieldsBackfilled();

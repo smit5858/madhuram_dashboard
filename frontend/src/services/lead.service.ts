@@ -19,7 +19,10 @@ export interface LeadData {
   phone: string;
   address?: string | null;
   city?: string | null;
-  productId: number | string;
+  /** Omitted for the "Other" option in the product field (a general enquiry with no specific
+   *  product/software). Backend never auto-creates a Sell for these leads, even when status is
+   *  set to Complete — see lead.controller.js#ensureSaleForLead. */
+  productId?: number | string;
   product?: LeadRefData | null;
   quantity: number | string;
 

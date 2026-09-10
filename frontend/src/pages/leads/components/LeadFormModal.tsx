@@ -8,7 +8,7 @@ import platformService from "@/services/platform.service";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
 import FormikDate from "@/shared/components/formik-fields/FormikDate";
 import FormikSelect from "@/shared/components/formik-fields/FormikSelect";
-import { leadEntrySchema, LEAD_STATUSES, type LeadEntryFormValues } from "@/validation/lead.validation";
+import { leadEntrySchema, LEAD_STATUSES, OTHER_PRODUCT_ID, type LeadEntryFormValues } from "@/validation/lead.validation";
 import { getTodayISODate } from "@/shared/utils/date";
 import ProductAutocompleteField from "./ProductAutocompleteField";
 import CustomerAutocompleteField from "./CustomerAutocompleteField";
@@ -62,7 +62,7 @@ const LeadFormModal = ({ lead, onClose }: LeadFormModalProps) => {
     phone: lead?.phone || "",
     address: lead?.address || "",
     city: lead?.city || "",
-    productId: lead?.productId ?? "",
+    productId: lead && !lead.productId ? OTHER_PRODUCT_ID : (lead?.productId ?? ""),
     quantity: lead?.quantity !== undefined && lead?.quantity !== null ? String(lead.quantity) : "",
     status: lead?.status || "PENDING",
     followUp1Date: lead?.followUp1Date || getTodayISODate(),
@@ -82,7 +82,7 @@ const LeadFormModal = ({ lead, onClose }: LeadFormModalProps) => {
         phone: values.phone,
         address: values.address?.trim() || undefined,
         city: values.city?.trim() || undefined,
-        productId: values.productId,
+        productId: values.productId === OTHER_PRODUCT_ID ? undefined : values.productId,
         quantity: values.quantity,
         status: values.status,
         followUp1Date: values.followUp1Date,
@@ -159,7 +159,7 @@ const LeadFormModal = ({ lead, onClose }: LeadFormModalProps) => {
                   <ProductAutocompleteField
                     label="Product"
                     value={values.productId as number}
-                    initialLabel={lead?.product?.name}
+                    initialLabel={lead && !lead.productId ? "Other" : lead?.product?.name}
                     onChange={(productId) => setFieldValue("productId", productId)}
                     error={touched.productId ? errors.productId : undefined}
                   />

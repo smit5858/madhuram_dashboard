@@ -377,7 +377,7 @@ const Leads = () => {
                       <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{lead.companyName || "—"}</td>
                       <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{lead.phone}</td>
                       <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{lead.city || "—"}</td>
-                      <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{lead.product?.name || "—"}</td>
+                      <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{lead.product?.name || "Other"}</td>
                       <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{lead.quantity}</td>
                       {canViewAll && <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{lead.salesEmployee?.name || "—"}</td>}
                       <td className="px-4 py-3 whitespace-nowrap">

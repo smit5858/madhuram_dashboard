@@ -229,7 +229,7 @@ const LeadViewModal = ({ leadId, onClose }: LeadViewModalProps) => {
 
             <Section title="Lead Information">
               <DetailItem icon={Package} label="Platform" value={lead.platform?.name} />
-              <DetailItem icon={Package} label="Product" value={lead.product?.name} />
+              <DetailItem icon={Package} label="Product" value={lead.product?.name || "Other"} />
               <DetailItem icon={Package} label="Quantity" value={lead.quantity} />
               <DetailItem icon={User} label="Sales Employee" value={lead.salesEmployee?.name} />
               <DetailItem icon={Calendar} label="Created" value={formatDateTime(lead.createdAt)} />

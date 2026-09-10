@@ -32,9 +32,12 @@ const Lead = sequelize.define(
     address: { type: DataTypes.TEXT, allowNull: true },
     city: { type: DataTypes.STRING, allowNull: true },
 
+    // Nullable for the "Other" option in ProductAutocompleteField — a general enquiry with no
+    // specific product/software involved. See lead.controller.js#ensureSaleForLead, which skips
+    // auto-creating a Sell for these leads since there's no Product to seed a sale line with.
     productId: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: { model: "products", key: "id" },
     },
     quantity: { type: DataTypes.INTEGER, allowNull: false },

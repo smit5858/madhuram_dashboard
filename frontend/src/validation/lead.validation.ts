@@ -17,9 +17,14 @@ const platformIdField = z.union([z.string(), z.number()]).refine((val) => val !=
   message: "Platform is required",
 });
 
-const productIdField = z.union([z.string(), z.number()]).refine((val) => val !== "" && val !== undefined && val !== null, {
-  message: "Product is required",
-});
+// The sentinel productId value ProductAutocompleteField uses for the pinned "Other" option —
+// a general enquiry with no specific product/software involved (see LeadFormModal.tsx and
+// lead.controller.js#ensureSaleForLead, which never auto-creates a Sell for these leads). No
+// real product with this id can exist.
+export const OTHER_PRODUCT_ID = -1;
+
+// Required unless "Other" is selected — enforced in the superRefine below.
+const productIdField = z.union([z.string(), z.number()]).optional();
 
 // Formik coerces <input type="number"> to a JS number, so this must accept a stray number
 // before checking its pattern — same reasoning as pendingBill.validation.ts's amountField.
@@ -57,6 +62,13 @@ export const leadEntrySchema = z
   // A follow-up's notes only make sense once its date is set — don't let the user fill in notes
   // for a follow-up they never scheduled.
   .superRefine((values, ctx) => {
+    if (
+      values.productId !== OTHER_PRODUCT_ID &&
+      (values.productId === "" || values.productId === undefined || values.productId === null)
+    ) {
+      ctx.addIssue({ code: "custom", path: ["productId"], message: "Product is required" });
+    }
+
     if (!values.followUp2Date && values.followUp2Notes) {
       ctx.addIssue({ code: "custom", path: ["followUp2Date"], message: "Set a date before adding notes for Follow-up 2" });
     }

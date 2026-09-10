@@ -17,12 +17,17 @@ const LEAD_INCLUDE = [
 ];
 
 // Auto-creates the Sell for a Lead whose status is Complete (see createLead/updateLead below).
+// Skipped entirely when the lead has no productId (the "Other" option in
+// ProductAutocompleteField) — there's no Product row to seed a sale line item with, so no Sell
+// is ever auto-created for these leads regardless of status.
 // Idempotent: a Lead has at most one linked Sale (unique index on Sale.leadId), so this is safe
 // to call every time the lead is saved as Complete, not just on the first transition.
 // The Sale is owned by the lead's own creator (not necessarily the caller — an Admin can flip
 // another employee's lead to Complete) so it correctly counts under that employee's own Sells.
 // A failure here must never fail the Lead save itself — it's logged and swallowed.
 const ensureSaleForLead = async (lead) => {
+  if (!lead.productId) return null;
+
   const existing = await Sale.findOne({ where: { leadId: lead.id } });
   if (existing) return existing;
 
@@ -213,11 +218,10 @@ exports.getLeadById = async (req, res) => {
 };
 
 const validateLeadPayload = (body) => {
-  const { platformId, customerName, phone, productId, quantity, followUp1Date, status } = body || {};
+  const { platformId, customerName, phone, quantity, followUp1Date, status } = body || {};
   if (!platformId) return "Platform is required";
   if (!customerName || !String(customerName).trim()) return "Customer name is required";
   if (!phone || !String(phone).trim()) return "Phone number is required";
-  if (!productId) return "Product is required";
   if (quantity === undefined || quantity === null || isNaN(parseInt(quantity, 10)) || parseInt(quantity, 10) <= 0) {
     return "A valid quantity greater than 0 is required";
   }
@@ -260,7 +264,7 @@ const pickLeadFields = (body) => {
     phone: String(phone).trim(),
     address: address && String(address).trim() ? String(address).trim() : null,
     city: city && String(city).trim() ? String(city).trim() : null,
-    productId,
+    productId: productId || null,
     quantity: parseInt(quantity, 10),
     followUp1Date,
     followUp1Time: followUp1Time || null,
@@ -289,8 +293,11 @@ exports.createLead = async (req, res) => {
     const platform = await Platform.findByPk(req.body.platformId);
     if (!platform) return res.status(400).json({ success: false, message: "Selected platform does not exist" });
 
-    const product = await Product.findByPk(req.body.productId);
-    if (!product) return res.status(400).json({ success: false, message: "Selected product does not exist" });
+    let product = null;
+    if (req.body.productId) {
+      product = await Product.findByPk(req.body.productId);
+      if (!product) return res.status(400).json({ success: false, message: "Selected product does not exist" });
+    }
 
     const isAdmin = req.user.roleName === "Admin";
 
@@ -308,7 +315,7 @@ exports.createLead = async (req, res) => {
           recipientModule: "admin",
           type: "LEAD_APPROVAL_REQUIRED",
           title: "New Lead Awaiting Approval",
-          message: `${req.user.name || "A sales employee"} added a lead for ${lead.customerName} (${product.name}).`,
+          message: `${req.user.name || "A sales employee"} added a lead for ${lead.customerName} (${product ? product.name : "General Enquiry"}).`,
           referenceType: "lead",
           referenceId: lead.id,
           event: "lead_created",
@@ -349,8 +356,10 @@ exports.updateLead = async (req, res) => {
     const platform = await Platform.findByPk(req.body.platformId);
     if (!platform) return res.status(400).json({ success: false, message: "Selected platform does not exist" });
 
-    const product = await Product.findByPk(req.body.productId);
-    if (!product) return res.status(400).json({ success: false, message: "Selected product does not exist" });
+    if (req.body.productId) {
+      const product = await Product.findByPk(req.body.productId);
+      if (!product) return res.status(400).json({ success: false, message: "Selected product does not exist" });
+    }
 
     await lead.update(pickLeadFields(req.body));
 

@@ -3,6 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Search as SearchIcon } from "lucide-react";
 import productService from "@/services/product.service";
 import { useDebounce } from "@/hook/useDebounce";
+import { OTHER_PRODUCT_ID } from "@/validation/lead.validation";
+
+export const OTHER_PRODUCT_LABEL = "Other";
 
 interface ProductAutocompleteFieldProps {
   label?: string;
@@ -73,31 +76,46 @@ const ProductAutocompleteField = ({ label = "Product", value, initialLabel, onCh
       </div>
       {error && <div className="formik-input-error">{error}</div>}
 
-      {isOpen && debouncedQuery.trim() && (
+      {isOpen && (
         <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-          {isFetching ? (
-            <div className="px-3 py-2 text-xs text-slate-400">Searching...</div>
-          ) : results.length === 0 ? (
-            <div className="px-3 py-2 text-xs text-slate-400">No matching products</div>
-          ) : (
-            results.map((product) => (
-              <button
-                key={product.id}
-                type="button"
-                onClick={() => {
-                  onChange(product.id, product.name);
-                  setQuery(product.name);
-                  setIsOpen(false);
-                }}
-                className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-slate-50 ${
-                  value === product.id ? "bg-blue-50 text-blue-700" : "text-slate-700"
-                }`}
-              >
-                <span>{product.name}</span>
-                <span className="text-[10px] text-slate-400">Stock: {product.currentStock}</span>
-              </button>
-            ))
-          )}
+          <button
+            type="button"
+            onClick={() => {
+              onChange(OTHER_PRODUCT_ID, OTHER_PRODUCT_LABEL);
+              setQuery(OTHER_PRODUCT_LABEL);
+              setIsOpen(false);
+            }}
+            className={`block w-full border-b border-slate-100 px-3 py-2 text-left text-xs font-semibold hover:bg-slate-50 ${
+              value === OTHER_PRODUCT_ID ? "bg-blue-50 text-blue-700" : "text-slate-700"
+            }`}
+          >
+            {OTHER_PRODUCT_LABEL}
+          </button>
+
+          {debouncedQuery.trim() &&
+            (isFetching ? (
+              <div className="px-3 py-2 text-xs text-slate-400">Searching...</div>
+            ) : results.length === 0 ? (
+              <div className="px-3 py-2 text-xs text-slate-400">No matching products</div>
+            ) : (
+              results.map((product) => (
+                <button
+                  key={product.id}
+                  type="button"
+                  onClick={() => {
+                    onChange(product.id, product.name);
+                    setQuery(product.name);
+                    setIsOpen(false);
+                  }}
+                  className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-slate-50 ${
+                    value === product.id ? "bg-blue-50 text-blue-700" : "text-slate-700"
+                  }`}
+                >
+                  <span>{product.name}</span>
+                  <span className="text-[10px] text-slate-400">Stock: {product.currentStock}</span>
+                </button>
+              ))
+            ))}
         </div>
       )}
     </div>
