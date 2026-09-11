@@ -1,4 +1,4 @@
-require("dotenv").config();
+require("dotenv").config({ path: require("path").resolve(__dirname, "..", ".env"), override: true });
 const http = require("http");
 const express = require("express");
 const morgan = require("morgan");
