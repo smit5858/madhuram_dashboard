@@ -478,9 +478,10 @@ const SerialUnitsInput = ({ units, onChange }: { units: UnitRowValues[]; onChang
   );
 };
 
-/** Records a new purchase batch against an existing product — the only way to add quantity
- *  (NON_SERIAL) or new units (SERIALIZED) after creation, since Products edit intentionally
- *  doesn't let quantity/purchasePrice be overwritten directly (each batch keeps its own price). */
+/** Records a new purchase batch against an existing product, with its own purchase price/dealer/
+ *  date — for SERIALIZED this is still the only way to add units. For NON_SERIAL, Products edit
+ *  can also directly correct the on-hand Quantity (e.g. a stock-take adjustment), but that doesn't
+ *  create a dated purchase batch or touch purchasePrice the way receiving stock does. */
 const ReceiveStockModal = ({
   product,
   dealers,
@@ -932,6 +933,7 @@ const Products = () => {
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<ProductData | null>(null);
   const [detailProductId, setDetailProductId] = useState<number | null>(null);
+  const [unitSearchQuery, setUnitSearchQuery] = useState("");
   const [receiveStockProduct, setReceiveStockProduct] = useState<ProductData | null>(null);
   const [isSerialLookupOpen, setIsSerialLookupOpen] = useState(false);
   const [dealerQuickAdd, setDealerQuickAdd] = useState<{
@@ -1001,7 +1003,10 @@ const Products = () => {
     setSelectedProduct(null);
   };
   const openDetailModal = (product: ProductData) => setDetailProductId(product.id);
-  const closeDetailModal = () => setDetailProductId(null);
+  const closeDetailModal = () => {
+    setDetailProductId(null);
+    setUnitSearchQuery("");
+  };
 
   const CREATE_SCHEMA_BY_TYPE: Record<ProductType, typeof createNonSerialSchema | typeof createSerializedSchema | typeof createSoftwareSchema | typeof createHardwareOrderBasedSchema> = {
     NON_SERIAL: createNonSerialSchema,
@@ -1045,6 +1050,9 @@ const Products = () => {
         }
         if (selectedProduct.productType !== "SOFTWARE") {
           updatePayload.dealerId = values.dealerId === "" ? null : Number(values.dealerId);
+          if (values.quantity !== "") {
+            updatePayload.quantity = Number(values.quantity);
+          }
         }
       }
       updateProductMutation.mutate(
@@ -1706,8 +1714,7 @@ const Products = () => {
                             name="quantity"
                             type="number"
                             label="Quantity"
-                            readOnly
-                            className="bg-slate-100 cursor-not-allowed"
+                            placeholder="0"
                             component={FormikInput}
                           />
                           <Field
@@ -1954,61 +1961,84 @@ const Products = () => {
 
                   {detailProduct.productType === "SERIALIZED" && (
                     <div className="rounded-xl bg-slate-50 p-4 border border-slate-100">
-                      <div className="flex items-center gap-2 text-slate-500 font-medium mb-2">
-                        <Barcode className="h-3.5 w-3.5" /> Serial Units
+                      <div className="flex items-center justify-between gap-3 mb-2">
+                        <div className="flex items-center gap-2 text-slate-500 font-medium">
+                          <Barcode className="h-3.5 w-3.5" /> Serial Units {detailProduct.units && detailProduct.units.length > 0 && `(${detailProduct.units.length})`}
+                        </div>
+                        {detailProduct.units && detailProduct.units.length > 0 && (
+                          <div className="relative w-full max-w-56">
+                            <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                            <input
+                              type="text"
+                              value={unitSearchQuery}
+                              onChange={(e) => setUnitSearchQuery(e.target.value)}
+                              placeholder="Search serial number..."
+                              className="w-full rounded-lg border border-slate-200 bg-white pl-8 pr-2.5 py-1.5 text-[11px] text-slate-900 focus:border-[#3d6fe0] focus:outline-none font-mono"
+                            />
+                          </div>
+                        )}
                       </div>
                       {!detailProduct.units || detailProduct.units.length === 0 ? (
                         <p className="text-slate-400">No serial units received yet.</p>
                       ) : (
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left text-[11px]">
-                            <thead className="text-slate-400 uppercase tracking-wide">
-                              <tr>
-                                <th className="py-1.5 pr-3 whitespace-nowrap">Sr. No.</th>
-                                <th className="py-1.5 pr-3 whitespace-nowrap">Serial No.</th>
-                                <th className="py-1.5 pr-3 whitespace-nowrap">Purchase Date</th>
-                                <th className="py-1.5 pr-3 whitespace-nowrap">Purchase Amount</th>
-                                <th className="py-1.5 pr-3 whitespace-nowrap">Dealer</th>
-                                <th className="py-1.5 pr-3 whitespace-nowrap">Status</th>
-                                <th className="py-1.5 pr-3 whitespace-nowrap">Customer Name</th>
-                                <th className="py-1.5 pr-3 whitespace-nowrap">Selling Date</th>
-                                <th className="py-1.5 pr-3 whitespace-nowrap">Selling Amount</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-200">
-                              {detailProduct.units.map((u, idx) => {
-                                const isSold = u.status === "SOLD";
-                                return (
-                                  <tr key={u.id}>
-                                    <td className="py-1.5 pr-3 whitespace-nowrap">{idx + 1}</td>
-                                    <td className="py-1.5 pr-3 font-mono text-slate-700 whitespace-nowrap">{u.serialNumber}</td>
-                                    <td className="py-1.5 pr-3 whitespace-nowrap">{u.purchaseDate ? formatDisplayDate(u.purchaseDate) : "—"}</td>
-                                    <td className="py-1.5 pr-3 whitespace-nowrap">{formatCurrency(u.purchasePrice)}</td>
-                                    <td className="py-1.5 pr-3 whitespace-nowrap">{u.dealer?.name || "—"}</td>
-                                    <td className="py-1.5 pr-3 whitespace-nowrap">
-                                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold border ${SERIAL_STATUS_BADGE_CLASS[u.status]}`}>
-                                        {u.status}
-                                      </span>
-                                    </td>
-                                    <td className="py-1.5 pr-3 whitespace-nowrap">
-                                      {isSold ? u.customerName || "—" : <span className="italic text-slate-400">Not Sold</span>}
-                                    </td>
-                                    <td className="py-1.5 pr-3 whitespace-nowrap">
-                                      {isSold ? (
-                                        u.sellingDate ? formatDisplayDate(u.sellingDate) : "—"
-                                      ) : (
-                                        <span className="italic text-slate-400">Not Sold</span>
-                                      )}
-                                    </td>
-                                    <td className="py-1.5 pr-3 whitespace-nowrap">
-                                      {isSold ? formatCurrency(u.sellingPrice) : <span className="italic text-slate-400">Not Sold</span>}
-                                    </td>
+                        (() => {
+                          const filteredUnits = detailProduct.units.filter((u) =>
+                            u.serialNumber.toLowerCase().includes(unitSearchQuery.trim().toLowerCase())
+                          );
+                          return filteredUnits.length === 0 ? (
+                            <p className="text-slate-400">No serial unit matching "{unitSearchQuery}" was found.</p>
+                          ) : (
+                            <div className="max-h-96 overflow-y-auto overflow-x-auto">
+                              <table className="w-full text-left text-[11px]">
+                                <thead className="text-slate-400 uppercase tracking-wide sticky top-0 bg-slate-50">
+                                  <tr>
+                                    <th className="py-1.5 pr-3 whitespace-nowrap">Sr. No.</th>
+                                    <th className="py-1.5 pr-3 whitespace-nowrap">Serial No.</th>
+                                    <th className="py-1.5 pr-3 whitespace-nowrap">Purchase Date</th>
+                                    <th className="py-1.5 pr-3 whitespace-nowrap">Purchase Amount</th>
+                                    <th className="py-1.5 pr-3 whitespace-nowrap">Dealer</th>
+                                    <th className="py-1.5 pr-3 whitespace-nowrap">Status</th>
+                                    <th className="py-1.5 pr-3 whitespace-nowrap">Customer Name</th>
+                                    <th className="py-1.5 pr-3 whitespace-nowrap">Selling Date</th>
+                                    <th className="py-1.5 pr-3 whitespace-nowrap">Selling Amount</th>
                                   </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
+                                </thead>
+                                <tbody className="divide-y divide-slate-200">
+                                  {filteredUnits.map((u, idx) => {
+                                    const isSold = u.status === "SOLD";
+                                    return (
+                                      <tr key={u.id}>
+                                        <td className="py-1.5 pr-3 whitespace-nowrap">{idx + 1}</td>
+                                        <td className="py-1.5 pr-3 font-mono text-slate-700 whitespace-nowrap">{u.serialNumber}</td>
+                                        <td className="py-1.5 pr-3 whitespace-nowrap">{u.purchaseDate ? formatDisplayDate(u.purchaseDate) : "—"}</td>
+                                        <td className="py-1.5 pr-3 whitespace-nowrap">{formatCurrency(u.purchasePrice)}</td>
+                                        <td className="py-1.5 pr-3 whitespace-nowrap">{u.dealer?.name || "—"}</td>
+                                        <td className="py-1.5 pr-3 whitespace-nowrap">
+                                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold border ${SERIAL_STATUS_BADGE_CLASS[u.status]}`}>
+                                            {u.status}
+                                          </span>
+                                        </td>
+                                        <td className="py-1.5 pr-3 whitespace-nowrap">
+                                          {isSold ? u.customerName || "—" : <span className="italic text-slate-400">Not Sold</span>}
+                                        </td>
+                                        <td className="py-1.5 pr-3 whitespace-nowrap">
+                                          {isSold ? (
+                                            u.sellingDate ? formatDisplayDate(u.sellingDate) : "—"
+                                          ) : (
+                                            <span className="italic text-slate-400">Not Sold</span>
+                                          )}
+                                        </td>
+                                        <td className="py-1.5 pr-3 whitespace-nowrap">
+                                          {isSold ? formatCurrency(u.sellingPrice) : <span className="italic text-slate-400">Not Sold</span>}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          );
+                        })()
                       )}
                     </div>
                   )}

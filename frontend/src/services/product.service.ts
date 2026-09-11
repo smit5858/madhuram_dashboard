@@ -110,6 +110,8 @@ export interface UpdateProductPayload {
   /** Any type except SERIALIZED (whose pricing is per sale item). */
   sellingPrice?: number;
   dealerId?: number | null;
+  /** NON_SERIAL / HARDWARE_ORDER_BASED only — sets the Stock row's on-hand quantity. */
+  quantity?: number;
 }
 
 const getProducts = (filters: ProductFilters = {}, config?: { signal?: AbortSignal }) =>

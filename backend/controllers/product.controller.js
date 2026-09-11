@@ -538,12 +538,15 @@ exports.createProduct = async (req, res) => {
 
 // PUT /products/:id
 exports.updateProduct = async (req, res) => {
+  const t = await sequelize.transaction();
   try {
+    const user = req.user;
     const { id } = req.params;
-    const { name, description, isActive, sellingPrice, dealerId } = req.body || {};
+    const { name, description, isActive, sellingPrice, dealerId, quantity } = req.body || {};
 
-    const product = await Product.findByPk(id);
+    const product = await Product.findByPk(id, { transaction: t });
     if (!product) {
+      await t.rollback();
       return res.status(404).json({ success: false, message: "Product not found" });
     }
 
@@ -553,12 +556,17 @@ exports.updateProduct = async (req, res) => {
     if (description !== undefined) product.description = description;
     if (isActive !== undefined) product.isActive = isActive;
 
-    await product.save();
+    await product.save({ transaction: t });
 
     if (product.productType !== "SERIALIZED") {
       // NON_SERIAL, SOFTWARE, and HARDWARE_ORDER_BASED all carry a Stock row (see
       // serializeProduct) purely to hold sellingPrice/dealer — this branch covers all three.
-      const [stock] = await Stock.findOrCreate({ where: { productId: id }, defaults: { productId: id, quantity: 0, reserved: 0 } });
+      const [stock] = await Stock.findOrCreate({
+        where: { productId: id },
+        defaults: { productId: id, quantity: 0, reserved: 0 },
+        transaction: t,
+        lock: true,
+      });
 
       if (sellingPrice !== undefined) {
         stock.sellingPrice = sellingPrice;
@@ -568,21 +576,55 @@ exports.updateProduct = async (req, res) => {
         if (dealerId === null || dealerId === "") {
           stock.dealerId = null;
         } else {
-          const dealer = await Dealer.findByPk(dealerId);
+          const dealer = await Dealer.findByPk(dealerId, { transaction: t });
           if (!dealer) {
+            await t.rollback();
             return res.status(400).json({ success: false, message: "Selected dealer does not exist" });
           }
           stock.dealerId = dealer.id;
         }
       }
 
-      await stock.save();
+      await stock.save({ transaction: t });
+
+      // Quantity is only settable for stock-tracked types (NON_SERIAL, HARDWARE_ORDER_BASED) —
+      // SOFTWARE has no stock concept and stays pinned at 0. Delta is routed through
+      // inventoryService.adjustStock so the reserved-quantity guard and StockMovement audit
+      // trail stay consistent with every other place stock is mutated.
+      if (quantity !== undefined && quantity !== null && quantity !== "" && STOCK_TRACKED_TYPES.includes(product.productType)) {
+        const targetQuantity = parseInt(quantity, 10);
+        if (isNaN(targetQuantity) || targetQuantity < 0) {
+          await t.rollback();
+          return res.status(400).json({ success: false, message: "quantity must be a non-negative integer" });
+        }
+
+        const delta = targetQuantity - stock.quantity;
+        if (delta !== 0) {
+          try {
+            await inventoryService.adjustStock(
+              {
+                productId: id,
+                delta,
+                userId: user.id,
+                notes: `Quantity updated to ${targetQuantity} via product edit`,
+              },
+              { transaction: t }
+            );
+          } catch (err) {
+            await t.rollback();
+            return res.status(err.statusCode || 400).json({ success: false, message: err.message });
+          }
+        }
+      }
     } else if (sellingPrice !== undefined) {
+      await t.rollback();
       return res.status(400).json({
         success: false,
         message: "sellingPrice cannot be set on SERIALIZED products — pricing is per sale item",
       });
     }
+
+    await t.commit();
 
     const refreshed = await Product.findByPk(id, {
       include: { model: Stock, include: [{ model: Dealer, attributes: DEALER_ATTRS }] },
@@ -594,6 +636,7 @@ exports.updateProduct = async (req, res) => {
       data: serializeProduct(refreshed, {}),
     });
   } catch (err) {
+    if (!t.finished) await t.rollback();
     return res.status(500).json({ success: false, message: err.message });
   }
 };

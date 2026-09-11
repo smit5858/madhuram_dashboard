@@ -101,6 +101,7 @@ export const editProductSchema = z.object({
   description: descriptionField,
   isActive: z.boolean().optional(),
   sellingPrice: optionalAmountField,
+  quantity: optionalQuantityField,
 });
 
 export type EditProductFormValues = z.infer<typeof editProductSchema>;
