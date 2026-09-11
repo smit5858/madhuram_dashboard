@@ -1,3 +1,4 @@
+require("dotenv").config();
 const http = require("http");
 const express = require("express");
 const morgan = require("morgan");
@@ -5,7 +6,6 @@ const cors = require("cors");
 const chalk = require("chalk");
 const logger = require("./helper/logger");
 const auth = require("./routes/auth.routes");
-require("dotenv").config();
 
 const sequelize = require("./config/db");
 const { init: initSocket } = require("./socket");
