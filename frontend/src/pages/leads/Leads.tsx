@@ -14,7 +14,6 @@ import { useDebounce } from "@/hook/useDebounce";
 import { initSocket } from "@/services/socket.service";
 import { getTodayISODate, formatDisplayDate } from "@/shared/utils/date";
 import LeadStatusBadge from "./components/LeadStatusBadge";
-import LeadApprovalBadge from "./components/LeadApprovalBadge";
 import LeadViewModal from "./components/LeadViewModal";
 import LeadFormModal from "./components/LeadFormModal";
 
