@@ -21,7 +21,8 @@ export interface ProductData {
   available: number | null;
   /** SERIALIZED only. */
   sold?: number;
-  /** Varies per unit for SERIALIZED (never shown at product level); not applicable for SOFTWARE. */
+  /** SERIALIZED: price of the most recently received unit (individual units can still vary —
+   *  see per-unit detail on ProductDetail.units). Null for SOFTWARE (no purchase concept). */
   purchasePrice: number | null;
   sellingPrice: number | null;
   dealer: DealerRef | null;

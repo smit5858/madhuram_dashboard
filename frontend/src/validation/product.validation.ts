@@ -29,6 +29,8 @@ const quantityField = z.coerce
   .int("Quantity must be a whole number")
   .min(0, "Quantity cannot be negative");
 
+const optionalQuantityField = z.union([quantityField, z.literal("")]).optional();
+
 // Create — NON_SERIAL: product + its initial quantity-based inventory in one step.
 export const createNonSerialSchema = z.object({
   name: nameField,
@@ -52,11 +54,14 @@ const uniqueSerialNumbers = (units: { serialNumber: string }[]) => {
 };
 
 // Create — SERIALIZED: product + optional starting batch of units sharing one purchase/selling price.
+// `quantity` drives how many serial-number fields render (see SerialUnitsInput) — each rendered
+// row must have a non-blank, unique serial number before the batch can be saved.
 export const createSerializedSchema = z.object({
   name: nameField,
   description: descriptionField,
   purchasePrice: optionalAmountField,
   sellingPrice: optionalAmountField,
+  quantity: optionalQuantityField,
   units: z
     .array(serialUnitRowSchema)
     .optional()
@@ -117,6 +122,7 @@ export const receiveNonSerialStockSchema = z.object({
 export type ReceiveNonSerialStockFormValues = z.infer<typeof receiveNonSerialStockSchema>;
 
 export const receiveSerializedStockSchema = z.object({
+  quantity: receiveQuantityField,
   purchasePrice: optionalAmountField,
   sellingPrice: optionalAmountField,
   units: z

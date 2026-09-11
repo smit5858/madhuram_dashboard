@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
 import toast from "react-hot-toast";
-import { Field, FieldArray, Form, Formik, useFormikContext, type FormikHelpers } from "formik";
+import { Field, Form, Formik, useFormikContext, type FormikHelpers } from "formik";
 import {
   Package,
   Search as SearchIcon,
@@ -73,6 +73,8 @@ interface ProductFormValues {
 
 const EMPTY_UNIT_ROW: UnitRowValues = { serialNumber: "" };
 
+// SERIALIZED forms generate one row per unit of `quantity` (see SerialUnitsInput) rather than
+// letting units be added/removed by hand — so an empty quantity starts with zero rows.
 const EMPTY_FORM_VALUES: ProductFormValues = {
   name: "",
   description: "",
@@ -83,7 +85,46 @@ const EMPTY_FORM_VALUES: ProductFormValues = {
   sellingPrice: "",
   dealerId: "",
   purchaseDate: getTodayISODate(),
-  units: [{ ...EMPTY_UNIT_ROW }],
+  units: [],
+};
+
+/** Resizes a `units` array to match `quantity`, padding with blank rows or truncating from the
+ *  end — used to keep the serial-number fields in lockstep with the Quantity input. */
+const resizeSerialUnits = (units: UnitRowValues[], quantity: number): UnitRowValues[] => {
+  if (quantity === units.length) return units;
+  if (quantity > units.length) {
+    return [...units, ...Array.from({ length: quantity - units.length }, () => ({ ...EMPTY_UNIT_ROW }))];
+  }
+  return units.slice(0, quantity);
+};
+
+const parseQuantityInput = (raw: string): number | "" => {
+  if (raw === "") return "";
+  const n = Math.max(0, Math.floor(Number(raw)));
+  return Number.isFinite(n) ? n : "";
+};
+
+/**
+ * Applies the Quantity field to `units` only when the user explicitly clicks Confirm/Update —
+ * typing a quantity must never regenerate fields on its own (it used to steal focus mid-keystroke).
+ * Shrinking prompts for confirmation only when it would discard a serial number already entered;
+ * growing/no-op never prompts since no data is at risk. Returns null if the user cancels the prompt
+ * (caller should leave `units` untouched).
+ */
+const confirmGenerateSerialUnits = (units: UnitRowValues[], quantity: number | ""): UnitRowValues[] | null => {
+  const target = quantity === "" ? 0 : Math.max(0, Math.floor(Number(quantity)));
+  if (target === units.length) return units;
+  if (target < units.length) {
+    const removed = units.slice(target);
+    const wouldLoseData = removed.some((u) => u.serialNumber.trim());
+    if (wouldLoseData) {
+      const confirmed = window.confirm(
+        `Reducing the quantity to ${target} will remove ${units.length - target} serial number field(s) that already have a value entered. Continue?`
+      );
+      if (!confirmed) return null;
+    }
+  }
+  return resizeSerialUnits(units, target);
 };
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
@@ -307,6 +348,7 @@ const EMPTY_RECEIVE_NON_SERIAL_VALUES: ReceiveNonSerialFormValues = {
 };
 
 interface ReceiveSerializedFormValues {
+  quantity: number | "";
   purchasePrice: number | "";
   sellingPrice: number | "";
   dealerId: number | "";
@@ -314,10 +356,11 @@ interface ReceiveSerializedFormValues {
 }
 
 const EMPTY_RECEIVE_SERIALIZED_VALUES: ReceiveSerializedFormValues = {
+  quantity: "",
   purchasePrice: "",
   sellingPrice: "",
   dealerId: "",
-  units: [{ ...EMPTY_UNIT_ROW }],
+  units: [],
 };
 
 const parseFormikErrors = (result: { success: boolean; error?: { issues: { path: PropertyKey[]; message: string }[] } }) => {
@@ -329,6 +372,109 @@ const parseFormikErrors = (result: { success: boolean; error?: { issues: { path:
       return errors;
     },
     {} as Record<string, string>
+  );
+};
+
+/**
+ * Renders one input per serial unit — the count is set explicitly via the Quantity field's
+ * Confirm/Update button (see `confirmGenerateSerialUnits`), never generated as the user types a
+ * quantity, and each row can be individually removed with its own Cancel button regardless of how
+ * many rows remain. Built for barcode-scanner input: a scanner acts like a keyboard that types the
+ * code then sends Enter, so pressing Enter here jumps focus to the next empty field instead of
+ * submitting the form — letting units be scanned back-to-back with no mouse clicks. Duplicate
+ * serial numbers (case-insensitive, trimmed) are flagged inline and block auto-advance.
+ */
+const SerialUnitsInput = ({ units, onChange }: { units: UnitRowValues[]; onChange: (units: UnitRowValues[]) => void }) => {
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const prevLengthRef = useRef(units.length);
+
+  const duplicateIndexes = useMemo(() => {
+    const seen = new Map<string, number>();
+    const dupes = new Set<number>();
+    units.forEach((u, idx) => {
+      const key = u.serialNumber.trim().toLowerCase();
+      if (!key) return;
+      if (seen.has(key)) {
+        dupes.add(idx);
+        dupes.add(seen.get(key) as number);
+      } else {
+        seen.set(key, idx);
+      }
+    });
+    return dupes;
+  }, [units]);
+
+  // Growing the batch (quantity went up) should hand focus straight to the first new blank field
+  // so scanning can continue without the user touching the mouse.
+  useEffect(() => {
+    if (units.length > prevLengthRef.current) {
+      const firstEmpty = units.findIndex((u) => !u.serialNumber.trim());
+      if (firstEmpty !== -1) {
+        requestAnimationFrame(() => inputRefs.current[firstEmpty]?.focus());
+      }
+    }
+    prevLengthRef.current = units.length;
+  }, [units]);
+
+  const handleSerialChange = (idx: number, value: string) => {
+    onChange(units.map((u, i) => (i === idx ? { serialNumber: value } : u)));
+  };
+
+  // Cancels just this one row — the rest of the batch (including anything already
+  // scanned/typed elsewhere) is left exactly as-is, and the Quantity field is untouched.
+  const handleCancelRow = (idx: number) => {
+    onChange(units.filter((_, i) => i !== idx));
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, idx: number) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    if (!units[idx]?.serialNumber.trim() || duplicateIndexes.has(idx)) return;
+    const nextEmpty = units.findIndex((u, i) => i > idx && !u.serialNumber.trim());
+    const target = nextEmpty !== -1 ? nextEmpty : idx + 1 < units.length ? idx + 1 : -1;
+    if (target !== -1) inputRefs.current[target]?.focus();
+  };
+
+  if (units.length === 0) {
+    return <p className="text-xs text-slate-400 italic">Enter a quantity above and click Confirm to generate serial number fields.</p>;
+  }
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+      {units.map((unit, idx) => {
+        const isDuplicate = duplicateIndexes.has(idx);
+        return (
+          <div key={idx}>
+            <div className="mb-1 flex items-center justify-between">
+              <label className="text-[11px] font-semibold text-slate-500">Serial #{idx + 1}</label>
+              <button
+                type="button"
+                onClick={() => handleCancelRow(idx)}
+                className="text-[11px] font-semibold text-rose-500 hover:text-rose-700"
+              >
+                Cancel
+              </button>
+            </div>
+            <input
+              ref={(el) => {
+                inputRefs.current[idx] = el;
+              }}
+              type="text"
+              value={unit.serialNumber}
+              placeholder="Scan or type serial number"
+              onChange={(e) => handleSerialChange(idx, e.target.value)}
+              onKeyDown={(e) => handleKeyDown(e, idx)}
+              className={`w-full rounded-lg border px-3 py-2 text-xs text-slate-900 focus:outline-none font-mono ${
+                isDuplicate
+                  ? "border-rose-400 bg-rose-50 focus:border-rose-500"
+                  : "border-slate-200 bg-white focus:border-[#3d6fe0]"
+              }`}
+            />
+            {isDuplicate && <p className="mt-1 text-[11px] text-rose-500">Duplicate serial number</p>}
+          </div>
+        );
+      })}
+    </div>
   );
 };
 
@@ -469,10 +615,35 @@ const ReceiveStockModal = ({
               );
             }}
           >
-            {({ values, setFieldValue, isSubmitting }) => (
+            {({ values, errors, setFieldValue, isSubmitting }) => (
               <Form className="space-y-3">
                 <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 space-y-2">
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Quantity *</label>
+                      <div className="flex gap-1.5">
+                        <input
+                          type="number"
+                          min={0}
+                          value={values.quantity}
+                          placeholder="0"
+                          onChange={(e) => setFieldValue("quantity", parseQuantityInput(e.target.value))}
+                          className="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          disabled={values.quantity === ""}
+                          onClick={() => {
+                            const result = confirmGenerateSerialUnits(values.units, values.quantity);
+                            if (result !== null) setFieldValue("units", result);
+                          }}
+                          className="shrink-0 rounded-lg bg-[#3d6fe0] px-2.5 text-[11px] font-semibold text-white hover:bg-[#3162d2] disabled:opacity-40 disabled:cursor-not-allowed transition"
+                        >
+                          Confirm
+                        </button>
+                      </div>
+                      {errors.quantity && <p className="mt-1 text-[11px] text-rose-500">{errors.quantity}</p>}
+                    </div>
                     <Field name="purchasePrice" type="number" label="Purchase Price" placeholder="0.00" component={FormikInput} />
                     <Field name="sellingPrice" type="number" label="Selling Price" placeholder="0.00" component={FormikInput} />
                   </div>
@@ -493,37 +664,18 @@ const ReceiveStockModal = ({
                   </div>
                 </div>
 
-                <FieldArray name="units">
-                  {({ push, remove }) => (
-                    <div className="space-y-3">
-                      {values.units.map((_, idx) => (
-                        <div key={idx} className="rounded-lg bg-slate-50 border border-slate-200 p-3 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[11px] font-bold text-slate-400">Unit #{idx + 1}</span>
-                            {values.units.length > 1 && (
-                              <button type="button" onClick={() => remove(idx)} className="text-rose-500 hover:text-rose-700">
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            )}
-                          </div>
-                          <Field
-                            name={`units.${idx}.serialNumber`}
-                            label="Serial Number"
-                            placeholder="e.g. TC001"
-                            component={FormikInput}
-                          />
-                        </div>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={() => push({ ...EMPTY_UNIT_ROW })}
-                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#3d6fe0] hover:text-[#3162d2]"
-                      >
-                        <Plus className="h-3.5 w-3.5" /> Add Another Unit
-                      </button>
-                    </div>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-slate-600">
+                    Serial Numbers {values.units.length > 0 && `(${values.units.length})`}
+                  </p>
+                  {values.units.length > 0 && (
+                    <p className="text-[11px] text-slate-400">
+                      Scan each unit's barcode — the field fills in and focus jumps to the next one automatically.
+                    </p>
                   )}
-                </FieldArray>
+                  <SerialUnitsInput units={values.units} onChange={(units) => setFieldValue("units", units)} />
+                  {typeof errors.units === "string" && <p className="text-[11px] text-rose-500">{errors.units}</p>}
+                </div>
 
                 <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                   <button
@@ -1190,12 +1342,11 @@ const Products = () => {
                       )}
                     </td>
 
-                    <td className="hidden md:table-cell px-4 py-3.5 whitespace-nowrap">
-                      {STOCK_TRACKED_PRODUCT_TYPES.includes(product.productType) ? formatCurrency(product.purchasePrice) : "—"}
-                    </td>
-                    <td className="hidden md:table-cell px-4 py-3.5 whitespace-nowrap">
-                      {product.productType !== "SERIALIZED" ? formatCurrency(product.sellingPrice) : "—"}
-                    </td>
+                    {/* For SERIALIZED, the backend already resolves these to the most recently
+                        received unit's price (individual units can still vary — see unit detail
+                        in the View modal) rather than a per-unit value that can't fit one cell. */}
+                    <td className="hidden md:table-cell px-4 py-3.5 whitespace-nowrap">{formatCurrency(product.purchasePrice)}</td>
+                    <td className="hidden md:table-cell px-4 py-3.5 whitespace-nowrap">{formatCurrency(product.sellingPrice)}</td>
                     <td className="hidden lg:table-cell px-4 py-3.5 whitespace-nowrap">
                       {STOCK_TRACKED_PRODUCT_TYPES.includes(product.productType) ? product.dealer?.name || "—" : "—"}
                     </td>
@@ -1359,7 +1510,7 @@ const Products = () => {
               validate={validateProductForm}
               onSubmit={handleFormSubmit}
             >
-              {({ values, setFieldValue, isSubmitting }) => (
+              {({ values, errors, setFieldValue, isSubmitting }) => (
                 <>
                   <Form className="mt-5 space-y-4">
                     <Field name="name" label="Product Name *" placeholder="e.g. THINKCAR Diagnostic Tool" component={FormikInput} />
@@ -1478,7 +1629,32 @@ const Products = () => {
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
                         <p className="text-xs font-semibold text-slate-600">Serial Units (optional — you can also add these later)</p>
                         <div className="rounded-lg bg-white border border-slate-200 p-3 space-y-2">
-                          <div className="grid grid-cols-2 gap-2">
+                          <div className="grid grid-cols-3 gap-2">
+                            <div>
+                              <label className="block text-xs font-semibold text-slate-700 mb-1">Quantity</label>
+                              <div className="flex gap-1.5">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={values.quantity}
+                                  placeholder="0"
+                                  onChange={(e) => setFieldValue("quantity", parseQuantityInput(e.target.value))}
+                                  className="w-full min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={values.quantity === ""}
+                                  onClick={() => {
+                                    const result = confirmGenerateSerialUnits(values.units, values.quantity);
+                                    if (result !== null) setFieldValue("units", result);
+                                  }}
+                                  className="shrink-0 rounded-lg bg-[#3d6fe0] px-2.5 text-[11px] font-semibold text-white hover:bg-[#3162d2] disabled:opacity-40 disabled:cursor-not-allowed transition"
+                                >
+                                  Confirm
+                                </button>
+                              </div>
+                              {errors.quantity && <p className="mt-1 text-[11px] text-rose-500">{errors.quantity}</p>}
+                            </div>
                             <Field name="purchasePrice" type="number" label="Purchase Price" placeholder="0.00" component={FormikInput} />
                             <Field name="sellingPrice" type="number" label="Selling Price" placeholder="0.00" component={FormikInput} />
                           </div>
@@ -1508,37 +1684,18 @@ const Products = () => {
                             </div>
                           </div>
                         </div>
-                        <FieldArray name="units">
-                          {({ push, remove }) => (
-                            <div className="space-y-3">
-                              {values.units.map((_, idx) => (
-                                <div key={idx} className="rounded-lg bg-white border border-slate-200 p-3 space-y-2">
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-[11px] font-bold text-slate-400">Unit #{idx + 1}</span>
-                                    {values.units.length > 1 && (
-                                      <button type="button" onClick={() => remove(idx)} className="text-rose-500 hover:text-rose-700">
-                                        <Trash2 className="h-3.5 w-3.5" />
-                                      </button>
-                                    )}
-                                  </div>
-                                  <Field
-                                    name={`units.${idx}.serialNumber`}
-                                    label="Serial Number"
-                                    placeholder="e.g. TC001"
-                                    component={FormikInput}
-                                  />
-                                </div>
-                              ))}
-                              <button
-                                type="button"
-                                onClick={() => push({ ...EMPTY_UNIT_ROW })}
-                                className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#3d6fe0] hover:text-[#3162d2]"
-                              >
-                                <Plus className="h-3.5 w-3.5" /> Add Another Unit
-                              </button>
-                            </div>
+                        <div className="space-y-2">
+                          <p className="text-xs font-semibold text-slate-600">
+                            Serial Numbers {values.units.length > 0 && `(${values.units.length})`}
+                          </p>
+                          {values.units.length > 0 && (
+                            <p className="text-[11px] text-slate-400">
+                              Scan each unit's barcode — the field fills in and focus jumps to the next one automatically.
+                            </p>
                           )}
-                        </FieldArray>
+                          <SerialUnitsInput units={values.units} onChange={(units) => setFieldValue("units", units)} />
+                          {typeof errors.units === "string" && <p className="text-[11px] text-rose-500">{errors.units}</p>}
+                        </div>
                       </div>
                     )}
 

@@ -28,7 +28,32 @@ const getSerialCountsForProducts = async (productIds) => {
   return byProduct;
 };
 
-const serializeProduct = (p, serialCounts) => {
+// Per-unit purchase/selling price varies across a SERIALIZED product's batches, so the list view
+// (which has room for only one price pair per row) shows the most recently received unit's price
+// rather than a meaningless product-level average — mirrors how STOCK_TRACKED_TYPES always show
+// the latest Stock-row price. Rows come back ordered newest-first, so the first row seen per
+// product is its latest.
+const getLatestSerialPricesForProducts = async (productIds) => {
+  if (!productIds.length) return {};
+  const rows = await SerialUnit.findAll({
+    where: { productId: { [Op.in]: productIds } },
+    attributes: ["productId", "purchasePrice", "sellingPrice"],
+    order: [
+      ["receivedAt", "DESC"],
+      ["id", "DESC"],
+    ],
+    raw: true,
+  });
+  const byProduct = {};
+  for (const row of rows) {
+    if (!(row.productId in byProduct)) {
+      byProduct[row.productId] = { purchasePrice: row.purchasePrice, sellingPrice: row.sellingPrice };
+    }
+  }
+  return byProduct;
+};
+
+const serializeProduct = (p, serialCounts, latestSerialPrices = {}) => {
   const base = {
     id: p.id,
     name: p.name,
@@ -77,14 +102,15 @@ const serializeProduct = (p, serialCounts) => {
 
   // SERIALIZED — availability always derived from serial_units, never a stored counter.
   const counts = serialCounts[p.id] || { AVAILABLE: 0, RESERVED: 0, SOLD: 0 };
+  const latest = latestSerialPrices[p.id] || null;
   return {
     ...base,
     currentStock: counts.AVAILABLE,
     reserved: counts.RESERVED,
     available: counts.AVAILABLE,
     sold: counts.SOLD,
-    purchasePrice: null,
-    sellingPrice: null,
+    purchasePrice: latest ? latest.purchasePrice : null,
+    sellingPrice: latest ? latest.sellingPrice : null,
     dealer: null,
   };
 };
@@ -136,9 +162,12 @@ exports.getProducts = async (req, res) => {
     });
 
     const serializedIds = rows.filter((p) => p.productType === "SERIALIZED").map((p) => p.id);
-    const serialCounts = await getSerialCountsForProducts(serializedIds);
+    const [serialCounts, latestSerialPrices] = await Promise.all([
+      getSerialCountsForProducts(serializedIds),
+      getLatestSerialPricesForProducts(serializedIds),
+    ]);
 
-    const data = rows.map((p) => serializeProduct(p, serialCounts));
+    const data = rows.map((p) => serializeProduct(p, serialCounts, latestSerialPrices));
 
     return res.status(200).json({
       success: true,
