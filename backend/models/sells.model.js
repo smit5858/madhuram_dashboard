@@ -122,6 +122,20 @@ const Sale = sequelize.define(
         key: "id",
       },
     },
+    // Who this order is being sent to/handled by. Defaults to "Madhuram Motor" for the
+    // common case; editable when an order is sent by/to another party.
+    to: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: "Madhuram Motor",
+    },
+    // Optional courier company chosen at sale-entry time — seeds Courier.courierName on the
+    // record(s) auto-created for this sale (see orderService.createOrder); still freely
+    // editable per-record afterward from the Courier module.
+    courierName: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
   },
   {
     tableName: "sells",

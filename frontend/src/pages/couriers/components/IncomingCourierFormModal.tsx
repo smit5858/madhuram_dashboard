@@ -74,6 +74,7 @@ const IncomingCourierFormModal = ({ courier, role, onClose }: IncomingCourierFor
         reason: courier?.reason || "",
         note: courier?.note || "",
         entryDate: courier?.entryDate || getTodayISODate(),
+        to: courier?.to || "Madhuram Motor",
     };
 
     const validate = (values: FormValues) => {
@@ -111,6 +112,7 @@ const IncomingCourierFormModal = ({ courier, role, onClose }: IncomingCourierFor
             reason: values.reason || null,
             note: values.note || null,
             entryDate: values.entryDate || undefined,
+            to: values.to || "Madhuram Motor",
             direction: "IN",
         };
 
@@ -184,6 +186,7 @@ const IncomingCourierFormModal = ({ courier, role, onClose }: IncomingCourierFor
 
                             <Field name="trackId" label="Tracking Number" placeholder="Tracking number" component={FormikInput} />
                             <Field name="entryDate" label="Date" component={FormikDate} />
+                            <Field name="to" label="To" placeholder="Madhuram Motor" component={FormikInput} />
 
                             <div className="sm:col-span-2">
                                 <Field name="note" label="Other Relevant Information" placeholder="Any additional notes..." multiline component={FormikInput} />

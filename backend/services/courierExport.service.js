@@ -61,6 +61,7 @@ const COURIER_EXPORT_COLUMNS = [
   { key: "entryDate", header: "Entry Date", width: 12, pdfWidth: 55, get: (c) => (c.entryDate ? dayjs(c.entryDate).format("DD-MM-YYYY") : "") },
   { key: "completedDate", header: "Delivered Date", width: 14, pdfWidth: 60, get: (c) => (c.completedDate ? dayjs(c.completedDate).format("DD-MM-YYYY") : "") },
   { key: "note", header: "Note", width: 24, pdfWidth: null, get: (c) => c.note || "" },
+  { key: "to", header: "To", width: 16, pdfWidth: 65, get: (c) => c.to || "" },
 ];
 
 async function generateCourierExcel(couriers, res) {

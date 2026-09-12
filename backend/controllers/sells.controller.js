@@ -355,6 +355,8 @@ exports.updateSale = async (req, res) => {
       status,
       notes,
       createCourierEntry,
+      to,
+      courierName,
     } = req.body || {};
 
     const sale = await Sale.findByPk(id, { transaction: t, lock: true });
@@ -382,6 +384,8 @@ exports.updateSale = async (req, res) => {
     if (pincode !== undefined) sale.pincode = pincode;
     if (status !== undefined) sale.status = status;
     if (notes !== undefined) sale.notes = notes;
+    if (to !== undefined) sale.to = to || "Madhuram Motor";
+    if (courierName !== undefined) sale.courierName = courierName || null;
 
     if (sellingAmount !== undefined) sale.sellingAmount = parseFloat(sellingAmount);
     if (collectedAmount !== undefined) sale.collectedAmount = parseFloat(collectedAmount);

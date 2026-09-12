@@ -45,6 +45,9 @@ export interface CourierData {
     /** Snapshot of product availability at creation time — read-only, server-managed. Null for
      *  manually-created (non-sale) entries, which have no product/stock linkage to check. */
     productStockStatus?: ProductStockStatus | null;
+    /** Who this shipment is being sent to/handled by. Defaults to "Madhuram Motor"; editable
+     *  when an order is sent by/to another party. */
+    to?: string | null;
 
     userId?: number;
     saleId?: number | null;

@@ -72,6 +72,7 @@ export const buildCourierShareMessage = (courier: CourierData, siblings?: Courie
     `🏠 Address: ${courier.address || "N/A"}`,
     `🏙️ City: ${cityLine}`,
     "📍 From: MADHURAM MOTORS",
+    `🎯 To: ${courier.to || "Madhuram Motor"}`,
     "",
     "📦 Products:",
     getCourierProductsLine(courier, siblings),

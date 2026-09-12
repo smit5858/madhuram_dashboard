@@ -42,6 +42,7 @@ export const courierEditSchema = z.object({
   note: z.string().max(1000, "Note must be under 1000 characters").optional(),
   entryDate: z.string().optional(),
   deliveryMode: z.string().optional(),
+  to: z.string().max(150, "To must be under 150 characters").optional(),
 });
 
 export type CourierEditFormValues = z.infer<typeof courierEditSchema>;
@@ -62,6 +63,7 @@ export const incomingCourierEditSchema = z.object({
   reason: z.string().max(500, "Reason must be under 500 characters").optional(),
   note: z.string().max(1000, "Note must be under 1000 characters").optional(),
   entryDate: z.string().optional(),
+  to: z.string().max(150, "To must be under 150 characters").optional(),
 });
 
 export type IncomingCourierEditFormValues = z.infer<typeof incomingCourierEditSchema>;

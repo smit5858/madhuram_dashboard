@@ -249,7 +249,12 @@ exports.getProductById = async (req, res) => {
     });
 
     const counts = await inventoryService.getSerialAvailability(id);
-    const base = serializeProduct(product, { [id]: { AVAILABLE: counts.available, RESERVED: counts.reserved, SOLD: counts.sold } });
+    const latestSerialPrices = await getLatestSerialPricesForProducts([id]);
+    const base = serializeProduct(
+      product,
+      { [id]: { AVAILABLE: counts.available, RESERVED: counts.reserved, SOLD: counts.sold } },
+      latestSerialPrices
+    );
 
     return res.status(200).json({
       success: true,
@@ -512,11 +517,18 @@ exports.createProduct = async (req, res) => {
       ]);
     }
 
+    // createdUnits are inserted in order, so the last one is the latest-added — same
+    // "last added entry" rule getLatestSerialPricesForProducts applies for the list view.
+    const lastUnit = createdUnits[createdUnits.length - 1];
+    const latestPrices = lastUnit
+      ? { [product.id]: { purchasePrice: lastUnit.purchasePrice, sellingPrice: lastUnit.sellingPrice } }
+      : {};
+
     return res.status(201).json({
       success: true,
       message: successMessage,
       data: {
-        ...serializeProduct(product, {}),
+        ...serializeProduct(product, {}, latestPrices),
         units: createdUnits.map((u) => ({
           id: u.id,
           serialNumber: u.serialNumber,
@@ -630,10 +642,13 @@ exports.updateProduct = async (req, res) => {
       include: { model: Stock, include: [{ model: Dealer, attributes: DEALER_ATTRS }] },
     });
 
+    const latestSerialPrices =
+      refreshed.productType === "SERIALIZED" ? await getLatestSerialPricesForProducts([id]) : {};
+
     return res.status(200).json({
       success: true,
       message: "Product updated successfully",
-      data: serializeProduct(refreshed, {}),
+      data: serializeProduct(refreshed, {}, latestSerialPrices),
     });
   } catch (err) {
     if (!t.finished) await t.rollback();

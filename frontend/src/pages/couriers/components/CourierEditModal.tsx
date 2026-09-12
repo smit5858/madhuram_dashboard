@@ -125,6 +125,7 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
         trackId: courier?.trackId || "",
         note: courier?.note || "",
         entryDate: courier?.entryDate || getTodayISODate(),
+        to: courier?.to || "Madhuram Motor",
         serialNumbers: reservedSerials,
     };
 
@@ -170,6 +171,7 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
             quantity: values.quantity ? parseInt(values.quantity, 10) : null,
             note: values.note || null,
             entryDate: values.entryDate || undefined,
+            to: values.to || "Madhuram Motor",
             direction: formDirection,
             // Status / Type is locked to Office Pickup only for NEW records (see the read-only
             // field below) — on edit, omit it entirely so the backend's `!== undefined` guard
@@ -300,6 +302,7 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
                             <Field name="trackId" label="Track ID" placeholder="Tracking number" component={FormikInput} />
                             <Field name="entryDate" label="Date" component={FormikDate} />
                             <Field name="quantity" label="Quantity" type="number" placeholder="Units to ship" component={FormikInput} />
+                            <Field name="to" label="To" placeholder="Madhuram Motor" component={FormikInput} />
 
                             {/* Always Office Pickup for this flow — locked, not user-editable. Submitted as
                                 "OFFICE_PICKUP" regardless (see handleSubmit), so there's no Formik field for it. */}

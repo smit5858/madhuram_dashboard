@@ -131,6 +131,7 @@ const CourierTable = ({
                                 <th className="px-4 py-3 whitespace-nowrap">Stock Status</th>
                                 <th className="px-4 py-3 whitespace-nowrap">Courier Company Name</th>
                                 <th className="px-4 py-3 whitespace-nowrap">Tracking ID</th>
+                                <th className="px-4 py-3 whitespace-nowrap">To</th>
                                 <th className="px-4 py-3 text-right whitespace-nowrap">Action</th>
                             </tr>
                         ) : (
@@ -150,6 +151,7 @@ const CourierTable = ({
                                 <th className="px-4 py-3 whitespace-nowrap">Status</th>
                                 <th className="px-4 py-3 whitespace-nowrap">Note</th>
                                 <th className="px-4 py-3 whitespace-nowrap">Delivered Date</th>
+                                <th className="px-4 py-3 whitespace-nowrap">To</th>
                                 <th className="px-4 py-3 text-right whitespace-nowrap">Action</th>
                             </tr>
                         )}
@@ -197,6 +199,7 @@ const CourierTable = ({
                                                     <span className="text-slate-300">—</span>
                                                 )}
                                             </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">{courier.to || <span className="text-slate-300">—</span>}</td>
                                         </>
                                     ) : (
                                         <>
@@ -245,6 +248,7 @@ const CourierTable = ({
                                             <td className="px-4 py-3 whitespace-nowrap text-xs">
                                                 {courier.completedDate ? formatDisplayDate(courier.completedDate) : <span className="text-slate-300">—</span>}
                                             </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">{courier.to || <span className="text-slate-300">—</span>}</td>
                                         </>
                                     )}
                                     <td className="px-4 py-3 text-right">

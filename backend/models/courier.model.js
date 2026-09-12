@@ -195,6 +195,14 @@ const Courier = sequelize.define(
       allowNull: true,
       defaultValue: null,
     },
+
+    // Who this shipment is being sent to/handled by. Defaults to "Madhuram Motor" for the
+    // common case; editable when an order is sent by/to another party.
+    to: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: "Madhuram Motor",
+    },
   },
   {
     tableName: "couriers",

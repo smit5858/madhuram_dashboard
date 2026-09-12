@@ -19,6 +19,8 @@ import productService, {
 } from "../../services/product.service";
 import customerService, { type CustomerData } from "../../services/customer.service";
 import bankAccountService from "../../services/bankAccount.service";
+import courierCompanyService from "../../services/courierCompany.service";
+import { COURIER_COMPANY_OTHER } from "@/shared/constants/courierCompanies";
 import CancelSaleModal from "@/shared/components/CancelSaleModal";
 import StockShortageModal, { type StockShortageItem } from "@/pages/sells/components/StockShortageModal";
 import ProductSearchSelect from "@/pages/sells/components/ProductSearchSelect";
@@ -182,6 +184,20 @@ const Sells = () => {
   });
   const bankAccountsList = bankAccountsResponse?.data?.data || [];
 
+  // Query: active Courier Companies (for the optional Courier field below) — same
+  // Admin-managed list used by the Courier module's own company picker.
+  const { data: courierCompaniesResponse } = useQuery({
+    queryKey: ["courier-companies-picker"],
+    queryFn: () => courierCompanyService.getCourierCompanies(),
+    enabled: pagePermission.canCreate || pagePermission.canUpdate,
+  });
+  const courierCompaniesList = (courierCompaniesResponse?.data?.data || []).filter((c) => c.isActive !== false);
+  const COURIER_COMPANY_OPTIONS = [
+    { value: "", label: "None" },
+    ...courierCompaniesList.map((c) => ({ value: c.name, label: c.name })),
+    { value: COURIER_COMPANY_OTHER, label: COURIER_COMPANY_OTHER },
+  ];
+
   const productsList: ProductData[] = productsResponse?.data?.data || [];
   const sellsList: SaleData[] = sellsResponse?.data?.data || [];
 
@@ -216,6 +232,12 @@ const Sells = () => {
   const [customerName, setCustomerName] = useState("");
   const [customerNumber, setCustomerNumber] = useState("");
   const [platform, setPlatform] = useState("Direct Store");
+  const [to, setTo] = useState("Madhuram Motor");
+  // Optional courier company, picked at entry time — seeds Courier.courierName on the
+  // record(s) created for this sale but is never required and stays freely editable
+  // afterward from the Courier module.
+  const [courierName, setCourierName] = useState("");
+  const [otherCourierName, setOtherCourierName] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<string>("UPI");
   // Bank Account field — shown every time regardless of Payment Method, optional, and splits
   // the collected amount across bank accounts. Each row is a {bankAccountId, amount} pair; the
@@ -360,6 +382,10 @@ const Sells = () => {
 
   const pendingAmount = Math.max(0, effectiveSellingAmount - effectiveCollectedAmount);
 
+  // Resolves the Courier field's select value ("Other" needs the free-text sibling state)
+  // down to the plain string sent to the backend. Optional — an empty result is fine.
+  const resolvedCourierName = courierName === COURIER_COMPANY_OTHER ? otherCourierName.trim() : courierName;
+
   // Mutation: Create Sale
   const createSaleMutation = useMutation({
     mutationFn: (payload: CreateSalePayload) => saleService.createSale(payload),
@@ -488,6 +514,9 @@ const Sells = () => {
     setCustomerName("");
     setCustomerNumber("");
     setPlatform("Direct Store");
+    setTo("Madhuram Motor");
+    setCourierName("");
+    setOtherCourierName("");
     setPaymentMethod("UPI");
     setBankPayments([]);
     setCity("");
@@ -518,6 +547,11 @@ const Sells = () => {
     setCustomerName(sale.customerName || "");
     setCustomerNumber(sale.customerNumber || "");
     setPlatform(sale.platform || "Direct Store");
+    setTo(sale.to || "Madhuram Motor");
+    const savedCourierName = sale.courierName || "";
+    const courierNameIsOther = !!savedCourierName && !courierCompaniesList.some((c) => c.name === savedCourierName);
+    setCourierName(courierNameIsOther ? COURIER_COMPANY_OTHER : savedCourierName);
+    setOtherCourierName(courierNameIsOther ? savedCourierName : "");
     setPaymentMethod(sale.paymentMethod || "UPI");
     setBankPayments(
       sale.bankPayments && sale.bankPayments.length > 0
@@ -718,6 +752,11 @@ const Sells = () => {
       return;
     }
 
+    if (courierName === COURIER_COMPANY_OTHER && !otherCourierName.trim()) {
+      toast.error("Please enter the courier company name");
+      return;
+    }
+
     // Validate items
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
@@ -798,6 +837,8 @@ const Sells = () => {
           customerName: customerName.trim(),
           customerNumber: customerNumber || undefined,
           platform,
+          to: to || "Madhuram Motor",
+          courierName: resolvedCourierName || undefined,
           paymentMethod: paymentMethod as any,
           bankPayments: validatedBankPayments,
           city: city || undefined,
@@ -864,6 +905,8 @@ const Sells = () => {
       customerName: customerName.trim(),
       customerNumber: customerNumber || undefined,
       platform,
+      to: to || "Madhuram Motor",
+      courierName: resolvedCourierName || undefined,
       paymentMethod,
       bankPayments: bankPaymentsPayload,
       city: city || undefined,
@@ -1222,6 +1265,7 @@ const Sells = () => {
                   <th className="px-4 py-3.5 whitespace-nowrap">Platform</th>
                   <th className="px-4 py-3.5 whitespace-nowrap">Payment</th>
                   <th className="px-4 py-3.5 whitespace-nowrap">City</th>
+                  <th className="px-4 py-3.5 whitespace-nowrap">To</th>
                   <th className="px-4 py-3.5 whitespace-nowrap text-right">
                     Selling (₹)
                   </th>
@@ -1298,6 +1342,9 @@ const Sells = () => {
                       ) : (
                         <span className="text-slate-300">—</span>
                       )}
+                    </td>
+                    <td className="px-4 py-3.5 whitespace-nowrap">
+                      {sell.to || <span className="text-slate-300">—</span>}
                     </td>
                     <td className="px-4 py-3.5 text-right font-semibold text-slate-900 whitespace-nowrap">
                       ₹{Number(sell.sellingAmount || 0).toLocaleString("en-IN")}
@@ -1590,6 +1637,51 @@ const Sells = () => {
                       ))}
                     </select>
                   </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      To
+                    </label>
+                    <input
+                      type="text"
+                      value={to}
+                      onChange={(e) => setTo(e.target.value)}
+                      placeholder="Madhuram Motor"
+                      className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Courier <span className="font-normal text-slate-400">(optional)</span>
+                    </label>
+                    <select
+                      value={courierName}
+                      onChange={(e) => setCourierName(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                    >
+                      {COURIER_COMPANY_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {courierName === COURIER_COMPANY_OTHER && (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Custom Courier Company Name
+                      </label>
+                      <input
+                        type="text"
+                        value={otherCourierName}
+                        onChange={(e) => setOtherCourierName(e.target.value)}
+                        placeholder="e.g. Local Courier Service"
+                        className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                      />
+                    </div>
+                  )}
 
                   <div className="sm:col-span-2">
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -2092,6 +2184,14 @@ const Sells = () => {
                   </span>
                   <span className="font-semibold text-slate-800">
                     {detail.pincode || "—"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px] uppercase font-bold">
+                    To
+                  </span>
+                  <span className="font-semibold text-slate-800">
+                    {detail.to || "—"}
                   </span>
                 </div>
               </div>

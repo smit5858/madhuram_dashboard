@@ -91,6 +91,8 @@ const createOrder = async ({
   createCourierEntry = true,
   createAccountEntry = true,
   leadId,
+  to,
+  courierName,
 }) => {
   if (!customerName || !customerName.trim()) {
     const err = new Error("Customer name is required");
@@ -197,6 +199,8 @@ const createOrder = async ({
         notes: notes || null,
         createdBy: userId,
         leadId: leadId || null,
+        to: to || "Madhuram Motor",
+        courierName: courierName || null,
       },
       { transaction: t }
     );
@@ -297,7 +301,7 @@ const createOrder = async ({
               pending: true,
               status: allocated >= requested ? "PENDING" : "WAITING_FOR_STOCK",
               productStockStatus: allocated >= requested ? "IN_STOCK" : "OUT_OF_STOCK",
-              courierName: null,
+              courierName: courierName || null,
               trackId: null,
               direction: "OUT",
               userId,
@@ -876,7 +880,7 @@ const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialN
           pending: true,
           status: ready ? "PENDING" : "WAITING_FOR_STOCK",
           productStockStatus: ready ? "IN_STOCK" : "OUT_OF_STOCK",
-          courierName: null,
+          courierName: sale.courierName || null,
           trackId: null,
           direction: "OUT",
           userId,
@@ -1060,7 +1064,7 @@ const setCourierEntryForSale = async ({ saleId, createCourierEntry, userId }, { 
           pending: true,
           status: ready ? "PENDING" : "WAITING_FOR_STOCK",
           productStockStatus: ready ? "IN_STOCK" : "OUT_OF_STOCK",
-          courierName: null,
+          courierName: sale.courierName || null,
           trackId: null,
           direction: "OUT",
           userId,

@@ -58,6 +58,12 @@ export interface SaleData {
   city?: string;
   fromAddress?: string;
   pincode?: string;
+  /** Who this order is being sent to/handled by. Defaults to "Madhuram Motor"; editable when
+   *  an order is sent by/to another party. */
+  to?: string;
+  /** Optional courier company chosen at sale-entry time — seeds Courier.courierName on the
+   *  record(s) created for this sale; still freely editable per-record from the Courier module. */
+  courierName?: string;
   sellingAmount: number;
   collectedAmount: number;
   pendingAmount?: number;
@@ -108,6 +114,12 @@ export interface CreateSalePayload {
   city?: string;
   fromAddress?: string;
   pincode?: string;
+  /** Who this order is being sent to/handled by. Defaults to "Madhuram Motor"; editable when
+   *  an order is sent by/to another party. */
+  to?: string;
+  /** Optional courier company chosen at sale-entry time — seeds Courier.courierName on the
+   *  record(s) created for this sale; still freely editable per-record from the Courier module. */
+  courierName?: string;
   sellingAmount: number;
   collectedAmount: number;
   notes?: string;

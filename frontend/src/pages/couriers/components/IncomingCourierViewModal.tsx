@@ -127,6 +127,7 @@ const IncomingCourierViewModal = ({ courier, onClose }: IncomingCourierViewModal
               <DetailItem icon={MapPin} label="City" value={courier.city} />
               <DetailItem icon={Hash} label="Pincode" value={courier.pincode} />
               <DetailItem icon={MapPin} label="Address" value={courier.address} full />
+              <DetailItem icon={Building2} label="To" value={courier.to} />
             </Section>
 
             <Section title="Product & Reason">

@@ -355,7 +355,7 @@ exports.createCourier = async (req, res) => {
       customerName, address, city, mobileNo, pincode,
       productName, charge, freePickup,
       courierName, trackId, kg, note, reason, entryDate, quantity,
-      direction, deliveryMode,
+      direction, deliveryMode, to,
     } = req.body || {};
 
     if (direction !== undefined && direction !== "IN" && direction !== "OUT") {
@@ -404,6 +404,7 @@ exports.createCourier = async (req, res) => {
       quantity: quantity !== undefined && quantity !== "" ? quantity : null,
       direction: direction || "OUT",
       deliveryMode: deliveryMode || null,
+      to: to || "Madhuram Motor",
       // Owner is always the creator — there's no manual "assign owner" path any more.
       userId: user.id,
     });
@@ -433,7 +434,7 @@ exports.updateCourier = async (req, res) => {
       customerName, address, city, mobileNo, pincode,
       productName, charge, freePickup,
       courierName, trackId, kg, note, reason, entryDate, quantity,
-      status, serialNumbers, direction, deliveryMode,
+      status, serialNumbers, direction, deliveryMode, to,
     } = req.body || {};
 
     if (direction !== undefined && direction !== "IN" && direction !== "OUT") {
@@ -501,6 +502,7 @@ exports.updateCourier = async (req, res) => {
     if (quantity !== undefined) courier.quantity = quantity !== "" ? quantity : null;
     if (direction !== undefined) courier.direction = direction;
     if (deliveryMode !== undefined) courier.deliveryMode = deliveryMode || null;
+    if (to !== undefined) courier.to = to || "Madhuram Motor";
 
     // City: Admin can update city; non-Admin city is locked to their allowedCity
     if (user.roleName === "Admin") {

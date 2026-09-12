@@ -25,6 +25,7 @@ const SALES_EXPORT_COLUMNS = [
   { key: "platform", header: "Platform", width: 14, pdfWidth: 55, get: (s) => s.platform || "" },
   { key: "paymentMethod", header: "Payment Method", width: 16, pdfWidth: 60, get: (s) => s.paymentMethod || "" },
   { key: "city", header: "City", width: 14, pdfWidth: 55, get: (s) => s.city || "" },
+  { key: "to", header: "To", width: 16, pdfWidth: 60, get: (s) => s.to || "" },
   { key: "sellingAmount", header: "Selling Amount", width: 15, pdfWidth: 60, get: (s) => Number(s.sellingAmount || 0).toFixed(2) },
   { key: "collectedAmount", header: "Collected Amount", width: 16, pdfWidth: 60, get: (s) => Number(s.collectedAmount || 0).toFixed(2) },
   { key: "pendingAmount", header: "Pending Amount", width: 15, pdfWidth: 60, get: (s) => Number(s.pendingAmount || 0).toFixed(2) },
