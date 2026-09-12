@@ -767,6 +767,14 @@ const Sells = () => {
   const validateBankPayments = (totalPaid: number) => {
     if (paymentMethod === "Cash" || paymentMethod === "Other") return [];
 
+    // BankTransfer/UPI must name at least one bank account once there's an actual amount
+    // collected to attribute to it — mirrors order.service.js#normalizeBankPayments' server-side
+    // check so a bank-routed payment can never be saved with no bank account on it.
+    if (totalPaid > 0 && bankPayments.length === 0) {
+      toast.error("Select at least one bank account");
+      return null;
+    }
+
     for (let i = 0; i < bankPayments.length; i++) {
       const row = bankPayments[i];
       if (!row.bankAccountId) {
@@ -1757,7 +1765,11 @@ const Sells = () => {
                   <div className="sm:col-span-2">
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Bank Account Split{" "}
-                      <span className="font-normal text-slate-400">(optional — split the paid amount across bank accounts)</span>
+                      <span className="font-normal text-slate-400">
+                        {(paymentMethod === "BankTransfer" || paymentMethod === "UPI") && effectiveCollectedAmount > 0
+                          ? "(required — select at least one bank account for the collected amount)"
+                          : "(optional — split the paid amount across bank accounts)"}
+                      </span>
                     </label>
                     {(() => {
                       const isBankPaymentsDisabled = paymentMethod === "Cash" || paymentMethod === "Other";

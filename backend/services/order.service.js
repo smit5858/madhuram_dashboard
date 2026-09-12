@@ -33,16 +33,27 @@ const generateInvoiceNumber = async (t) => {
   return `${prefix}-${String(seq).padStart(4, "0")}`;
 };
 
+// BankTransfer/UPI need at least one bank account named once money has actually been collected
+// on the sale — matching customerLedger.service.js's needsBankSplit for the same two methods.
+const needsBankSplit = (paymentMethod) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
+
 // Validates and normalizes a sale's bank-payment allocation rows — each {bankAccountId, amount}
 // pair must name a bank account and a positive amount, and the rows may never claim more than
 // what was actually collected on the sale (the same bank account can appear more than once;
 // rows are never merged). Shared by createOrder below and sells.controller.js#updateSale.
-const normalizeBankPayments = (bankPayments, collectedAmount) => {
-  if (!Array.isArray(bankPayments)) return [];
-
-  const rows = bankPayments
+const normalizeBankPayments = (bankPayments, collectedAmount, paymentMethod) => {
+  const rows = (Array.isArray(bankPayments) ? bankPayments : [])
     .filter((row) => row && row.bankAccountId)
     .map((row) => ({ bankAccountId: Number(row.bankAccountId), amount: parseFloat(row.amount) || 0 }));
+
+  // Nothing to attribute to a bank yet when collectedAmount is 0 (e.g. a pending sale awaiting
+  // payment) — the requirement only kicks in once there's an actual amount collected via a
+  // bank-routed method.
+  if (needsBankSplit(paymentMethod) && collectedAmount > 0 && rows.length === 0) {
+    const err = new Error("Select at least one bank account for this payment method");
+    err.statusCode = 400;
+    throw err;
+  }
 
   for (const row of rows) {
     if (!row.amount || row.amount <= 0) {
@@ -131,7 +142,7 @@ const createOrder = async ({
     // the collected amount be split across multiple bank accounts (each with its own amount —
     // see saleBankAccount.model.js). bankAccountId is kept in sync as the first allocation's
     // bank for any reader that still uses the legacy single-account column.
-    const bankPaymentRows = normalizeBankPayments(bankPayments, collected);
+    const bankPaymentRows = normalizeBankPayments(bankPayments, collected, paymentMethod);
     const bankAccountId = bankPaymentRows[0]?.bankAccountId || null;
 
     // Customer resolve-or-create, same pattern as before

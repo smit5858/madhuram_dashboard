@@ -414,7 +414,7 @@ exports.updateSale = async (req, res) => {
     // uses the legacy single-account column.
     let bankPaymentRows;
     if (bankPayments !== undefined) {
-      bankPaymentRows = orderService.normalizeBankPayments(bankPayments, parseFloat(sale.collectedAmount) || 0);
+      bankPaymentRows = orderService.normalizeBankPayments(bankPayments, parseFloat(sale.collectedAmount) || 0, sale.paymentMethod);
       sale.bankAccountId = bankPaymentRows[0]?.bankAccountId || null;
     }
 
