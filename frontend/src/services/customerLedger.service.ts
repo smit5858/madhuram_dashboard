@@ -10,8 +10,13 @@ export interface LedgerEntry {
   type: "SALE" | "PAYMENT" | "ADJUSTMENT" | "MANUAL_DEBIT";
   amount: number;
   paymentMethod?: LedgerPaymentMethod | null;
+  /** Legacy single-account fields — superseded by `bankPayments` (amount per bank), kept for
+   *  backend responses that still mirror the first allocation's bank. */
   bankAccountId?: number | null;
   bankAccount?: { id: number; bankName: string; accountHolderName: string; accountNumber: string } | null;
+  /** This entry's amount, split across bank accounts — each row is one (bank account, amount)
+   *  allocation, and the same bank account can appear more than once (rows are never merged). */
+  bankPayments?: { id?: number; bankAccountId: number; amount: number; bankAccount?: { id: number; bankName: string; accountHolderName: string; accountNumber: string } }[];
   transactionDate: string;
   reference?: string | null;
   note?: string | null;
@@ -34,7 +39,9 @@ export interface LedgerData {
 export interface RecordLedgerPaymentPayload {
   amount: number;
   paymentMethod: LedgerPaymentMethod;
-  bankAccountId?: number | null;
+  /** Splits the payment across bank accounts — one {bankAccountId, amount} row per allocation.
+   *  Required (and must add up to exactly `amount`) when paymentMethod is BankTransfer or UPI. */
+  bankPayments?: { bankAccountId: number; amount: number }[];
   transactionDate?: string;
   reference?: string;
   note?: string;
@@ -44,7 +51,7 @@ export interface RecordLedgerPaymentPayload {
 export interface UpdateLedgerEntryPayload {
   amount?: number;
   paymentMethod?: LedgerPaymentMethod | null;
-  bankAccountId?: number | null;
+  bankPayments?: { bankAccountId: number; amount: number }[];
   transactionDate?: string;
   reference?: string;
   note?: string;

@@ -1,8 +1,67 @@
 const { Op } = require("sequelize");
 const sequelize = require("../config/db");
-const { CustomerLedgerEntry, Customer, Sale, User, BankAccount } = require("../models");
+const { CustomerLedgerEntry, Customer, Sale, User, BankAccount, LedgerEntryBankAccount } = require("../models");
 
 const todayDateOnly = () => new Date().toISOString().slice(0, 10);
+
+// A ledger payment/adjustment made via BankTransfer or UPI can be split across multiple bank
+// accounts — each {bankAccountId, amount} row must name a bank account and a positive amount,
+// and (unlike a Sale's bank split, which may fall short of the collected amount) the rows must
+// add up to EXACTLY the entry's amount, since the whole entry is a bank-routed payment. The same
+// bank account may appear in more than one row (rows are never merged). Shared by recordPayment,
+// recordAdjustment, and updateEntry below.
+const normalizeBankPayments = (bankPayments, targetAmount) => {
+  const rows = (Array.isArray(bankPayments) ? bankPayments : [])
+    .filter((row) => row && row.bankAccountId)
+    .map((row) => ({ bankAccountId: Number(row.bankAccountId), amount: parseFloat(row.amount) || 0 }));
+
+  if (rows.length === 0) {
+    const err = new Error("Select at least one bank account for this payment method");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  for (const row of rows) {
+    if (!row.amount || row.amount <= 0) {
+      const err = new Error("Each bank account row must have an amount greater than 0");
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+
+  const total = rows.reduce((sum, row) => sum + row.amount, 0);
+  if (Math.abs(total - targetAmount) > 0.01) {
+    const err = new Error("Bank account amounts must add up to the total payment amount");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  return rows;
+};
+
+const needsBankSplit = (paymentMethod) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
+
+// Replaces every LedgerEntryBankAccount row for an entry with a fresh set (or clears them when
+// the resolved payment method no longer needs a bank split) — used by both create and edit paths
+// so the split rows and the legacy bankAccountId column can never drift apart.
+const syncBankPayments = async (entry, paymentMethod, bankPayments, targetAmount, { transaction } = {}) => {
+  await LedgerEntryBankAccount.destroy({ where: { ledgerEntryId: entry.id }, transaction });
+
+  if (!needsBankSplit(paymentMethod)) {
+    entry.bankAccountId = null;
+    await entry.save({ transaction });
+    return;
+  }
+
+  const rows = normalizeBankPayments(bankPayments, targetAmount);
+  await LedgerEntryBankAccount.bulkCreate(
+    rows.map((row) => ({ ledgerEntryId: entry.id, bankAccountId: row.bankAccountId, amount: row.amount })),
+    { transaction }
+  );
+
+  entry.bankAccountId = rows[0].bankAccountId;
+  await entry.save({ transaction });
+};
 
 // Single source of truth for "advance vs pending vs settled" — used by the API responses,
 // the Sells list, and the PDF statement so the label/status can never drift between screens.
@@ -97,9 +156,13 @@ const updateSaleDebit = async (saleId, customerId, newSellingAmount, { transacti
 };
 
 // Records a payment/credit. No upper-bound validation against the current pending amount —
-// overpayment is allowed by design and simply becomes customer advance (see spec §13).
+// overpayment is allowed by design and simply becomes customer advance (see spec §13). A
+// BankTransfer/UPI payment must name at least one bank account (bankPayments), and — since the
+// whole entry is a bank-routed payment — its rows must add up to exactly `amount` (see
+// normalizeBankPayments above). bankAccountId is kept in sync as the first row's bank account for
+// any reader that still uses the legacy single-account column.
 const recordPayment = async (
-  { customerId, saleId, amount, paymentMethod, bankAccountId, reference, note, transactionDate, userId },
+  { customerId, saleId, amount, paymentMethod, bankPayments, reference, note, transactionDate, userId },
   { transaction } = {}
 ) => {
   const parsedAmount = parseFloat(amount);
@@ -109,14 +172,16 @@ const recordPayment = async (
     throw err;
   }
 
-  return CustomerLedgerEntry.create(
+  const bankPaymentRows = needsBankSplit(paymentMethod) ? normalizeBankPayments(bankPayments, parsedAmount) : [];
+
+  const entry = await CustomerLedgerEntry.create(
     {
       customerId,
       saleId: saleId || null,
       type: "PAYMENT",
       amount: parsedAmount,
       paymentMethod: paymentMethod || null,
-      bankAccountId: paymentMethod === "BankTransfer" ? bankAccountId || null : null,
+      bankAccountId: bankPaymentRows[0]?.bankAccountId || null,
       reference: reference || null,
       note: note || null,
       transactionDate: transactionDate || todayDateOnly(),
@@ -124,6 +189,15 @@ const recordPayment = async (
     },
     { transaction }
   );
+
+  if (bankPaymentRows.length > 0) {
+    await LedgerEntryBankAccount.bulkCreate(
+      bankPaymentRows.map((row) => ({ ledgerEntryId: entry.id, bankAccountId: row.bankAccountId, amount: row.amount })),
+      { transaction }
+    );
+  }
+
+  return entry;
 };
 
 // Signed correction, used where an existing flow can pass a negative "payment" (e.g. the
@@ -205,6 +279,11 @@ const entryIncludes = [
   { model: Sale, as: "sale", attributes: ["id", "invoiceNumber"] },
   { model: User, as: "creator", attributes: ["id", "name"] },
   { model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] },
+  {
+    model: LedgerEntryBankAccount,
+    as: "bankPayments",
+    include: [{ model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] }],
+  },
 ];
 
 const getCustomerLedger = async (customerId) => {
@@ -230,8 +309,14 @@ const getCustomerLedger = async (customerId) => {
 };
 
 // Edit an existing entry (§20). Balance is always derived live from SUM(), so no separate
-// recalculation step is needed — every screen just re-reads the current sum.
-const updateEntry = async ({ entryId, amount, paymentMethod, bankAccountId, reference, note, transactionDate }, { transaction } = {}) => {
+// recalculation step is needed — every screen just re-reads the current sum. When bankPayments
+// is provided, every existing bank-split row for this entry is replaced with the new set (see
+// syncBankPayments above) — a caller that isn't touching payment method/bank details at all
+// (e.g. editing a manual debit) simply omits it and the existing rows are left untouched.
+const updateEntry = async (
+  { entryId, amount, paymentMethod, bankPayments, reference, note, transactionDate },
+  { transaction } = {}
+) => {
   const entry = await CustomerLedgerEntry.findByPk(entryId, { transaction, lock: !!transaction });
   if (!entry) {
     const err = new Error("Ledger entry not found");
@@ -251,14 +336,16 @@ const updateEntry = async ({ entryId, amount, paymentMethod, bankAccountId, refe
     entry.amount = entry.amount < 0 ? -parsedAmount : parsedAmount;
   }
   if (paymentMethod !== undefined) entry.paymentMethod = paymentMethod || null;
-  if (bankAccountId !== undefined) {
-    entry.bankAccountId = entry.paymentMethod === "BankTransfer" ? bankAccountId || null : null;
-  }
   if (reference !== undefined) entry.reference = reference || null;
   if (note !== undefined) entry.note = note || null;
   if (transactionDate !== undefined) entry.transactionDate = transactionDate;
 
   await entry.save({ transaction });
+
+  if (bankPayments !== undefined) {
+    await syncBankPayments(entry, entry.paymentMethod, bankPayments, Math.abs(parseFloat(entry.amount)), { transaction });
+  }
+
   return entry;
 };
 

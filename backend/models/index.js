@@ -20,6 +20,7 @@ const DailyAccountBalance = require("./dailyBalance.model");
 const BankAccount = require("./bankAccount.model");
 const SaleBankAccount = require("./saleBankAccount.model");
 const CustomerLedgerEntry = require("./customerLedgerEntry.model");
+const LedgerEntryBankAccount = require("./ledgerEntryBankAccount.model");
 const PendingBill = require("./pendingBill.model");
 const PendingBillPayment = require("./pendingBillPayment.model");
 const Platform = require("./platform.model");
@@ -148,6 +149,14 @@ CustomerLedgerEntry.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
 BankAccount.hasMany(CustomerLedgerEntry, { foreignKey: "bankAccountId" });
 CustomerLedgerEntry.belongsTo(BankAccount, { foreignKey: "bankAccountId", as: "bankAccount" });
 
+// CustomerLedgerEntry ↔ BankAccount payment allocation: a ledger payment's amount can be split
+// across multiple bank accounts, each row carrying its own amount (see
+// ledgerEntryBankAccount.model.js) — same pattern as Sale ↔ SaleBankAccount above.
+CustomerLedgerEntry.hasMany(LedgerEntryBankAccount, { foreignKey: "ledgerEntryId", as: "bankPayments", onDelete: "CASCADE" });
+LedgerEntryBankAccount.belongsTo(CustomerLedgerEntry, { foreignKey: "ledgerEntryId" });
+LedgerEntryBankAccount.belongsTo(BankAccount, { foreignKey: "bankAccountId", as: "bankAccount" });
+BankAccount.hasMany(LedgerEntryBankAccount, { foreignKey: "bankAccountId" });
+
 // Pending Bill ↔ User (who created it, who it became fully-paid/approved under) + Product/Dealer/
 // StockMovement (restock-type bills only — see pendingBill.model.js#billType) + PendingBillPayment
 // (one-to-many payment history, each independently verified — see pendingBill.controller.js)
@@ -213,6 +222,7 @@ module.exports = {
   BankAccount,
   SaleBankAccount,
   CustomerLedgerEntry,
+  LedgerEntryBankAccount,
   PendingBill,
   PendingBillPayment,
   Platform,

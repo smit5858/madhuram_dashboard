@@ -63,11 +63,11 @@ exports.recordPayment = async (req, res) => {
     const customer = await Customer.findByPk(req.params.id);
     if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
 
-    const { amount, paymentMethod, bankAccountId, transactionDate, reference, note, saleId } = req.body || {};
+    const { amount, paymentMethod, bankPayments, transactionDate, reference, note, saleId } = req.body || {};
 
     const { entry, entryDate } = await sequelize.transaction(async (transaction) => {
       const entry = await customerLedgerService.recordPayment(
-        { customerId: customer.id, saleId: saleId || null, amount, paymentMethod, bankAccountId, reference, note, transactionDate, userId: req.user.id },
+        { customerId: customer.id, saleId: saleId || null, amount, paymentMethod, bankPayments, reference, note, transactionDate, userId: req.user.id },
         { transaction }
       );
       const entryDate = await createIncomeForLedgerPayment(
@@ -133,11 +133,11 @@ exports.updateEntry = async (req, res) => {
       return res.status(403).json({ success: false, message: "Forbidden: only Admin or Account can edit a ledger transaction" });
     }
 
-    const { amount, paymentMethod, bankAccountId, transactionDate, reference, note } = req.body || {};
+    const { amount, paymentMethod, bankPayments, transactionDate, reference, note } = req.body || {};
 
     const { entry, entryDate } = await sequelize.transaction(async (transaction) => {
       const entry = await customerLedgerService.updateEntry(
-        { entryId: req.params.entryId, amount, paymentMethod, bankAccountId, transactionDate, reference, note },
+        { entryId: req.params.entryId, amount, paymentMethod, bankPayments, transactionDate, reference, note },
         { transaction }
       );
       const entryDate = await syncIncomeForLedgerEntryUpdate(entry, { transaction });

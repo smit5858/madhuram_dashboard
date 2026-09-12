@@ -1,7 +1,7 @@
 import { Field, Form, Formik } from "formik";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { XCircle } from "lucide-react";
+import { Plus, Trash2, XCircle } from "lucide-react";
 import customerLedgerService, { type LedgerEntry } from "@/services/customerLedger.service";
 import bankAccountService from "@/services/bankAccount.service";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
@@ -10,6 +10,11 @@ import FormikDate from "@/shared/components/formik-fields/FormikDate";
 import { ledgerPaymentSchema, type LedgerPaymentFormValues } from "@/validation/customerLedger.validation";
 import { LEDGER_PAYMENT_METHOD_OPTIONS } from "@/shared/constants/ledgerPaymentMethod";
 import { getTodayISODate } from "@/shared/utils/date";
+import { blurNumberInputOnWheel } from "@/shared/utils/input";
+
+// Needs the Bank Account split shown/required — Bank Transfer and UPI are both routed through a
+// bank account, unlike Cash/Card/Other.
+const needsBankSplit = (paymentMethod: string) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
 
 interface LedgerPaymentModalProps {
   customerId: number;
@@ -34,10 +39,20 @@ const LedgerPaymentModal = ({ customerId, customerName, entry, saleId, onClose }
   });
   const bankAccountsList = bankAccountsResponse?.data?.data || [];
 
+  // Same {bankAccountId, amount} row shape/logic as the Add/Edit Sales form's Bank Account Split
+  // (see Sells.tsx's `bankPayments` state) — prefer the entry's own split rows when present, and
+  // fall back to its legacy single bankAccountId column for an older entry that predates the split.
+  const initialBankPayments: { bankAccountId: number | ""; amount: string }[] =
+    entry?.bankPayments && entry.bankPayments.length > 0
+      ? entry.bankPayments.map((bp) => ({ bankAccountId: bp.bankAccountId, amount: String(bp.amount) }))
+      : entry?.bankAccountId
+      ? [{ bankAccountId: entry.bankAccountId, amount: String(Math.abs(entry.amount)) }]
+      : [];
+
   const initialValues: LedgerPaymentFormValues = {
     amount: entry ? String(Math.abs(entry.amount)) : "",
     paymentMethod: entry?.paymentMethod || "Cash",
-    bankAccountId: entry?.bankAccountId || "",
+    bankPayments: initialBankPayments,
     transactionDate: entry?.transactionDate || getTodayISODate(),
     reference: entry?.reference || "",
     note: entry?.note || "",
@@ -53,7 +68,11 @@ const LedgerPaymentModal = ({ customerId, customerName, entry, saleId, onClose }
       const payload = {
         amount: Number(values.amount),
         paymentMethod: values.paymentMethod as any,
-        bankAccountId: values.paymentMethod === "BankTransfer" ? (values.bankAccountId || undefined) : undefined,
+        bankPayments: needsBankSplit(values.paymentMethod)
+          ? values.bankPayments
+              .filter((row) => row.bankAccountId)
+              .map((row) => ({ bankAccountId: Number(row.bankAccountId), amount: Number(row.amount) }))
+          : [],
         transactionDate: values.transactionDate,
         reference: values.reference || undefined,
         note: values.note || undefined,
@@ -98,7 +117,23 @@ const LedgerPaymentModal = ({ customerId, customerName, entry, saleId, onClose }
         </div>
 
         <Formik initialValues={initialValues} validate={validate} onSubmit={(values) => saveMutation.mutate(values)} enableReinitialize>
-          {({ values }) => (
+          {({ values, errors, setFieldValue }) => {
+            const bankPayments = values.bankPayments;
+            const bankPaymentsError = typeof errors.bankPayments === "string" ? errors.bankPayments : null;
+
+            const addBankRow = () => {
+              setFieldValue("bankPayments", [...bankPayments, { bankAccountId: "", amount: "" }]);
+            };
+            const removeBankRow = (index: number) => {
+              setFieldValue("bankPayments", bankPayments.filter((_, i) => i !== index));
+            };
+            const updateBankRow = (index: number, field: "bankAccountId" | "amount", value: number | "" | string) => {
+              const copy = [...bankPayments];
+              copy[index] = { ...copy[index], [field]: value } as { bankAccountId: number | ""; amount: string };
+              setFieldValue("bankPayments", copy);
+            };
+
+            return (
             <Form className="flex flex-1 flex-col overflow-hidden">
               <div className="flex-1 overflow-y-auto px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="sm:col-span-2">
@@ -117,17 +152,79 @@ const LedgerPaymentModal = ({ customerId, customerName, entry, saleId, onClose }
                   options={LEDGER_PAYMENT_METHOD_OPTIONS}
                   component={FormikSelect}
                 />
-                {values.paymentMethod === "BankTransfer" && (
-                  <Field
-                    name="bankAccountId"
-                    label="Bank Account"
-                    placeholder="Select bank account"
-                    options={bankAccountsList.map((acc) => ({ value: acc.id!, label: `${acc.bankName}  ${acc.accountNumber ? '—' + acc.accountNumber : ''}` }))}
-                    component={FormikSelect}
-                  />
+                {needsBankSplit(values.paymentMethod) && (
+                  // Same {bankAccountId, amount} multi-row split as the Add/Edit Sales form's
+                  // Bank Account field (Sells.tsx) — a dropdown + amount per row, with add/remove,
+                  // reused here instead of a separate multi-select implementation.
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Bank Account <span className="font-normal text-slate-400">(split the amount across bank accounts)</span>
+                    </label>
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                      {bankAccountsList.length === 0 ? (
+                        <p className="text-[10px] text-amber-600">
+                          No bank accounts configured yet — add one under Account → Manage Bank Account Details.
+                        </p>
+                      ) : (
+                        <>
+                          {bankPayments.length === 0 && (
+                            <p className="text-[10px] text-slate-400 mb-2">
+                              No bank account rows added — add one to record which bank(s) the payment went into.
+                            </p>
+                          )}
+                          <div className="space-y-2">
+                            {bankPayments.map((row, index) => (
+                              <div key={index} className="flex items-center gap-2">
+                                <select
+                                  value={row.bankAccountId}
+                                  onChange={(e) => updateBankRow(index, "bankAccountId", e.target.value ? Number(e.target.value) : "")}
+                                  className="flex-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                                >
+                                  <option value="">-- Select Bank Account --</option>
+                                  {bankAccountsList.map((acc) => (
+                                    <option key={acc.id} value={acc.id}>
+                                      {acc.bankName} — {acc.accountHolderName}
+                                    </option>
+                                  ))}
+                                </select>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={row.amount}
+                                  onChange={(e) => updateBankRow(index, "amount", e.target.value)}
+                                  onWheel={blurNumberInputOnWheel}
+                                  placeholder="Amount"
+                                  className="w-28 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => removeBankRow(index)}
+                                  className="rounded p-1 text-slate-400 hover:text-rose-600 transition"
+                                  title="Remove Row"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="mt-2">
+                            <button
+                              type="button"
+                              onClick={addBankRow}
+                              className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                            >
+                              <Plus className="h-3 w-3" /> Add Bank Account
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    {bankPaymentsError && <div className="formik-input-error mt-1">{bankPaymentsError}</div>}
+                  </div>
                 )}
                 <Field name="transactionDate" label="Payment Date" component={FormikDate} />
-                <Field name="reference" label="Reference / Transaction ID" placeholder="UPI txn ID, cheque no., etc." component={FormikInput} />
+                <Field name="reference" label="Reference / Transaction ID" placeholder="UPI txn ID, no., etc." component={FormikInput} />
                 <div className="sm:col-span-2">
                   <Field name="note" label="Note" placeholder="Optional note (e.g. EMI payment)" multiline component={FormikInput} />
                 </div>
@@ -150,7 +247,8 @@ const LedgerPaymentModal = ({ customerId, customerName, entry, saleId, onClose }
                 </button>
               </div>
             </Form>
-          )}
+            );
+          }}
         </Formik>
       </div>
     </div>
