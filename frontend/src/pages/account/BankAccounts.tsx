@@ -3,11 +3,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
 import toast from "react-hot-toast";
 import { Field, Form, Formik, useFormikContext, type FormikProps } from "formik";
-import { Edit2, Trash2, Plus, RotateCcw, Search as SearchIcon } from "lucide-react";
+import { Edit2, Trash2, Plus, RotateCcw, Search as SearchIcon, MessageCircle } from "lucide-react";
 import type { RootState } from "@/store/store";
 import bankAccountService, { type BankAccountData, type BankAccountFilters } from "@/services/bankAccount.service";
 import { bankAccountFilterSchema, type BankAccountFilterValues } from "@/validation/bankAccount.validation";
 import { useDebounce } from "@/hook/useDebounce";
+import { getBankAccountShareUrl } from "@/shared/utils/bankAccountShare";
 import BankAccountFormModal from "./components/BankAccountFormModal";
 
 interface ApiErrorLike {
@@ -41,7 +42,6 @@ const FilterSync = ({
 const BankAccounts = () => {
   const queryClient = useQueryClient();
   const { permissions } = useSelector((state: RootState) => state.auth);
-  // const { role } = useSelector((state: RootState) => state.auth);
 
   const pagePermission = useMemo(() => {
     const fallback = { canRead: false, canCreate: false, canUpdate: false, canDelete: false };
@@ -158,8 +158,8 @@ const BankAccounts = () => {
               onClick={handleReset}
               title="Reset filters"
               className={`inline-flex items-center gap-1.5 rounded-full border px-4 py-2.5 text-xs font-semibold ${hasActiveFilters
-                  ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                 }`}
             >
               <RotateCcw className="h-3.5 w-3.5" /> Reset
@@ -229,10 +229,15 @@ const BankAccounts = () => {
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-2">
-                        {/* {role === "admin" && (
-                          <button></button>
-                        )} */}
-                        
+                        <button
+                          type="button"
+                          onClick={() => window.open(getBankAccountShareUrl(acc), "_blank", "noopener,noreferrer")}
+                          className="rounded-lg p-1.5 text-emerald-600 hover:bg-emerald-50"
+                          title="Share via WhatsApp"
+                        >
+                          <MessageCircle className="h-4 w-4" />
+                        </button>
+
                         {pagePermission.canUpdate && (
                           <button
                             type="button"
