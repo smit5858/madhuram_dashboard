@@ -18,3 +18,16 @@ export const ledgerPaymentSchema = z.object({
 });
 
 export type LedgerPaymentFormValues = z.infer<typeof ledgerPaymentSchema>;
+
+// Account → Debited "Add/Edit Debited Record" (a manual debit, not tied to a sale). customerId
+// is always populated by the time this validates — picked via the autocomplete when adding, or
+// carried over from the debtor row being edited — so it's simply required to be a real id.
+export const manualDebitSchema = z.object({
+  customerId: z.number().positive("Please select a customer"),
+  amount: amountField,
+  transactionDate: z.string().min(1, "Date is required"),
+  reference: z.string().max(150, "Reference must be under 150 characters").optional(),
+  note: z.string().max(500, "Note must be under 500 characters").optional(),
+});
+
+export type ManualDebitFormValues = z.infer<typeof manualDebitSchema>;

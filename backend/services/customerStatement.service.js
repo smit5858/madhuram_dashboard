@@ -10,6 +10,7 @@ const LOGO_PATH = path.join(__dirname, "../assets/logo.jpg");
 const describeEntry = (entry) => {
   if (entry.type === "SALE") return `Product Sale${entry.sale?.invoiceNumber ? ` (${entry.sale.invoiceNumber})` : ""}`;
   if (entry.type === "PAYMENT") return `Payment${entry.paymentMethod ? ` - ${entry.paymentMethod}` : ""}`;
+  if (entry.type === "MANUAL_DEBIT") return `Manual Debit${entry.note ? ` - ${entry.note}` : ""}`;
   return `Adjustment${entry.note ? ` - ${entry.note}` : ""}`;
 };
 

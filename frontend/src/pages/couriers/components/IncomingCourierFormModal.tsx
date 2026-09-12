@@ -16,7 +16,6 @@ import { getTodayISODate } from "../../../shared/utils/date";
 interface IncomingCourierFormModalProps {
     /** null = creating a new Incoming Courier record */
     courier: CourierData | null;
-    role: string | null;
     onClose: () => void;
 }
 
@@ -24,12 +23,13 @@ interface IncomingCourierFormModalProps {
  *  office (repair/replacement/inspection/service/other). Deliberately its own component rather
  *  than reusing CourierEditModal: that shared modal carries Outgoing-only concerns (Direction
  *  picker, shipment-type/serial-number pickers, charge/free-pickup/weight) that don't apply here. */
-const IncomingCourierFormModal = ({ courier, role, onClose }: IncomingCourierFormModalProps) => {
+const IncomingCourierFormModal = ({ courier, onClose }: IncomingCourierFormModalProps) => {
     const queryClient = useQueryClient();
     const isEdit = !!courier?.id;
 
-    // City is Admin-editable, locked to the non-Admin user's allowedCity — kept out of Formik so
-    // the readOnly lock (which FormikInput doesn't expose) still works.
+    // City is freely editable by anyone creating/editing an Incoming Courier record (unlike
+    // Outgoing, it isn't tied to the user's allowedCity) — kept out of Formik purely for parity
+    // with the shared validate() pattern below.
     const [city, setCity] = useState(courier?.city || "");
 
     // Courier company list is Admin-managed (see the Courier Companies module) — fetched live
@@ -103,7 +103,7 @@ const IncomingCourierFormModal = ({ courier, role, onClose }: IncomingCourierFor
             name: values.customerName.trim(),
             mobileNo: values.mobileNo || undefined,
             phone: values.mobileNo || undefined,
-            city: role === "Admin" ? city || undefined : undefined,
+            city: city || undefined,
             pincode: values.pincode || null,
             address: values.address || null,
             productName: values.productName || null,
@@ -151,12 +151,8 @@ const IncomingCourierFormModal = ({ courier, role, onClose }: IncomingCourierFor
                                 <input
                                     type="text" value={city} onChange={(e) => setCity(e.target.value)}
                                     placeholder="e.g. Rajkot"
-                                    readOnly={role !== "Admin"}
-                                    className={`mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-[#3d6fe0] focus:outline-none ${role !== "Admin" ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-slate-50 text-slate-900 focus:bg-white"}`}
+                                    className="mt-1 block w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                                 />
-                                {role !== "Admin" && (
-                                    <p className="mt-0.5 text-[10px] text-slate-400">City is locked to your allowed scope.</p>
-                                )}
                             </div>
                             <Field name="pincode" label="Pincode" placeholder="e.g. 360001" component={FormikInput} />
 

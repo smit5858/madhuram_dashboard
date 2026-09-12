@@ -22,9 +22,13 @@ const CustomerLedgerEntry = sequelize.define(
       references: { model: "sells", key: "id" },
     },
     // SALE = debit (amount stored negative), PAYMENT = credit (positive), ADJUSTMENT = manual
-    // correction (signed either way).
+    // correction (signed either way, created internally e.g. for a collected-amount correction —
+    // see order.service.js#recordPayment). MANUAL_DEBIT = a debit added by hand from Account →
+    // Debited's Add form (always negative) — kept distinct from ADJUSTMENT so the Debited main
+    // table can unambiguously find "the" manually-added record for a customer to edit, without
+    // ever picking up an unrelated system-generated correction entry.
     type: {
-      type: DataTypes.ENUM("SALE", "PAYMENT", "ADJUSTMENT"),
+      type: DataTypes.ENUM("SALE", "PAYMENT", "ADJUSTMENT", "MANUAL_DEBIT"),
       allowNull: false,
     },
     // Signed. SALE rows are negative, PAYMENT rows are positive — balance is a plain SUM().

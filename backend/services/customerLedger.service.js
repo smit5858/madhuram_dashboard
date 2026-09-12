@@ -153,6 +153,54 @@ const recordAdjustment = async (
   );
 };
 
+// Account → Debited "Add Debited Record" — a debit that didn't come from a Sale (e.g. a
+// standalone credit given outside the Sales flow), added by hand for a chosen customer. Always
+// negative (it's a debit): the caller passes the amount the customer owes as a positive number,
+// same convention as the Add form. Kept as its own MANUAL_DEBIT type rather than reusing
+// ADJUSTMENT (which order.service.js already uses internally for collected-amount corrections)
+// so getDebtors below can unambiguously find "the" manually-added record for a customer without
+// ever picking up an unrelated system-generated correction entry.
+const recordManualDebit = async ({ customerId, amount, transactionDate, reference, note, userId }, { transaction } = {}) => {
+  const parsedAmount = parseFloat(amount);
+  if (isNaN(parsedAmount) || parsedAmount <= 0) {
+    const err = new Error("amount must be a positive number");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const resolvedDate = transactionDate || todayDateOnly();
+
+  // Same double-submission defense as recordPayment above.
+  const recentDuplicate = await CustomerLedgerEntry.findOne({
+    where: {
+      customerId,
+      type: "MANUAL_DEBIT",
+      amount: -parsedAmount,
+      reference: reference || null,
+      note: note || null,
+      transactionDate: resolvedDate,
+      createdAt: { [Op.gte]: new Date(Date.now() - 10000) },
+    },
+    order: [["createdAt", "DESC"]],
+    transaction,
+  });
+  if (recentDuplicate) return recentDuplicate;
+
+  return CustomerLedgerEntry.create(
+    {
+      customerId,
+      saleId: null,
+      type: "MANUAL_DEBIT",
+      amount: -parsedAmount,
+      reference: reference || null,
+      note: note || null,
+      transactionDate: resolvedDate,
+      createdBy: userId || null,
+    },
+    { transaction }
+  );
+};
+
 const entryIncludes = [
   { model: Sale, as: "sale", attributes: ["id", "invoiceNumber"] },
   { model: User, as: "creator", attributes: ["id", "name"] },
@@ -250,16 +298,18 @@ const getDebtors = async ({ search, startDate, endDate, page, limit, status } = 
     raw: true,
   });
 
-  // Total purchased (SALE entries only, as a positive amount) — combined with the authoritative
-  // `balance` below to derive totalPaid, so Total - Paid always equals the outstanding balance
-  // even when ADJUSTMENT entries exist (no separate/duplicate accounting for those).
-  const saleTotalRows = await CustomerLedgerEntry.findAll({
-    where: { type: "SALE" },
+  // Total purchased/owed (SALE + MANUAL_DEBIT entries, as a positive amount) — combined with the
+  // authoritative `balance` below to derive totalPaid, so Total - Paid always equals the
+  // outstanding balance even when ADJUSTMENT entries exist (no separate/duplicate accounting for
+  // those). MANUAL_DEBIT must count here too, otherwise a customer whose balance comes only from
+  // a manually-added Debited record shows Total Purchase ₹0 while still carrying a balance.
+  const debitTotalRows = await CustomerLedgerEntry.findAll({
+    where: { type: { [Op.in]: ["SALE", "MANUAL_DEBIT"] } },
     attributes: ["customerId", [sequelize.fn("SUM", sequelize.col("amount")), "total"]],
     group: ["customerId"],
     raw: true,
   });
-  const saleTotalMap = new Map(saleTotalRows.map((row) => [row.customerId, Math.abs(parseFloat(row.total) || 0)]));
+  const totalPurchaseMap = new Map(debitTotalRows.map((row) => [row.customerId, Math.abs(parseFloat(row.total) || 0)]));
 
   const balanceMap = new Map(balanceRows.map((row) => [row.customerId, getBalanceStatus(row.total)]));
   const lastTransactionMap = new Map(balanceRows.map((row) => [row.customerId, row.lastTransactionDate]));
@@ -301,7 +351,7 @@ const getDebtors = async ({ search, startDate, endDate, page, limit, status } = 
 
   const withBalance = matches.map((customer) => {
     const balance = balanceMap.get(customer.id);
-    const totalPurchase = saleTotalMap.get(customer.id) || 0;
+    const totalPurchase = totalPurchaseMap.get(customer.id) || 0;
     const outstanding = Math.max(0, -balance.amount);
     const totalPaid = Math.max(0, totalPurchase - outstanding);
     return {
@@ -322,7 +372,40 @@ const getDebtors = async ({ search, startDate, endDate, page, limit, status } = 
   );
 
   const offset = (pageNum - 1) * limitNum;
-  const customers = withBalance.slice(offset, offset + limitNum);
+  const pageOfCustomers = withBalance.slice(offset, offset + limitNum);
+
+  // Attach each page row's own manually-added debit (if any), so the Debited main table knows
+  // whether to show its Edit action and what to pre-fill it with — only queried for the current
+  // page, not every matched debtor. A customer could in theory pick up more than one MANUAL_DEBIT
+  // row over time; the most recent one is "the" editable record (see recordManualDebit above).
+  const pageIds = pageOfCustomers.map((c) => c.id);
+  const manualDebitRows = pageIds.length
+    ? await CustomerLedgerEntry.findAll({
+        where: { customerId: { [Op.in]: pageIds }, type: "MANUAL_DEBIT" },
+        order: [["transactionDate", "DESC"], ["createdAt", "DESC"]],
+        raw: true,
+      })
+    : [];
+  const manualDebitMap = new Map();
+  for (const row of manualDebitRows) {
+    if (!manualDebitMap.has(row.customerId)) manualDebitMap.set(row.customerId, row);
+  }
+
+  const customers = pageOfCustomers.map((c) => {
+    const manualDebitRow = manualDebitMap.get(c.id);
+    return {
+      ...c,
+      manualDebitEntry: manualDebitRow
+        ? {
+            id: manualDebitRow.id,
+            amount: Math.abs(parseFloat(manualDebitRow.amount) || 0),
+            transactionDate: manualDebitRow.transactionDate,
+            reference: manualDebitRow.reference,
+            note: manualDebitRow.note,
+          }
+        : null,
+    };
+  });
 
   return {
     customers,
@@ -378,6 +461,7 @@ module.exports = {
   updateSaleDebit,
   recordPayment,
   recordAdjustment,
+  recordManualDebit,
   getCustomerLedger,
   updateEntry,
   deleteEntry,

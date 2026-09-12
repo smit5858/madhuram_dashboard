@@ -15,6 +15,7 @@ import { formatDisplayDate } from "@/shared/utils/date";
 const describeEntry = (entry: LedgerEntry) => {
   if (entry.type === "SALE") return `Product Sale${entry.sale?.invoiceNumber ? ` (${entry.sale.invoiceNumber})` : ""}`;
   if (entry.type === "PAYMENT") return `Payment${entry.paymentMethod ? ` - ${entry.paymentMethod}` : ""}`;
+  if (entry.type === "MANUAL_DEBIT") return `Manual Debit${entry.note ? ` - ${entry.note}` : ""}`;
   return `Adjustment${entry.note ? ` - ${entry.note}` : ""}`;
 };
 
@@ -143,7 +144,11 @@ const CustomerLedger = () => {
                     <td className="px-4 py-3.5 text-right whitespace-nowrap">
                       {entry.type !== "SALE" && (
                         <div className="flex justify-end items-center gap-1.5">
-                          {canManage && (
+                          {/* Manual debits are added/edited only from Account → Debited's own
+                              form (see DebitedFormModal) — keeps that flow's field set (no
+                              payment method/bank account) separate from this Collect Payment
+                              modal's. */}
+                          {canManage && entry.type !== "MANUAL_DEBIT" && (
                             <button
                               onClick={() => setEditingEntry(entry)}
                               className="rounded p-1 text-blue-600 hover:bg-blue-50 transition"

@@ -95,6 +95,37 @@ exports.recordPayment = async (req, res) => {
   }
 };
 
+// POST /customers/:id/ledger/manual-debits — Account → Debited "Add Debited Record", Admin/
+// Account only. Unlike recordPayment, this is a debit (money owed), not money received — no
+// linked Income entry or daily-balance recalculation, matching order.service.js's recordAdjustment
+// calls which skip Income sync for the same reason.
+exports.recordManualDebit = async (req, res) => {
+  try {
+    if (!isLedgerManager(req.user.roleName)) {
+      return res.status(403).json({ success: false, message: "Forbidden: only Admin or Account can add a debited record" });
+    }
+
+    const customer = await Customer.findByPk(req.params.id);
+    if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
+
+    const { amount, transactionDate, reference, note } = req.body || {};
+
+    const entry = await customerLedgerService.recordManualDebit({
+      customerId: customer.id,
+      amount,
+      transactionDate,
+      reference,
+      note,
+      userId: req.user.id,
+    });
+
+    const balance = await customerLedgerService.getCustomerBalance(customer.id);
+    return res.status(201).json({ success: true, message: "Debited record added successfully", data: { entry, balance } });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
 // PUT /customers/:id/ledger/entries/:entryId — edit an entry (spec §20), Admin/Account only.
 exports.updateEntry = async (req, res) => {
   try {

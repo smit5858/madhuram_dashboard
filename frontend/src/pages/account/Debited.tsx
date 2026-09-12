@@ -2,12 +2,13 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { AlertTriangle, RotateCcw, Search as SearchIcon, Users, Wallet } from "lucide-react";
+import { AlertTriangle, Edit2, Plus, RotateCcw, Search as SearchIcon, Users, Wallet } from "lucide-react";
 import { Field, Form, Formik, useFormikContext } from "formik";
 import type { RootState } from "@/store/store";
-import customerLedgerService, { type DebtorFilters } from "@/services/customerLedger.service";
+import customerLedgerService, { type DebtorFilters, type DebtorRow } from "@/services/customerLedger.service";
 import BalanceBadge from "@/shared/components/BalanceBadge";
 import ShareStatementMenu from "@/pages/customers/components/ShareStatementMenu";
+import DebitedFormModal from "./components/DebitedFormModal";
 import { useDebounce } from "@/hook/useDebounce";
 import { formatDisplayDate } from "@/shared/utils/date";
 
@@ -54,13 +55,15 @@ const Debited = () => {
   const initialStatusTab = searchParams.get("status") === "SETTLED" ? "SETTLED" : "PENDING";
 
   const pagePermission = useMemo(() => {
-    const fallback = { canRead: false };
+    const fallback = { canRead: false, canCreate: false, canUpdate: false };
     if (!permissions) return fallback;
     return permissions.find((p) => p.routePath.toLowerCase() === "/account/debited" || p.routeName.toLowerCase() === "debited") ?? fallback;
   }, [permissions]);
 
   const [statusTab, setStatusTab] = useState<"PENDING" | "SETTLED">(initialStatusTab);
   const [appliedFilters, setAppliedFilters] = useState<DebtorFilters>({});
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [editingDebtor, setEditingDebtor] = useState<DebtorRow | null>(null);
   const queryFilters = useMemo<DebtorFilters>(
     () => ({ ...appliedFilters, status: statusTab, page: appliedFilters.page ?? 1, limit: PAGE_SIZE }),
     [appliedFilters, statusTab]
@@ -89,13 +92,24 @@ const Debited = () => {
 
   return (
     <div className="p-6 bg-white rounded-xl shadow-md flex flex-col gap-6">
-      <div>
-        <h1 className="text-xl font-bold text-slate-900">Debited</h1>
-        <p className="mt-1 text-xs text-slate-500">
-          {statusTab === "PENDING"
-            ? "Customers currently carrying a pending balance, highest first."
-            : "Customers with no current outstanding balance — settled or advance, most recent activity first."}
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-bold text-slate-900">Debited</h1>
+          <p className="mt-1 text-xs text-slate-500">
+            {statusTab === "PENDING"
+              ? "Customers currently carrying a pending balance, highest first."
+              : "Customers with no current outstanding balance — settled or advance, most recent activity first."}
+          </p>
+        </div>
+        {pagePermission.canCreate && (
+          <button
+            type="button"
+            onClick={() => setIsAddModalOpen(true)}
+            className="inline-flex shrink-0 items-center gap-2 rounded-full bg-[#3d6fe0] px-4 py-2.5 text-xs font-semibold text-white shadow-md shadow-blue-500/20 transition hover:bg-[#3162d2] active:scale-[0.98]"
+          >
+            <Plus className="h-4 w-4" /> Add Debited Record
+          </button>
+        )}
       </div>
 
       <div className="inline-flex w-fit rounded-full border border-slate-200 bg-slate-50 p-1">
@@ -221,6 +235,19 @@ const Debited = () => {
                         >
                           <Wallet className="h-4 w-4" />
                         </button>
+                        {/* Only editable here when this customer has a manually-added record —
+                            balance built up purely from sales/payments has nothing this form can
+                            edit (see Debited.tsx's Add form / customerLedger.service.js#getDebtors). */}
+                        {pagePermission.canUpdate && debtor.manualDebitEntry && (
+                          <button
+                            type="button"
+                            onClick={() => setEditingDebtor(debtor)}
+                            className="rounded-lg p-1.5 text-blue-600 hover:bg-blue-50"
+                            title="Edit Debited Record"
+                          >
+                            <Edit2 className="h-4 w-4" />
+                          </button>
+                        )}
                         <ShareStatementMenu customerId={debtor.id} customerName={debtor.name} customerPhone={debtor.phone} balance={debtor.balance} compact />
                       </div>
                     </td>
@@ -258,6 +285,9 @@ const Debited = () => {
           </div>
         )}
       </div>
+
+      {isAddModalOpen && <DebitedFormModal onClose={() => setIsAddModalOpen(false)} />}
+      {editingDebtor && <DebitedFormModal debtor={editingDebtor} onClose={() => setEditingDebtor(null)} />}
     </div>
   );
 };

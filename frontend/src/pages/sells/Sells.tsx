@@ -1726,7 +1726,7 @@ const Sells = () => {
                                       <option value="">-- Select Bank Account --</option>
                                       {bankAccountsList.map((acc) => (
                                         <option key={acc.id} value={acc.id}>
-                                          {acc.bankName} — {acc.accountNumber}
+                                          {acc.bankName} — {acc.accountHolderName}
                                         </option>
                                       ))}
                                     </select>

@@ -53,7 +53,7 @@ const IncomingFilterSync = ({ onFiltersChange }: { onFiltersChange: (filters: In
  *  and is blocked from repeating once `linkedCourierId` is set. */
 const IncomingCourier = () => {
     const queryClient = useQueryClient();
-    const { role, permissions } = useSelector((state: RootState) => state.auth);
+    const { permissions } = useSelector((state: RootState) => state.auth);
 
     const pagePermission = useMemo(() => {
         if (!permissions) return { canRead: false, canCreate: false, canUpdate: false, canDelete: false };
@@ -455,7 +455,7 @@ const IncomingCourier = () => {
 
             {/* Create / Edit Modal */}
             {isEditModalOpen && (
-                <IncomingCourierFormModal courier={editingCourier} role={role} onClose={closeEditModal} />
+                <IncomingCourierFormModal courier={editingCourier} onClose={closeEditModal} />
             )}
 
             {/* View Modal */}

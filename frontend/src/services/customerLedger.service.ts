@@ -7,7 +7,7 @@ export interface LedgerEntry {
   customerId: number;
   saleId?: number | null;
   sale?: { id: number; invoiceNumber?: string } | null;
-  type: "SALE" | "PAYMENT" | "ADJUSTMENT";
+  type: "SALE" | "PAYMENT" | "ADJUSTMENT" | "MANUAL_DEBIT";
   amount: number;
   paymentMethod?: LedgerPaymentMethod | null;
   bankAccountId?: number | null;
@@ -74,6 +74,29 @@ const deleteLedgerEntry = (customerId: number, entryId: number) =>
 const downloadStatementPdf = (customerId: number) =>
   httpService.get(`/customers/${customerId}/ledger/statement.pdf`, { responseType: "blob" });
 
+export interface RecordManualDebitPayload {
+  amount: number;
+  transactionDate?: string;
+  reference?: string;
+  note?: string;
+}
+
+// A manual debit added via Debited's "Add Debited Record" form — see
+// customerLedger.controller.js#recordManualDebit.
+const recordManualDebit = (customerId: number, data: RecordManualDebitPayload) =>
+  httpService.post<{ success: boolean; message: string; data: { entry: LedgerEntry; balance: LedgerBalance } }>(
+    `/customers/${customerId}/ledger/manual-debits`,
+    data
+  );
+
+export interface ManualDebitEntry {
+  id: number;
+  amount: number;
+  transactionDate: string;
+  reference?: string | null;
+  note?: string | null;
+}
+
 export interface DebtorRow {
   id: number;
   name: string;
@@ -83,6 +106,9 @@ export interface DebtorRow {
   totalPurchase: number;
   totalPaid: number;
   lastTransactionDate: string | null;
+  /** This customer's own manually-added debit (Debited's Add form), if any — the record the
+   *  main table's Edit action targets. Null if their balance comes only from sales/payments. */
+  manualDebitEntry: ManualDebitEntry | null;
 }
 
 export interface DebtorFilters {
@@ -126,6 +152,7 @@ export default {
   updateLedgerEntry,
   deleteLedgerEntry,
   downloadStatementPdf,
+  recordManualDebit,
   getDebtors,
   getReceivableTotals,
 };
