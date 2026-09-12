@@ -41,6 +41,7 @@ const FilterSync = ({
 const BankAccounts = () => {
   const queryClient = useQueryClient();
   const { permissions } = useSelector((state: RootState) => state.auth);
+  const { role } = useSelector((state: RootState) => state.auth);
 
   const pagePermission = useMemo(() => {
     const fallback = { canRead: false, canCreate: false, canUpdate: false, canDelete: false };
@@ -228,6 +229,10 @@ const BankAccounts = () => {
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-2">
+                        {role === "admin" && (
+                          <button></button>
+                        )}
+                        
                         {pagePermission.canUpdate && (
                           <button
                             type="button"

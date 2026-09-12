@@ -20,6 +20,7 @@ import productService, {
 import customerService, { type CustomerData } from "../../services/customer.service";
 import bankAccountService from "../../services/bankAccount.service";
 import courierCompanyService from "../../services/courierCompany.service";
+import platformService from "../../services/platform.service";
 import { COURIER_COMPANY_OTHER } from "@/shared/constants/courierCompanies";
 import CancelSaleModal from "@/shared/components/CancelSaleModal";
 import StockShortageModal, { type StockShortageItem } from "@/pages/sells/components/StockShortageModal";
@@ -55,15 +56,11 @@ const ORDER_STATUS_OPTIONS = [
   { value: "CANCELLED", label: "Cancelled" },
 ];
 
-const PLATFORMS = [
-  "Direct Store",
-  "Website",
-  "WhatsApp",
-  "Phone Call",
-  "Instagram",
-  "IndiaMART",
-  "Other",
-];
+// The selectable Sales Platform list comes from the backend-managed Platform module (see
+// services/platform.service.ts, shared with the Lead form's platform picker). "Other" is always
+// appended locally as a special "type your own" option — see resolvedPlatform below — never
+// persisted as a Platform row.
+const PLATFORM_OTHER = "Other";
 
 const FilterSync = ({
   setAppliedFilters,
@@ -198,6 +195,19 @@ const Sells = () => {
     { value: COURIER_COMPANY_OTHER, label: COURIER_COMPANY_OTHER },
   ];
 
+  // Query: active Sales Platforms — same Admin-managed list (Settings → Platform Management)
+  // used by the Lead form's platform picker. "Other" is appended locally, always last, and
+  // de-duplicated in case a Platform row is itself literally named "Other".
+  const { data: platformsResponse } = useQuery({
+    queryKey: ["platforms-picker", "active"],
+    queryFn: () => platformService.getPlatforms({ status: "active" }),
+    enabled: pagePermission.canCreate || pagePermission.canUpdate,
+  });
+  const dynamicPlatformNames = (platformsResponse?.data?.data || [])
+    .map((p) => p.name)
+    .filter((name) => name.trim().toLowerCase() !== PLATFORM_OTHER.toLowerCase());
+  const PLATFORM_OPTIONS = [...dynamicPlatformNames, PLATFORM_OTHER];
+
   const productsList: ProductData[] = productsResponse?.data?.data || [];
   const sellsList: SaleData[] = sellsResponse?.data?.data || [];
 
@@ -232,6 +242,8 @@ const Sells = () => {
   const [customerName, setCustomerName] = useState("");
   const [customerNumber, setCustomerNumber] = useState("");
   const [platform, setPlatform] = useState("Direct Store");
+  // Free-text sibling for the platform select's "Other" option — mirrors otherCourierName below.
+  const [otherPlatformName, setOtherPlatformName] = useState("");
   const [to, setTo] = useState("Madhuram Motor");
   // Optional courier company, picked at entry time — seeds Courier.courierName on the
   // record(s) created for this sale but is never required and stays freely editable
@@ -386,6 +398,10 @@ const Sells = () => {
   // down to the plain string sent to the backend. Optional — an empty result is fine.
   const resolvedCourierName = courierName === COURIER_COMPANY_OTHER ? otherCourierName.trim() : courierName;
 
+  // Resolves the Sales Platform select's value ("Other" needs the free-text sibling state) down
+  // to the plain string sent to the backend.
+  const resolvedPlatform = platform === PLATFORM_OTHER ? otherPlatformName.trim() : platform;
+
   // Mutation: Create Sale
   const createSaleMutation = useMutation({
     mutationFn: (payload: CreateSalePayload) => saleService.createSale(payload),
@@ -513,7 +529,8 @@ const Sells = () => {
     setShowSuggestions(false);
     setCustomerName("");
     setCustomerNumber("");
-    setPlatform("Direct Store");
+    setPlatform(PLATFORM_OPTIONS[0] || PLATFORM_OTHER);
+    setOtherPlatformName("");
     setTo("Madhuram Motor");
     setCourierName("");
     setOtherCourierName("");
@@ -546,7 +563,12 @@ const Sells = () => {
     setShowSuggestions(false);
     setCustomerName(sale.customerName || "");
     setCustomerNumber(sale.customerNumber || "");
-    setPlatform(sale.platform || "Direct Store");
+    const savedPlatform = sale.platform || "";
+    const platformIsOther = !!savedPlatform && !dynamicPlatformNames.includes(savedPlatform);
+    setPlatform(
+      savedPlatform ? (platformIsOther ? PLATFORM_OTHER : savedPlatform) : PLATFORM_OPTIONS[0] || PLATFORM_OTHER
+    );
+    setOtherPlatformName(platformIsOther ? savedPlatform : "");
     setTo(sale.to || "Madhuram Motor");
     const savedCourierName = sale.courierName || "";
     const courierNameIsOther = !!savedCourierName && !courierCompaniesList.some((c) => c.name === savedCourierName);
@@ -757,6 +779,11 @@ const Sells = () => {
       return;
     }
 
+    if (platform === PLATFORM_OTHER && !otherPlatformName.trim()) {
+      toast.error("Please enter the platform name");
+      return;
+    }
+
     // Validate items
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
@@ -836,7 +863,7 @@ const Sells = () => {
           customerId: customerId || undefined,
           customerName: customerName.trim(),
           customerNumber: customerNumber || undefined,
-          platform,
+          platform: resolvedPlatform,
           to: to || "Madhuram Motor",
           courierName: resolvedCourierName || undefined,
           paymentMethod: paymentMethod as any,
@@ -904,7 +931,7 @@ const Sells = () => {
       customerId: customerId || undefined,
       customerName: customerName.trim(),
       customerNumber: customerNumber || undefined,
-      platform,
+      platform: resolvedPlatform,
       to: to || "Madhuram Motor",
       courierName: resolvedCourierName || undefined,
       paymentMethod,
@@ -1607,13 +1634,28 @@ const Sells = () => {
                       onChange={(e) => setPlatform(e.target.value)}
                       className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                     >
-                      {PLATFORMS.map((p) => (
+                      {PLATFORM_OPTIONS.map((p) => (
                         <option key={p} value={p}>
                           {p}
                         </option>
                       ))}
                     </select>
                   </div>
+
+                  {platform === PLATFORM_OTHER && (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Custom Platform Name
+                      </label>
+                      <input
+                        type="text"
+                        value={otherPlatformName}
+                        onChange={(e) => setOtherPlatformName(e.target.value)}
+                        placeholder="e.g. Facebook Marketplace"
+                        className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                      />
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
