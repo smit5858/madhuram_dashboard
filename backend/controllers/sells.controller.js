@@ -357,6 +357,7 @@ exports.updateSale = async (req, res) => {
       createCourierEntry,
       to,
       courierName,
+      courierCharge,
     } = req.body || {};
 
     const sale = await Sale.findByPk(id, { transaction: t, lock: true });
@@ -386,6 +387,15 @@ exports.updateSale = async (req, res) => {
     if (notes !== undefined) sale.notes = notes;
     if (to !== undefined) sale.to = to || "Madhuram Motor";
     if (courierName !== undefined) sale.courierName = courierName || null;
+
+    if (courierCharge !== undefined) {
+      const parsedCourierCharge = courierCharge === null || courierCharge === "" ? 0 : parseFloat(courierCharge);
+      if (isNaN(parsedCourierCharge) || parsedCourierCharge < 0) {
+        await t.rollback();
+        return res.status(400).json({ success: false, message: "Courier charge must be a non-negative number" });
+      }
+      sale.courierCharge = parsedCourierCharge;
+    }
 
     if (sellingAmount !== undefined) sale.sellingAmount = parseFloat(sellingAmount);
     if (collectedAmount !== undefined) sale.collectedAmount = parseFloat(collectedAmount);

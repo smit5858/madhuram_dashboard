@@ -64,6 +64,9 @@ export interface SaleData {
   /** Optional courier company chosen at sale-entry time — seeds Courier.courierName on the
    *  record(s) created for this sale; still freely editable per-record from the Courier module. */
   courierName?: string;
+  /** Shipping/courier charge entered on this sale's own form — a plain additive amount, never
+   *  negative. Distinct from the monthly Courier Charge aggregate on the Couriers page. */
+  courierCharge?: number;
   sellingAmount: number;
   collectedAmount: number;
   pendingAmount?: number;
@@ -120,6 +123,9 @@ export interface CreateSalePayload {
   /** Optional courier company chosen at sale-entry time — seeds Courier.courierName on the
    *  record(s) created for this sale; still freely editable per-record from the Courier module. */
   courierName?: string;
+  /** Shipping/courier charge entered on this sale's own form — a plain additive amount, never
+   *  negative. Distinct from the monthly Courier Charge aggregate on the Couriers page. */
+  courierCharge?: number;
   sellingAmount: number;
   collectedAmount: number;
   notes?: string;

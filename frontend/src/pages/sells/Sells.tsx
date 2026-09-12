@@ -165,11 +165,28 @@ const Sells = () => {
     enabled: pagePermission.canRead,
   });
 
-  // Query: Products List (for dropdowns and stock display) — only active/sellable products,
-  // and the max page size since this dropdown needs the full catalog, not one page of it.
+  // Query: Products List (for dropdowns and stock display) — only active/sellable products.
+  // The product picker needs the ENTIRE active catalog, not one page of it, but the backend
+  // caps a single request's `limit` at 100 (see product.controller.js#getProducts) — so a shop
+  // with more than 100 active products previously had everything past the first page silently
+  // missing from Add/Edit Sale's product search. Page 1 is fetched first; if `meta.totalPages`
+  // says there's more, the rest are fetched in parallel and merged so the full catalog is always
+  // loaded before the picker filters/searches over it.
   const { data: productsResponse, isLoading: isProductsLoading } = useQuery({
     queryKey: ["products", "active-catalog"],
-    queryFn: () => productService.getProducts({ status: "active", limit: 100 }),
+    queryFn: async ({ signal }) => {
+      const limit = 100;
+      const first = await productService.getProducts({ status: "active", limit, page: 1 }, { signal });
+      const totalPages = first.data?.meta?.totalPages || 1;
+      if (totalPages <= 1) return first;
+
+      const remainingPages = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
+      const rest = await Promise.all(
+        remainingPages.map((page) => productService.getProducts({ status: "active", limit, page }, { signal }))
+      );
+      const mergedData = [first, ...rest].flatMap((r) => r.data?.data || []);
+      return { ...first, data: { ...first.data, data: mergedData } };
+    },
   });
 
   // Query: active Bank Accounts (for the Bank Account dropdown shown when Payment Method =
@@ -250,6 +267,9 @@ const Sells = () => {
   // afterward from the Courier module.
   const [courierName, setCourierName] = useState("");
   const [otherCourierName, setOtherCourierName] = useState("");
+  // Optional shipping/courier charge for this sale — a plain numeric string like collectedAmount,
+  // defaults to "0" (no charge), never allowed to go negative (see handleSubmit's validation).
+  const [courierCharge, setCourierCharge] = useState<string>("0");
   const [paymentMethod, setPaymentMethod] = useState<string>("UPI");
   // Bank Account field — shown every time regardless of Payment Method, optional, and splits
   // the collected amount across bank accounts. Each row is a {bankAccountId, amount} pair; the
@@ -534,6 +554,7 @@ const Sells = () => {
     setTo("Madhuram Motor");
     setCourierName("");
     setOtherCourierName("");
+    setCourierCharge("0");
     setPaymentMethod("UPI");
     setBankPayments([]);
     setCity("");
@@ -574,6 +595,7 @@ const Sells = () => {
     const courierNameIsOther = !!savedCourierName && !courierCompaniesList.some((c) => c.name === savedCourierName);
     setCourierName(courierNameIsOther ? COURIER_COMPANY_OTHER : savedCourierName);
     setOtherCourierName(courierNameIsOther ? savedCourierName : "");
+    setCourierCharge(String(sale.courierCharge ?? 0));
     setPaymentMethod(sale.paymentMethod || "UPI");
     setBankPayments(
       sale.bankPayments && sale.bankPayments.length > 0
@@ -784,6 +806,11 @@ const Sells = () => {
       return;
     }
 
+    if (courierCharge.trim() !== "" && Number(courierCharge) < 0) {
+      toast.error("Courier charge cannot be negative");
+      return;
+    }
+
     // Validate items
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
@@ -866,6 +893,7 @@ const Sells = () => {
           platform: resolvedPlatform,
           to: to || "Madhuram Motor",
           courierName: resolvedCourierName || undefined,
+          courierCharge: Number(courierCharge) || 0,
           paymentMethod: paymentMethod as any,
           bankPayments: validatedBankPayments,
           city: city || undefined,
@@ -934,6 +962,7 @@ const Sells = () => {
       platform: resolvedPlatform,
       to: to || "Madhuram Motor",
       courierName: resolvedCourierName || undefined,
+      courierCharge: Number(courierCharge) || 0,
       paymentMethod,
       bankPayments: bankPaymentsPayload,
       city: city || undefined,
@@ -1292,7 +1321,7 @@ const Sells = () => {
                   <th className="px-4 py-3.5 whitespace-nowrap">Platform</th>
                   <th className="px-4 py-3.5 whitespace-nowrap">Payment</th>
                   <th className="px-4 py-3.5 whitespace-nowrap">City</th>
-                  <th className="px-4 py-3.5 whitespace-nowrap">To</th>
+                  <th className="px-4 py-3.5 whitespace-nowrap">From</th>
                   <th className="px-4 py-3.5 whitespace-nowrap text-right">
                     Selling (₹)
                   </th>
@@ -1682,7 +1711,7 @@ const Sells = () => {
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      To
+                      From
                     </label>
                     <input
                       type="text"
@@ -2077,6 +2106,33 @@ const Sells = () => {
                       Auto-calculated: Selling − Collected
                     </p>
                   </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Courier Charge (₹)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={courierCharge}
+                      onFocus={(e) => {
+                        // Typing into the default "0" appends after it (e.g. "0" + "5" = "05")
+                        // instead of replacing it — clear it on focus so the first keystroke starts fresh.
+                        if (e.target.value === "0") setCourierCharge("");
+                      }}
+                      onBlur={() => {
+                        if (courierCharge.trim() === "") setCourierCharge("0");
+                      }}
+                      onChange={(e) => setCourierCharge(e.target.value)}
+                      onWheel={blurNumberInputOnWheel}
+                      placeholder="0.00"
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                    />
+                    <p className="mt-0.5 text-[10px] text-slate-400">
+                      Optional shipping/courier charge for this sale — 0 if none.
+                    </p>
+                  </div>
                 </div>
 
                 <div className="mt-3">
@@ -2230,10 +2286,18 @@ const Sells = () => {
                 </div>
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase font-bold">
-                    To
+                    From
                   </span>
                   <span className="font-semibold text-slate-800">
                     {detail.to || "—"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px] uppercase font-bold">
+                    Courier Charge
+                  </span>
+                  <span className="font-semibold text-slate-800">
+                    ₹{Number(detail.courierCharge || 0).toLocaleString("en-IN")}
                   </span>
                 </div>
               </div>

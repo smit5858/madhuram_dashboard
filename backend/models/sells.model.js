@@ -136,6 +136,14 @@ const Sale = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true,
     },
+    // Shipping/courier charge entered on the Sale form itself — a plain additive amount on this
+    // sale's header, distinct from the monthly CourierCharge aggregate shown on the Couriers page
+    // (see models/courierCharge.model.js). Never negative; defaults to 0 (no charge).
+    courierCharge: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0,
+    },
   },
   {
     tableName: "sells",

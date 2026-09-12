@@ -93,6 +93,7 @@ const createOrder = async ({
   leadId,
   to,
   courierName,
+  courierCharge,
 }) => {
   if (!customerName || !customerName.trim()) {
     const err = new Error("Customer name is required");
@@ -110,6 +111,13 @@ const createOrder = async ({
       err.statusCode = 400;
       throw err;
     }
+  }
+
+  const parsedCourierCharge = courierCharge === undefined || courierCharge === null || courierCharge === "" ? 0 : parseFloat(courierCharge);
+  if (isNaN(parsedCourierCharge) || parsedCourierCharge < 0) {
+    const err = new Error("Courier charge must be a non-negative number");
+    err.statusCode = 400;
+    throw err;
   }
 
   const t = await sequelize.transaction();
@@ -201,6 +209,7 @@ const createOrder = async ({
         leadId: leadId || null,
         to: to || "Madhuram Motor",
         courierName: courierName || null,
+        courierCharge: parsedCourierCharge,
       },
       { transaction: t }
     );
