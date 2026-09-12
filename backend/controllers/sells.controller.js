@@ -473,6 +473,9 @@ exports.updateSale = async (req, res) => {
             amount: collectedAmountDelta,
             paymentMethod: sale.paymentMethod || null,
             bankAccountId: sale.bankAccountId || null,
+            bankPayments: sale.bankAccountId
+              ? [{ bankAccountId: sale.bankAccountId, amount: Math.abs(collectedAmountDelta) }]
+              : [],
             note: isPayment ? "Payment recorded via sale edit" : "Collected amount corrected via sale edit",
             userId: user.id,
           },

@@ -373,7 +373,7 @@ const createOrder = async ({
       await customerLedgerService.recordSaleDebit({ customerId: finalCustomerId, saleId: sale.id, amount: selling, userId }, { transaction: t });
       if (collected > 0) {
         await customerLedgerService.recordPayment(
-          { customerId: finalCustomerId, saleId: sale.id, amount: collected, paymentMethod: paymentMethod || null, bankAccountId, userId },
+          { customerId: finalCustomerId, saleId: sale.id, amount: collected, paymentMethod: paymentMethod || null, bankPayments: bankPaymentRows, userId },
           { transaction: t }
         );
       }
