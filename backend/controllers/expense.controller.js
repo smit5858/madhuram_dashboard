@@ -4,6 +4,7 @@ const dayjs = require("dayjs");
 const sequelize = require("../config/db");
 const { recalculateDay } = require("../services/dailyBalance.service");
 const { notify } = require("../services/notification.service");
+const { canViewAllRecords } = require("../helper/permissionScope");
 
 const errorResponse = (res, err) => res.status(err.statusCode || 500).json({ success: false, message: err.message });
 
@@ -32,9 +33,14 @@ const serializeExpense = (row) => ({
 // Pending Bill payoffs auto-create an AccountEntry (category "Pending Bill") purely so they count
 // toward the Total Out balance — they're a distinct module with their own page/workflow and must
 // never appear in the Expense list itself (see pendingBillService.js#recalculateStatus).
-const buildExpenseWhere = (query) => {
+// Ownership scope (own-only vs viewAllRecords) mirrors lead.controller.js#buildLeadWhere — used
+// by getExpenses and getExpenseTotals so the table and totals can never disagree on scope.
+const buildExpenseWhere = async (user, query) => {
+  const canViewAll = user && (await canViewAllRecords(user, "/account/expense"));
   const { search, status } = query;
   const where = { entryType: "EXPENSE", category: { [Op.ne]: "Pending Bill" } };
+
+  if (!canViewAll) where.createdBy = user.id;
 
   if (status && ["PENDING", "APPROVED", "REJECTED"].includes(status)) where.status = status;
   if (search && search.trim()) {
@@ -52,7 +58,7 @@ const buildExpenseWhere = (query) => {
 // GET /expense?search=&status=&page=&limit=
 exports.getExpenses = async (req, res) => {
   try {
-    const where = buildExpenseWhere(req.query);
+    const where = await buildExpenseWhere(req.user, req.query);
     const pageNum = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 100);
 
@@ -76,10 +82,15 @@ exports.getExpenses = async (req, res) => {
 
 // GET /expense/totals — approved-only sum/count, mirrors income.controller.js#getIncomeTotals.
 // Pending expenses are deliberately excluded, same as they are from the daily balance.
+// Scoped by the same ownership rule as getExpenses so the totals and the list can never disagree.
 exports.getExpenseTotals = async (req, res) => {
   try {
+    const canViewAll = await canViewAllRecords(req.user, "/account/expense");
+    const where = { entryType: "EXPENSE", status: "APPROVED" };
+    if (!canViewAll) where.createdBy = req.user.id;
+
     const result = await AccountEntry.findOne({
-      where: { entryType: "EXPENSE", status: "APPROVED" },
+      where,
       attributes: [
         [sequelize.fn("SUM", sequelize.col("amount")), "totalExpense"],
         [sequelize.fn("COUNT", sequelize.col("id")), "totalCount"],
@@ -99,7 +110,8 @@ exports.getExpenseTotals = async (req, res) => {
   }
 };
 
-// GET /expense/:id
+// GET /expense/:id — owner or a viewAllRecords-granted user only, mirrors
+// lead.controller.js#getLeadById.
 exports.getExpenseById = async (req, res) => {
   try {
     const entry = await AccountEntry.findOne({
@@ -107,6 +119,12 @@ exports.getExpenseById = async (req, res) => {
       include: [{ model: User, as: "creator", attributes: ["id", "name"] }],
     });
     if (!entry) return res.status(404).json({ success: false, message: "Expense not found" });
+
+    const canViewAll = await canViewAllRecords(req.user, "/account/expense");
+    if (!canViewAll && entry.createdBy !== req.user.id) {
+      return res.status(403).json({ success: false, message: "Forbidden: you can only view your own expenses" });
+    }
+
     return res.status(200).json({ success: true, data: serializeExpense(entry) });
   } catch (err) {
     return errorResponse(res, err);

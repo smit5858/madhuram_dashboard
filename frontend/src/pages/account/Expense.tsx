@@ -83,7 +83,7 @@ const Expense = () => {
   }, [queryClient, userId]);
 
   const pagePermission = useMemo(() => {
-    const fallback = { canRead: false, canCreate: false, canUpdate: false, canDelete: false };
+    const fallback = { canRead: false, canCreate: false, canUpdate: false, canDelete: false, viewAllRecords: false };
     if (!permissions) return fallback;
     return (
       permissions.find(
@@ -91,6 +91,8 @@ const Expense = () => {
       ) ?? fallback
     );
   }, [permissions]);
+
+  const canViewAll = isAdmin || pagePermission.viewAllRecords;
 
   const [appliedFilters, setAppliedFilters] = useState<ExpenseFilters>(initialStatus ? { status: initialStatus } : {});
   const filterFormRef = useRef<FormikProps<ExpenseFilterValues>>(null);
@@ -272,6 +274,7 @@ const Expense = () => {
                   <th className="px-4 py-3 whitespace-nowrap">Sr No</th>
                   <th className="px-4 py-3 whitespace-nowrap">Name</th>
                   <th className="px-4 py-3 whitespace-nowrap">Product</th>
+                  {canViewAll && <th className="px-4 py-3 whitespace-nowrap">Created By</th>}
                   <th className="px-4 py-3 whitespace-nowrap">Amount</th>
                   <th className="px-4 py-3 whitespace-nowrap">Date</th>
                   <th className="px-4 py-3 whitespace-nowrap">Status</th>
@@ -286,6 +289,9 @@ const Expense = () => {
                     </td>
                     <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">{entry.name}</td>
                     <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{entry.product || "—"}</td>
+                    {canViewAll && (
+                      <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{entry.creator?.name || "—"}</td>
+                    )}
                     <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap">{formatCurrency(entry.amount)}</td>
                     <td className="px-4 py-3 whitespace-nowrap text-gray-500">{formatDisplayDate(entry.entryDate)}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
