@@ -87,7 +87,14 @@ const buildSalesWhere = async (user, query) => {
   }
   if (status) where.status = status;
   if (city) where.city = { [Op.like]: `%${city}%` };
-  if (customerName) where.customerName = { [Op.like]: `%${customerName}%` };
+  // Matches either the customer's name or their phone number, stored directly on the Sale row
+  // (see sells.model.js#customerName/customerNumber) — the Sales list's "Customer" filter.
+  if (customerName) {
+    where[Op.and] = [
+      ...(where[Op.and] || []),
+      { [Op.or]: [{ customerName: { [Op.like]: `%${customerName}%` } }, { customerNumber: { [Op.like]: `%${customerName}%` } }] },
+    ];
+  }
   if (startDate || endDate) {
     where.createdAt = {};
     if (startDate) where.createdAt[Op.gte] = new Date(startDate);
@@ -365,6 +372,7 @@ exports.updateSale = async (req, res) => {
       sellingAmount,
       status,
       notes,
+      saleDate,
       createCourierEntry,
       to,
       courierName,
@@ -391,6 +399,7 @@ exports.updateSale = async (req, res) => {
     if (pincode !== undefined) sale.pincode = pincode;
     if (status !== undefined) sale.status = status;
     if (notes !== undefined) sale.notes = notes;
+    if (saleDate !== undefined) sale.saleDate = saleDate;
     if (to !== undefined) sale.to = to || "Madhuram Motor";
     if (courierName !== undefined) sale.courierName = courierName || null;
 

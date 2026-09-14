@@ -15,6 +15,10 @@ interface ProductSearchSelectProps {
 }
 
 const productLabel = (p: ProductData) => {
+  // Non-catalog products (e.g. the pinned "Other" placeholder — see Sells.tsx) don't carry a
+  // meaningful stock/type badge for this picker, just their plain name.
+  if (p.isMasterProduct === false) return p.name;
+
   const suffix =
     p.productType === "SOFTWARE"
       ? "(Software)"

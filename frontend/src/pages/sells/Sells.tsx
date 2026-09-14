@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -29,7 +29,7 @@ import ProductSearchSelect from "@/pages/sells/components/ProductSearchSelect";
 import PaymentsEditor from "@/pages/sells/components/PaymentsEditor";
 import { validatePaymentRows, sumPaymentRows, type PaymentRow } from "@/pages/sells/utils/paymentRows";
 import { blurNumberInputOnWheel } from "@/shared/utils/input";
-import { formatDisplayDate } from "@/shared/utils/date";
+import { formatDisplayDate, getTodayISODate } from "@/shared/utils/date";
 
 interface FormItem {
   /** Set only for a line that already exists as a SaleItem on the backend (populated when
@@ -65,9 +65,10 @@ const ORDER_STATUS_OPTIONS = [
 ];
 
 // The selectable Sales Platform list comes from the backend-managed Platform module (see
-// services/platform.service.ts, shared with the Lead form's platform picker). "Other" is always
-// appended locally as a special "type your own" option — see resolvedPlatform below — never
+// services/platform.service.ts, shared with the Lead form's platform picker). "Repeat" and
+// "Other" are always appended locally as fixed options — see resolvedPlatform below — never
 // persisted as a Platform row.
+const PLATFORM_REPEAT = "Repeat";
 const PLATFORM_OTHER = "Other";
 
 const FilterSync = ({
@@ -78,8 +79,11 @@ const FilterSync = ({
   const { values } = useFormikContext<{ search: string; startDate: string; endDate: string; status: string }>();
   const debouncedSearch = useDebounce(values.search, 400);
 
+  // The one search box filters by the customer's name or phone number, as stored directly on the
+  // Sale record (see sells.controller.js#buildSalesWhere) — works alongside every other
+  // filter/pagination as usual.
   useEffect(() => {
-    setAppliedFilters((prev) => ({ ...prev, search: debouncedSearch || undefined, page: 1 }));
+    setAppliedFilters((prev) => ({ ...prev, customerName: debouncedSearch || undefined, page: 1 }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSearch]);
 
@@ -230,10 +234,14 @@ const Sells = () => {
   });
   const dynamicPlatformNames = (platformsResponse?.data?.data || [])
     .map((p) => p.name)
-    .filter((name) => name.trim().toLowerCase() !== PLATFORM_OTHER.toLowerCase());
-  const PLATFORM_OPTIONS = [...dynamicPlatformNames, PLATFORM_OTHER];
+    .filter((name) => {
+      const normalized = name.trim().toLowerCase();
+      return normalized !== PLATFORM_OTHER.toLowerCase() && normalized !== PLATFORM_REPEAT.toLowerCase();
+    });
+  const PLATFORM_OPTIONS = [...dynamicPlatformNames, PLATFORM_REPEAT, PLATFORM_OTHER];
 
-  const productsList: ProductData[] = productsResponse?.data?.data || [];
+  const productsListData = productsResponse?.data?.data;
+  const productsList: ProductData[] = useMemo(() => productsListData || [], [productsListData]);
   const sellsList: SaleData[] = sellsResponse?.data?.data || [];
 
   const paginationMeta = sellsResponse?.data?.meta || {
@@ -296,6 +304,9 @@ const Sells = () => {
   const [manualSellingAmount, setManualSellingAmount] = useState<string>("0");
   const [sellingAmountManuallyEdited, setSellingAmountManuallyEdited] = useState(false);
   const [notes, setNotes] = useState("");
+  // The date this sale actually happened on — defaults to today, editable, and shows the saved
+  // value again when reopening an existing sale in Edit (see openEditModal).
+  const [saleDate, setSaleDate] = useState(getTodayISODate());
   // Checked by default so the existing courier-entry behavior is unchanged unless the user
   // explicitly opts out (e.g. a walk-in sale that isn't shipped). On Edit, this is re-initialized
   // from the sale's actual current state (see openEditModal) instead of always defaulting true.
@@ -310,6 +321,41 @@ const Sells = () => {
   // diff against the live `items` state and only send updateSaleItem for lines the user
   // actually changed.
   const [originalItemsById, setOriginalItemsById] = useState<Record<number, { quantity: number; sellingPrice: number }>>({});
+
+  // The pinned "Other" product field option — a real, non-catalog Product row (isMasterProduct:
+  // false, productType SOFTWARE) seeded once on the backend (see server.js#ensureOtherProductSeeded)
+  // so it reuses the existing no-stock/no-courier SOFTWARE handling with no special-cased backend
+  // logic. Placed first in the picker regardless of alphabetical order.
+  const otherProduct = useMemo(
+    () => productsList.find((p) => p.name === "Other" && p.isMasterProduct === false) || null,
+    [productsList]
+  );
+  const productsListForPicker = useMemo(() => {
+    if (!otherProduct) return productsList;
+    return [otherProduct, ...productsList.filter((p) => p.id !== otherProduct.id)];
+  }, [productsList, otherProduct]);
+
+  // "Create Courier Entry" is locked off whenever every chosen line is the "Other" placeholder —
+  // there's nothing physical in the sale to ship, so it can't accidentally stay selected. A mixed
+  // cart (Other + a real product) leaves the checkbox alone since the real line(s) may still need
+  // shipping — see the effect below, which forces it off on entering the locked state and restores
+  // whatever the user had before on leaving it.
+  const hasChosenItem = items.some((i) => !!i.productId);
+  const hasRealProductItem = items.some((i) => i.productId && (!otherProduct || i.productId !== otherProduct.id));
+  const isCourierEntryLocked = !!otherProduct && hasChosenItem && !hasRealProductItem;
+  const wasCourierEntryLockedRef = useRef(false);
+  const courierEntryBeforeLockRef = useRef(true);
+  useEffect(() => {
+    if (isCourierEntryLocked && !wasCourierEntryLockedRef.current) {
+      courierEntryBeforeLockRef.current = createCourierEntry;
+      wasCourierEntryLockedRef.current = true;
+      setCreateCourierEntry(false);
+    } else if (!isCourierEntryLocked && wasCourierEntryLockedRef.current) {
+      wasCourierEntryLockedRef.current = false;
+      setCreateCourierEntry(courierEntryBeforeLockRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCourierEntryLocked]);
 
   // Debounced Customer Phone Lookup & Autocomplete for Sells Entry
   const debouncedCustomerPhone = useDebounce(customerNumber, 350);
@@ -561,10 +607,15 @@ const Sells = () => {
     setManualSellingAmount("0");
     setSellingAmountManuallyEdited(false);
     setNotes("");
+    setSaleDate(getTodayISODate());
     setCreateCourierEntry(true);
     setItems([{ productId: "", quantity: 1, sellingPrice: "" }]);
     setOriginalItemsById({});
     setSelectedSale(null);
+    // Stale across sale open/close otherwise — the next sale (or a fresh Add) must start
+    // unlocked, not carrying over whatever the previous sale's Other-lock state was.
+    wasCourierEntryLockedRef.current = false;
+    courierEntryBeforeLockRef.current = true;
   };
 
   const openCreateModal = () => {
@@ -582,7 +633,8 @@ const Sells = () => {
     setCustomerName(sale.customerName || "");
     setCustomerNumber(sale.customerNumber || "");
     const savedPlatform = sale.platform || "";
-    const platformIsOther = !!savedPlatform && !dynamicPlatformNames.includes(savedPlatform);
+    const platformIsOther =
+      !!savedPlatform && savedPlatform !== PLATFORM_REPEAT && !dynamicPlatformNames.includes(savedPlatform);
     setPlatform(
       savedPlatform ? (platformIsOther ? PLATFORM_OTHER : savedPlatform) : PLATFORM_OPTIONS[0] || PLATFORM_OTHER
     );
@@ -593,6 +645,7 @@ const Sells = () => {
     setCourierName(courierNameIsOther ? COURIER_COMPANY_OTHER : savedCourierName);
     setOtherCourierName(courierNameIsOther ? savedCourierName : "");
     setCourierCharge(String(sale.courierCharge ?? 0));
+    setSaleDate(sale.saleDate || (sale.createdAt ? sale.createdAt.slice(0, 10) : getTodayISODate()));
     // The draft payment rows start empty on Edit — they represent NEW payment(s) to add on top
     // of whatever's already been collected (shown separately), not the sale's existing history.
     setPaymentRows([]);
@@ -845,6 +898,7 @@ const Sells = () => {
           pincode: pincode || undefined,
           sellingAmount: effectiveSellingAmount,
           notes: notes || undefined,
+          saleDate,
           createCourierEntry,
         },
       });
@@ -907,6 +961,7 @@ const Sells = () => {
       sellingAmount: sellingAmountForItems,
       collectedAmount: paymentRowsTotal,
       notes: notes || undefined,
+      saleDate,
       createCourierEntry,
       items: payloadItems,
     };
@@ -1096,7 +1151,7 @@ const Sells = () => {
                 <Field
                   name="search"
                   type="text"
-                  placeholder="Search..."
+                  placeholder="Search by customer..."
                   className="rounded-full border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-3 text-xs text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                 />
               </div>
@@ -1345,8 +1400,8 @@ const Sells = () => {
                       {renderStatusBadge(sell.status)}
                     </td> */}
                     <td className="px-4 py-3.5 whitespace-nowrap text-[11px] text-slate-500">
-                      {sell.createdAt
-                        ? formatDisplayDate(sell.createdAt)
+                      {sell.saleDate || sell.createdAt
+                        ? formatDisplayDate(sell.saleDate || sell.createdAt)
                         : "—"}
                     </td>
                     {/* {isAdmin && ( */}
@@ -1592,6 +1647,19 @@ const Sells = () => {
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Date *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={saleDate}
+                      onChange={(e) => setSaleDate(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Sells Platform
                     </label>
                     <select
@@ -1722,7 +1790,7 @@ const Sells = () => {
                             Product *
                           </label>
                           <ProductSearchSelect
-                            products={productsList}
+                            products={productsListForPicker}
                             value={row.productId}
                             onChange={(productId) => handleProductSelect(index, productId)}
                             disabled={!!row.id}
@@ -1980,17 +2048,24 @@ const Sells = () => {
                     id="createCourierEntry"
                     type="checkbox"
                     checked={createCourierEntry}
+                    disabled={isCourierEntryLocked}
                     onChange={(e) => setCreateCourierEntry(e.target.checked)}
-                    className="h-4 w-4 rounded border-slate-300 text-[#3d6fe0] focus:ring-[#3d6fe0]"
+                    className="h-4 w-4 rounded border-slate-300 text-[#3d6fe0] focus:ring-[#3d6fe0] disabled:cursor-not-allowed disabled:opacity-50"
                   />
                   <label htmlFor="createCourierEntry" className="text-xs font-semibold text-slate-700">
                     Create Courier Entry
                   </label>
                 </div>
-                {selectedSale && (
+                {isCourierEntryLocked ? (
                   <p className="mt-0.5 text-[10px] text-slate-400">
-                    Changing this creates or cancels the shipment tracking entries for this sale's items.
+                    Not available for "Other" — there's nothing physical to ship for this sale.
                   </p>
+                ) : (
+                  selectedSale && (
+                    <p className="mt-0.5 text-[10px] text-slate-400">
+                      Changing this creates or cancels the shipment tracking entries for this sale's items.
+                    </p>
+                  )
                 )}
               </div>
 

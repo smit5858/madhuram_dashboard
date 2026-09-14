@@ -107,6 +107,13 @@ const Sale = sequelize.define(
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    // The date this sale actually happened on — user-editable, defaults to today at entry time.
+    // Independent of createdAt (the record's own insert timestamp, which never changes on edit).
+    saleDate: {
+      type: DataTypes.DATEONLY,
+      allowNull: false,
+      defaultValue: DataTypes.NOW,
+    },
     createdBy: {
       type: DataTypes.INTEGER,
       allowNull: true,

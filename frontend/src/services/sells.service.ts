@@ -86,6 +86,9 @@ export interface SaleData {
   collectedAmount: number;
   pendingAmount?: number;
   refundedAmount?: number;
+  /** The date this sale actually happened on — user-editable, defaults to today at entry time.
+   *  Independent of createdAt (the record's own insert timestamp, which never changes on edit). */
+  saleDate?: string;
   status?: "PENDING" | "CONFIRMED" | "FULFILLED" | "CANCELLED";
   paymentStatus?: "UNPAID" | "PARTIALLY_PAID" | "PAID" | "REFUNDED" | "PARTIALLY_REFUNDED";
   fulfillmentStatus?: "PENDING" | "PARTIALLY_FULFILLED" | "FULFILLED" | "BACKORDERED" | "CANCELLED";
@@ -144,6 +147,8 @@ export interface CreateSalePayload {
    *  collect anything at creation and never send `payments` at all. */
   collectedAmount: number;
   notes?: string;
+  /** The date this sale actually happened on. Defaults to today on the backend when omitted. */
+  saleDate?: string;
   /** Whether to create a Courier record for each order line after the sale is created.
    *  Defaults to true on the backend when omitted. */
   createCourierEntry?: boolean;

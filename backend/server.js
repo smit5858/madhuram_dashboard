@@ -517,6 +517,41 @@ const ensureNoStaleRoutesBeforeSync = async () => {
   await sequelize.query("DELETE FROM routes WHERE id IN (?)", { replacements: [ids] });
 };
 
+// sells gained a NOT NULL saleDate column (the user-editable "when this sale happened" date,
+// separate from createdAt). Same add-nullable/backfill/tighten reasoning as
+// ensurePendingBillPaymentFieldsBackfilled above — existing rows backfill from their own
+// createdAt so they open in Edit already showing a sensible date. Idempotent: a no-op once the
+// column already exists.
+const ensureSaleDateBackfilled = async () => {
+  const { DataTypes } = require("sequelize");
+  const queryInterface = sequelize.getQueryInterface();
+  const tables = await queryInterface.showAllTables();
+  const tableNames = tables.map((table) => (typeof table === "string" ? table : table.tableName));
+  if (!tableNames.includes("sells")) return;
+
+  const columns = await queryInterface.describeTable("sells");
+  if (columns.saleDate) return;
+
+  await queryInterface.addColumn("sells", "saleDate", { type: DataTypes.DATEONLY, allowNull: true });
+  await sequelize.query("UPDATE sells SET saleDate = DATE(createdAt) WHERE saleDate IS NULL");
+  await queryInterface.changeColumn("sells", "saleDate", { type: DataTypes.DATEONLY, allowNull: false });
+};
+
+// Seeds the single pinned "Other" product the Sales form's Product field always offers at the
+// top of the list — a non-catalog placeholder for a sale line that isn't a real stocked/software
+// product. Reuses the existing SOFTWARE product-type machinery (no Stock row, never backordered,
+// never gets a Courier record — see order.service.js/inventory.service.js) so selecting it needs
+// no special-cased stock/courier handling anywhere else. isMasterProduct:false keeps it out of
+// the Products page catalog (see product.controller.js#getProducts' masterOnly filter) the same
+// way a Sells "quick-add" product is hidden. Idempotent: a no-op once it already exists.
+const ensureOtherProductSeeded = async () => {
+  const { Product } = require("./models");
+  await Product.findOrCreate({
+    where: { name: "Other", isMasterProduct: false },
+    defaults: { name: "Other", productType: "SOFTWARE", isMasterProduct: false, isActive: true },
+  });
+};
+
 sequelize
   .authenticate()
   .then(() => {
@@ -535,6 +570,9 @@ sequelize
   })
   .then(() => {
     return ensureLeadProductIdNullable();
+  })
+  .then(() => {
+    return ensureSaleDateBackfilled();
   })
   .then(() => {
     return ensurePendingBillPaymentFieldsBackfilled();
@@ -560,6 +598,7 @@ sequelize
     await backfillIncomingCourierPermissions();
     await grantInitialPendingBillAccess();
     await grantInitialLeadsAccess();
+    await ensureOtherProductSeeded();
 
     // Initialize Socket.io after DB is ready
     initSocket(httpServer);
