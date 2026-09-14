@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Field, Form, Formik, useFormikContext } from "formik";
 import toast from "react-hot-toast";
 import { Package, XCircle } from "lucide-react";
@@ -7,6 +7,7 @@ import pendingBillService, {
   type PendingBillPaymentMethod,
   type PendingBillUpdateData,
 } from "@/services/pendingBill.service";
+import bankAccountService from "@/services/bankAccount.service";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
 import FormikDate from "@/shared/components/formik-fields/FormikDate";
 import FormikSelect from "@/shared/components/formik-fields/FormikSelect";
@@ -18,6 +19,8 @@ import {
   type PendingBillEntryWithPaymentFormValues,
 } from "@/validation/pendingBill.validation";
 import { getTodayISODate } from "@/shared/utils/date";
+
+const needsBankAccount = (paymentMethod?: string) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
 
 interface ApiErrorLike {
   response?: { data?: { message?: string } };
@@ -63,6 +66,12 @@ const PendingBillFormModal = ({ bill, onClose }: PendingBillFormModalProps) => {
   const isEdit = !!bill?.id;
   const isRestock = bill?.billType === "RESTOCK";
 
+  const { data: bankAccountsResponse } = useQuery({
+    queryKey: ["bank-accounts-active"],
+    queryFn: () => bankAccountService.getActiveBankAccounts(),
+  });
+  const bankAccountsList = bankAccountsResponse?.data?.data || [];
+
   const initialValues: PendingBillEntryWithPaymentFormValues = {
     name: bill?.name || "",
     dealerName: bill?.dealerName || "",
@@ -75,6 +84,7 @@ const PendingBillFormModal = ({ bill, onClose }: PendingBillFormModalProps) => {
     paymentMethod: "Cash",
     paymentDate: getTodayISODate(),
     paymentTransactionRef: "",
+    paymentBankAccountId: "",
     paymentNotes: "",
   };
 
@@ -97,6 +107,7 @@ const PendingBillFormModal = ({ bill, onClose }: PendingBillFormModalProps) => {
           paymentMethod: values.paymentMethod as PendingBillPaymentMethod,
           paymentDate: values.paymentDate || getTodayISODate(),
           transactionRef: values.paymentTransactionRef?.trim() || undefined,
+          bankAccountId: needsBankAccount(values.paymentMethod) && values.paymentBankAccountId ? values.paymentBankAccountId : undefined,
           notes: values.paymentNotes || undefined,
         });
       }
@@ -191,6 +202,15 @@ const PendingBillFormModal = ({ bill, onClose }: PendingBillFormModalProps) => {
                             placeholder="e.g. UTR / cheque no."
                             component={FormikInput}
                           />
+                          {needsBankAccount(values.paymentMethod) && (
+                            <Field
+                              name="paymentBankAccountId"
+                              label="Select Bank"
+                              placeholder="Select a bank account"
+                              options={bankAccountsList.map((acc) => ({ value: String(acc.id), label: `${acc.bankName} — ${acc.accountHolderName}` }))}
+                              component={FormikSelect}
+                            />
+                          )}
                           <div className="sm:col-span-2">
                             <Field name="paymentNotes" label="Payment Notes (optional)" placeholder="Optional notes" multiline component={FormikInput} />
                           </div>

@@ -1,14 +1,17 @@
 import { Field, Form, Formik } from "formik";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { XCircle } from "lucide-react";
 import incomeService, { type IncomeEntryData } from "@/services/income.service";
+import bankAccountService from "@/services/bankAccount.service";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
 import FormikSelect from "@/shared/components/formik-fields/FormikSelect";
 import FormikDate from "@/shared/components/formik-fields/FormikDate";
 import { incomeEntrySchema, type IncomeEntryFormValues } from "@/validation/income.validation";
 import { PAYMENT_METHOD_OPTIONS } from "@/shared/constants/paymentMethod";
 import { getTodayISODate } from "@/shared/utils/date";
+
+const needsBankAccount = (paymentMethod?: string) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
 
 interface IncomeFormModalProps {
   /** null = creating a new record */
@@ -20,6 +23,12 @@ const IncomeFormModal = ({ entry, onClose }: IncomeFormModalProps) => {
   const queryClient = useQueryClient();
   const isEdit = !!entry?.id;
 
+  const { data: bankAccountsResponse } = useQuery({
+    queryKey: ["bank-accounts-active"],
+    queryFn: () => bankAccountService.getActiveBankAccounts(),
+  });
+  const bankAccountsList = bankAccountsResponse?.data?.data || [];
+
   const initialValues: IncomeEntryFormValues = {
     customerName: entry?.customerName || "",
     customerPhone: entry?.customerPhone || "",
@@ -28,7 +37,7 @@ const IncomeFormModal = ({ entry, onClose }: IncomeFormModalProps) => {
     amount: entry?.amount !== undefined && entry?.amount !== null ? String(entry.amount) : "",
     entryDate: entry?.entryDate || getTodayISODate(),
     paymentMethod: entry?.paymentMethod || "",
-    bankName: entry?.bankName || "",
+    bankAccountId: entry?.bankAccountId ? String(entry.bankAccountId) : "",
     description: entry?.description || "",
   };
 
@@ -68,7 +77,7 @@ const IncomeFormModal = ({ entry, onClose }: IncomeFormModalProps) => {
       amount: values.amount,
       entryDate: values.entryDate,
       paymentMethod: (values.paymentMethod || undefined) as IncomeEntryData["paymentMethod"],
-      bankName: values.paymentMethod === "BankTransfer" ? values.bankName || undefined : undefined,
+      bankAccountId: needsBankAccount(values.paymentMethod) && values.bankAccountId ? Number(values.bankAccountId) : undefined,
       description: values.description || undefined,
     });
   };
@@ -103,8 +112,14 @@ const IncomeFormModal = ({ entry, onClose }: IncomeFormModalProps) => {
                   options={PAYMENT_METHOD_OPTIONS}
                   component={FormikSelect}
                 />
-                {values.paymentMethod === "BankTransfer" && (
-                  <Field name="bankName" label="Bank Name" placeholder="Bank name" component={FormikInput} />
+                {needsBankAccount(values.paymentMethod) && (
+                  <Field
+                    name="bankAccountId"
+                    label="Select Bank"
+                    placeholder="Select a bank account"
+                    options={bankAccountsList.map((acc) => ({ value: String(acc.id), label: `${acc.bankName} — ${acc.accountHolderName}` }))}
+                    component={FormikSelect}
+                  />
                 )}
                 <div className="sm:col-span-2">
                   <Field name="description" label="Notes" placeholder="Optional notes" multiline component={FormikInput} />

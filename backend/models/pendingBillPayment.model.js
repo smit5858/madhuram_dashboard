@@ -17,12 +17,22 @@ const PendingBillPayment = sequelize.define(
     },
 
     amount: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
+    // "Cheque" was retired — see server.js#ensureChequePaymentMethodBackfilled for the one-time
+    // data migration.
     paymentMethod: {
-      type: DataTypes.ENUM("Cash", "UPI", "Card", "BankTransfer", "Cheque", "Other"),
+      type: DataTypes.ENUM("Cash", "UPI", "Card", "BankTransfer", "Other"),
       allowNull: false,
     },
     paymentDate: { type: DataTypes.DATEONLY, allowNull: false },
     transactionRef: { type: DataTypes.STRING, allowNull: true },
+    // Which configured bank account this BankTransfer/UPI payment went through — set via the
+    // "Select Bank" field (see PendingBillPaymentFormModal/PendingBillFormModal.tsx), same
+    // pattern as Sells/Customer Ledger's bank account picker.
+    bankAccountId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: { model: "bank_accounts", key: "id" },
+    },
     notes: { type: DataTypes.TEXT, allowNull: true },
 
     // Pending Verification -> Verified | Rejected. Only "Verified" payments count toward a

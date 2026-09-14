@@ -15,7 +15,13 @@ export interface ExpenseEntryData {
     amount: number | string;
     entryDate: string;
     paymentMethod?: PaymentMethod | null;
+    /** Legacy free-text bank name — superseded by bankAccountId/bankAccount below. Still
+     *  returned/displayed for an older entry created before the "Select Bank" field existed. */
     bankName?: string | null;
+    /** Which configured bank account this BankTransfer/UPI entry used — set via the "Select
+     *  Bank" field (see ExpenseFormModal.tsx), same pattern as Sells/Customer Ledger. */
+    bankAccountId?: number | null;
+    bankAccount?: { id: number; bankName: string; accountHolderName: string; accountNumber: string } | null;
     description?: string | null;
     status?: ExpenseStatus;
     creator?: { id: number; name: string } | null;

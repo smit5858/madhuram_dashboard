@@ -36,10 +36,11 @@ const CustomerLedgerEntry = sequelize.define(
       type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
     },
-    // Separate enum from Sale/Payment's paymentMethod — this one includes Cheque per the ledger
-    // spec, deliberately kept apart so the existing Sale/Payment forms are untouched.
+    // Separate enum from Sale/Payment's paymentMethod, deliberately kept apart so the existing
+    // Sale/Payment forms are untouched. "Cheque" was retired — see
+    // server.js#ensureChequePaymentMethodBackfilled for the one-time data migration.
     paymentMethod: {
-      type: DataTypes.ENUM("Cash", "UPI", "BankTransfer", "Cheque", "Card", "Other"),
+      type: DataTypes.ENUM("Cash", "UPI", "BankTransfer", "Card", "Other"),
       allowNull: true,
     },
     bankAccountId: {

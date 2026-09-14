@@ -1,12 +1,49 @@
-const { Notification } = require("../models");
+const { Notification, Route, UserPermission } = require("../models");
 const { Op } = require("sequelize");
 
+// Route.module ("Courier", "Account") / bare route path ("/leads") -> the recipientModule string
+// notify() actually broadcasts to for that area. Only routes with a real notification channel are
+// mapped here; everything else (Setting, Dashboard, Customers, Products, Users, Sells) has none.
+const MODULE_BY_ROUTE_MODULE = { Courier: "couriers", Account: "account" };
+const MODULE_BY_ROUTE_PATH = { "/leads": "leads" };
+
+// Which broadcast modules this user is allowed to see, based on their own granted route
+// permissions — never trust a client-supplied module filter beyond this set, same principle as
+// expense.controller.js's canViewAllRecords. null = unrestricted (Admin sees every broadcast,
+// same as the Admin bypass in authorize.js); "all" is always included since it's the reserved
+// module for a broadcast meant for literally everyone.
+const getAllowedBroadcastModules = async (user) => {
+  if (user.roleName === "Admin") return null;
+
+  const perms = await UserPermission.findAll({
+    where: { userId: user.id, canRead: true },
+    include: [{ model: Route, attributes: ["path", "module"] }],
+  });
+
+  const modules = new Set(["all"]);
+  for (const perm of perms) {
+    const route = perm.Route;
+    if (!route) continue;
+    if (MODULE_BY_ROUTE_MODULE[route.module]) modules.add(MODULE_BY_ROUTE_MODULE[route.module]);
+    if (MODULE_BY_ROUTE_PATH[route.path]) modules.add(MODULE_BY_ROUTE_PATH[route.path]);
+  }
+  return Array.from(modules);
+};
+
 // Broadcast (module-wide) notifications are those with no recipientUserId; a personal
-// notification (recipientUserId set) is only ever visible to that one user.
-const buildVisibilityWhere = (userId, mod) => {
-  const broadcastWhere = mod
-    ? { recipientModule: { [Op.in]: [mod, "all"] }, recipientUserId: null }
-    : { recipientUserId: null };
+// notification (recipientUserId set) is only ever visible to that one user. `allowedModules`
+// (from getAllowedBroadcastModules; null for Admin) is the real boundary — an explicit `mod`
+// query filter can only narrow it further, never widen it.
+const buildVisibilityWhere = (userId, mod, allowedModules) => {
+  let modules = allowedModules;
+  if (mod) {
+    const requested = new Set([mod, "all"]);
+    modules = allowedModules ? allowedModules.filter((m) => requested.has(m)) : Array.from(requested);
+  }
+
+  const broadcastWhere =
+    modules === null ? { recipientUserId: null } : { recipientModule: { [Op.in]: modules }, recipientUserId: null };
+
   return { [Op.or]: [broadcastWhere, { recipientUserId: userId }] };
 };
 
@@ -14,7 +51,8 @@ const buildVisibilityWhere = (userId, mod) => {
 exports.getNotifications = async (req, res) => {
   try {
     const { module: mod, limit = 50 } = req.query;
-    const where = buildVisibilityWhere(req.user.id, mod);
+    const allowedModules = await getAllowedBroadcastModules(req.user);
+    const where = buildVisibilityWhere(req.user.id, mod, allowedModules);
 
     const notifications = await Notification.findAll({
       where,
@@ -57,7 +95,8 @@ exports.markRead = async (req, res) => {
 exports.markAllRead = async (req, res) => {
   try {
     const { module: mod } = req.query;
-    const where = { isRead: false, ...buildVisibilityWhere(req.user.id, mod) };
+    const allowedModules = await getAllowedBroadcastModules(req.user);
+    const where = { isRead: false, ...buildVisibilityWhere(req.user.id, mod, allowedModules) };
 
     await Notification.update({ isRead: true }, { where });
 

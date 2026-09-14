@@ -38,11 +38,24 @@ const AccountEntry = sequelize.define(
     customerPhone: { type: DataTypes.STRING, allowNull: true },
     productName: { type: DataTypes.STRING, allowNull: true },
     serialNumber: { type: DataTypes.STRING, allowNull: true },
+    // "COD" was retired in favor of "Cash" (see server.js#ensureCodPaymentMethodBackfilled).
+    // "Multiple" is a derived value copied from a Sale whose collected amount was split across
+    // more than one payment method — never chosen manually.
     paymentMethod: {
-      type: DataTypes.ENUM("Cash", "UPI", "Card", "COD", "BankTransfer", "Other"),
+      type: DataTypes.ENUM("Cash", "UPI", "Card", "BankTransfer", "Other", "Multiple"),
       allowNull: true,
     },
+    // Legacy free-text bank name — superseded by bankAccountId (a proper "Select Bank" picker
+    // sourced from the configured Bank Accounts, same as Sells/Customer Ledger). Kept only so an
+    // older entry created before this change still displays the bank it recorded.
     bankName: { type: DataTypes.STRING, allowNull: true },
+    // Which configured bank account this BankTransfer/UPI entry went through — set via the
+    // Income/Expense forms' "Select Bank" field (see IncomeFormModal/ExpenseFormModal.tsx).
+    bankAccountId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: { model: "bank_accounts", key: "id" },
+    },
     // Approval workflow (Expense only). INCOME rows and other entry types are created already
     // APPROVED (they have no approval step) — only expense.controller.js#createExpense and the
     // auto-created courier-charge entry (courier.controller.js#completeIncomingCourier) ever

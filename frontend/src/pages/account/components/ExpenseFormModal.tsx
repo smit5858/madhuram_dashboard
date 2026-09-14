@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Field, Form, Formik, useFormikContext } from "formik";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import expenseService, { type ExpenseEntryData } from "@/services/expense.service";
 import customerService, { type CustomerData } from "@/services/customer.service";
+import bankAccountService from "@/services/bankAccount.service";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
 import FormikSelect from "@/shared/components/formik-fields/FormikSelect";
 import FormikDate from "@/shared/components/formik-fields/FormikDate";
@@ -13,6 +14,8 @@ import { expenseEntrySchema, type ExpenseEntryFormValues } from "@/validation/ex
 import { PAYMENT_METHOD_OPTIONS } from "@/shared/constants/paymentMethod";
 import { getTodayISODate } from "@/shared/utils/date";
 import { useDebounce } from "@/hook/useDebounce";
+
+const needsBankAccount = (paymentMethod?: string) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
 
 interface ExpenseFormModalProps {
   /** null = creating a new record */
@@ -140,6 +143,12 @@ const ExpenseFormModal = ({ entry, onClose }: ExpenseFormModalProps) => {
   const isEdit = !!entry?.id;
   const [customerId, setCustomerId] = useState<number | null>(entry?.customerId ?? null);
 
+  const { data: bankAccountsResponse } = useQuery({
+    queryKey: ["bank-accounts-active"],
+    queryFn: () => bankAccountService.getActiveBankAccounts(),
+  });
+  const bankAccountsList = bankAccountsResponse?.data?.data || [];
+
   const initialValues: ExpenseEntryFormValues = {
     name: entry?.name || "",
     mobile: entry?.mobile || "",
@@ -147,7 +156,7 @@ const ExpenseFormModal = ({ entry, onClose }: ExpenseFormModalProps) => {
     amount: entry?.amount !== undefined && entry?.amount !== null ? String(entry.amount) : "",
     entryDate: entry?.entryDate || getTodayISODate(),
     paymentMethod: entry?.paymentMethod || "",
-    bankName: entry?.bankName || "",
+    bankAccountId: entry?.bankAccountId ? String(entry.bankAccountId) : "",
     description: entry?.description || "",
   };
 
@@ -186,7 +195,7 @@ const ExpenseFormModal = ({ entry, onClose }: ExpenseFormModalProps) => {
       amount: values.amount,
       entryDate: values.entryDate,
       paymentMethod: (values.paymentMethod || undefined) as ExpenseEntryData["paymentMethod"],
-      bankName: values.paymentMethod === "BankTransfer" ? values.bankName || undefined : undefined,
+      bankAccountId: needsBankAccount(values.paymentMethod) && values.bankAccountId ? Number(values.bankAccountId) : undefined,
       description: values.description || undefined,
       customerId: customerId ?? undefined,
     });
@@ -224,8 +233,14 @@ const ExpenseFormModal = ({ entry, onClose }: ExpenseFormModalProps) => {
                   options={PAYMENT_METHOD_OPTIONS}
                   component={FormikSelect}
                 />
-                {values.paymentMethod === "BankTransfer" && (
-                  <Field name="bankName" label="Bank Name" placeholder="Bank name" component={FormikInput} />
+                {needsBankAccount(values.paymentMethod) && (
+                  <Field
+                    name="bankAccountId"
+                    label="Select Bank"
+                    placeholder="Select a bank account"
+                    options={bankAccountsList.map((acc) => ({ value: String(acc.id), label: `${acc.bankName} — ${acc.accountHolderName}` }))}
+                    component={FormikSelect}
+                  />
                 )}
                 <div className="sm:col-span-2">
                   <Field name="description" label="Description" placeholder="Optional description" multiline component={FormikInput} />

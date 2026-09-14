@@ -39,18 +39,29 @@ export const pendingBillFilterSchema = z.object({
 
 export type PendingBillFilterValues = z.infer<typeof pendingBillFilterSchema>;
 
-export const PENDING_BILL_PAYMENT_METHODS = ["Cash", "UPI", "Card", "BankTransfer", "Cheque", "Other"] as const;
+export const PENDING_BILL_PAYMENT_METHODS = ["Cash", "UPI", "Card", "BankTransfer", "Other"] as const;
+
+// BankTransfer/UPI need a configured bank account named ("Select Bank") — matches
+// order.service.js#needsBankSplit's same two methods.
+const needsBankAccount = (paymentMethod?: string) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
 
 // A payment can be the full remaining balance at once, or a custom/partial amount — the amount
 // field itself carries no distinction, "full" is just whatever equals the remaining balance right
 // now (see the quick-fill buttons in PendingBillPaymentFormModal).
-export const pendingBillPaymentEntrySchema = z.object({
-  amount: amountField,
-  paymentMethod: z.enum(PENDING_BILL_PAYMENT_METHODS, { error: "Payment method is required" }),
-  paymentDate: z.string().min(1, "Payment date is required"),
-  transactionRef: z.string().max(100, "Transaction reference must be under 100 characters").optional(),
-  notes: z.string().max(1000, "Notes must be under 1000 characters").optional(),
-});
+export const pendingBillPaymentEntrySchema = z
+  .object({
+    amount: amountField,
+    paymentMethod: z.enum(PENDING_BILL_PAYMENT_METHODS, { error: "Payment method is required" }),
+    paymentDate: z.string().min(1, "Payment date is required"),
+    transactionRef: z.string().max(100, "Transaction reference must be under 100 characters").optional(),
+    bankAccountId: z.string().optional(),
+    notes: z.string().max(1000, "Notes must be under 1000 characters").optional(),
+  })
+  .superRefine((values, ctx) => {
+    if (needsBankAccount(values.paymentMethod) && !values.bankAccountId) {
+      ctx.addIssue({ code: "custom", path: ["bankAccountId"], message: "Select a bank account for this payment method" });
+    }
+  });
 
 export type PendingBillPaymentEntryFormValues = z.infer<typeof pendingBillPaymentEntrySchema>;
 
@@ -71,6 +82,7 @@ export const pendingBillEntryWithPaymentSchema = pendingBillEntrySchema
     paymentMethod: z.string().optional(),
     paymentDate: z.string().optional(),
     paymentTransactionRef: z.string().max(100, "Transaction reference must be under 100 characters").optional(),
+    paymentBankAccountId: z.string().optional(),
     paymentNotes: z.string().max(1000, "Notes must be under 1000 characters").optional(),
   })
   .superRefine((values, ctx) => {
@@ -86,6 +98,9 @@ export const pendingBillEntryWithPaymentSchema = pendingBillEntrySchema
     }
     if (!values.paymentDate) {
       ctx.addIssue({ code: "custom", path: ["paymentDate"], message: "Payment date is required" });
+    }
+    if (needsBankAccount(values.paymentMethod) && !values.paymentBankAccountId) {
+      ctx.addIssue({ code: "custom", path: ["paymentBankAccountId"], message: "Select a bank account for this payment method" });
     }
   });
 

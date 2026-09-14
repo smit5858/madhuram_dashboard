@@ -33,8 +33,13 @@ const Sale = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true,
     },
+    // "Multiple" is a derived/read-only value — never chosen by a user — set automatically
+    // whenever this sale's collected amount was split across more than one distinct payment
+    // method (see order.service.js#recomputeSalePaymentMethod). The itemized breakdown always
+    // lives in the Payment rows (sale_payments/`payments` association); this column is only a
+    // quick-glance summary for lists/exports/filters.
     paymentMethod: {
-      type: DataTypes.ENUM("Cash", "UPI", "Card", "BankTransfer", "Other"),
+      type: DataTypes.ENUM("Cash", "UPI", "Card", "BankTransfer", "Other", "Multiple"),
       allowNull: true,
     },
     // Legacy single-account column, superseded by the sale_bank_accounts join table (see

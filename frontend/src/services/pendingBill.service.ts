@@ -4,7 +4,7 @@ import type { PaginationMeta } from "./courier.service";
 export type PendingBillStatus = "PENDING" | "PARTIALLY_PAID" | "PENDING_VERIFICATION" | "APPROVED" | "REJECTED" | "CANCELLED";
 export type PendingBillType = "GENERAL" | "RESTOCK";
 export type PendingBillPaymentStatus = "Pending Verification" | "Verified" | "Rejected";
-export type PendingBillPaymentMethod = "Cash" | "UPI" | "Card" | "BankTransfer" | "Cheque" | "Other";
+export type PendingBillPaymentMethod = "Cash" | "UPI" | "Card" | "BankTransfer" | "Other";
 
 export interface PendingBillPaymentData {
     id?: number;
@@ -13,6 +13,10 @@ export interface PendingBillPaymentData {
     paymentMethod: PendingBillPaymentMethod;
     paymentDate: string;
     transactionRef?: string | null;
+    /** Which configured bank account this BankTransfer/UPI payment used — set via the "Select
+     *  Bank" field, same pattern as Sells/Customer Ledger. */
+    bankAccountId?: number | null;
+    bankAccount?: { id: number; bankName: string; accountHolderName: string; accountNumber: string } | null;
     notes?: string | null;
     status?: PendingBillPaymentStatus;
     createdBy?: number | null;
@@ -79,6 +83,7 @@ export interface PendingBillPaymentEntryData {
     paymentMethod: PendingBillPaymentMethod;
     paymentDate: string;
     transactionRef?: string;
+    bankAccountId?: number | string;
     notes?: string;
 }
 

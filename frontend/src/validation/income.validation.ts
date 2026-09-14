@@ -17,17 +17,27 @@ const amountField = z
     message: "Please enter a valid amount greater than 0",
   });
 
-export const incomeEntrySchema = z.object({
-  customerName: customerNameField,
-  customerPhone: optionalMobileField,
-  productName: z.string().max(150, "Product name must be under 150 characters").optional(),
-  serialNumber: z.string().max(100, "Serial number must be under 100 characters").optional(),
-  amount: amountField,
-  entryDate: z.string().min(1, "Transaction date is required"),
-  paymentMethod: z.string().optional(),
-  bankName: z.string().max(150, "Bank name must be under 150 characters").optional(),
-  description: z.string().max(1000, "Description must be under 1000 characters").optional(),
-});
+// BankTransfer/UPI need a configured bank account named ("Select Bank") — matches
+// order.service.js#needsBankSplit's same two methods.
+const needsBankAccount = (paymentMethod?: string) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
+
+export const incomeEntrySchema = z
+  .object({
+    customerName: customerNameField,
+    customerPhone: optionalMobileField,
+    productName: z.string().max(150, "Product name must be under 150 characters").optional(),
+    serialNumber: z.string().max(100, "Serial number must be under 100 characters").optional(),
+    amount: amountField,
+    entryDate: z.string().min(1, "Transaction date is required"),
+    paymentMethod: z.string().optional(),
+    bankAccountId: z.string().optional(),
+    description: z.string().max(1000, "Description must be under 1000 characters").optional(),
+  })
+  .superRefine((values, ctx) => {
+    if (needsBankAccount(values.paymentMethod) && !values.bankAccountId) {
+      ctx.addIssue({ code: "custom", path: ["bankAccountId"], message: "Select a bank account for this payment method" });
+    }
+  });
 
 export type IncomeEntryFormValues = z.infer<typeof incomeEntrySchema>;
 

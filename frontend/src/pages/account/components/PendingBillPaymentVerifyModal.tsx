@@ -89,6 +89,12 @@ const PendingBillPaymentVerifyModal = ({ bill, payment, onClose }: PendingBillPa
               <span className="font-medium text-slate-800">{payment.transactionRef}</span>
             </div>
           )}
+          {payment.bankAccount && (
+            <div className="flex justify-between">
+              <span className="text-slate-500">Bank</span>
+              <span className="font-medium text-slate-800">{payment.bankAccount.bankName} — {payment.bankAccount.accountNumber}</span>
+            </div>
+          )}
           <div className="flex justify-between">
             <span className="text-slate-500">Submitted By</span>
             <span className="font-medium text-slate-800">{payment.creator?.name || "—"}</span>

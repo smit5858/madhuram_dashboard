@@ -91,10 +91,19 @@ const IncomeViewModal = ({ entry, onClose }: IncomeViewModalProps) => {
               <DetailItem
                 icon={Banknote}
                 label="Payment Method"
-                value={entry.paymentMethod ? PAYMENT_METHOD_LABEL[entry.paymentMethod] : undefined}
+                // Falls back to the raw value for one this entry's own map doesn't know about —
+                // e.g. "Multiple", auto-synced from a Sale whose collected amount was split
+                // across more than one payment method (see order.service.js#createOrder).
+                value={entry.paymentMethod ? PAYMENT_METHOD_LABEL[entry.paymentMethod] ?? entry.paymentMethod : undefined}
               />
-              {entry.paymentMethod === "BankTransfer" && (
-                <DetailItem icon={Banknote} label="Bank Name" value={entry.bankName} />
+              {(entry.paymentMethod === "BankTransfer" || entry.paymentMethod === "UPI") && (
+                <DetailItem
+                  icon={Banknote}
+                  label="Bank"
+                  // entry.bankAccount is the current "Select Bank" pick; entry.bankName is the
+                  // legacy free-text value from before that field existed.
+                  value={entry.bankAccount ? `${entry.bankAccount.bankName} — ${entry.bankAccount.accountNumber}` : entry.bankName}
+                />
               )}
             </Section>
 

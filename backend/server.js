@@ -396,10 +396,12 @@ const ensurePendingBillPaymentFieldsBackfilled = async () => {
   });
 };
 
-// The Sales module's "COD" payment method was retired in favor of "Cash" (already a distinct
-// option). Removing "COD" from the ENUM before sync({alter:true}) would leave any existing
-// rows still storing 'COD' pointing at a value the column no longer accepts — backfill them
-// first. Idempotent: a no-op once no row stores 'COD' anymore.
+// The "COD" payment method was retired everywhere in favor of "Cash" (already a distinct
+// option — COD meant collected on delivery, Cash means paid in person at the store/office, and
+// conflating them was the whole reason for this change). Removing "COD" from a column's ENUM
+// before sync({alter:true}) would leave any existing rows still storing 'COD' pointing at a
+// value the column no longer accepts — backfill them first. Idempotent: a no-op once no row
+// stores 'COD' anymore.
 const ensureCodPaymentMethodBackfilled = async () => {
   const queryInterface = sequelize.getQueryInterface();
   const tables = await queryInterface.showAllTables();
@@ -410,6 +412,27 @@ const ensureCodPaymentMethodBackfilled = async () => {
   }
   if (tableNames.includes("sale_payments")) {
     await sequelize.query("UPDATE sale_payments SET method = 'Cash' WHERE method = 'COD'");
+  }
+  if (tableNames.includes("account_entries")) {
+    await sequelize.query("UPDATE account_entries SET paymentMethod = 'Cash' WHERE paymentMethod = 'COD'");
+  }
+};
+
+// "Cheque" was retired as a payment method (Customer Ledger and Pending Bill Payments both
+// offered it) with no direct equivalent among the remaining options, so existing rows fall back
+// to "Other" rather than a misleading Cash/UPI/BankTransfer/Card guess. Same
+// backfill-before-sync({alter:true}) reasoning as ensureCodPaymentMethodBackfilled above.
+// Idempotent: a no-op once no row stores 'Cheque' anymore.
+const ensureChequePaymentMethodBackfilled = async () => {
+  const queryInterface = sequelize.getQueryInterface();
+  const tables = await queryInterface.showAllTables();
+  const tableNames = tables.map((table) => (typeof table === "string" ? table : table.tableName));
+
+  if (tableNames.includes("customer_ledger_entries")) {
+    await sequelize.query("UPDATE customer_ledger_entries SET paymentMethod = 'Other' WHERE paymentMethod = 'Cheque'");
+  }
+  if (tableNames.includes("pending_bill_payments")) {
+    await sequelize.query("UPDATE pending_bill_payments SET paymentMethod = 'Other' WHERE paymentMethod = 'Cheque'");
   }
 };
 
@@ -518,6 +541,9 @@ sequelize
   })
   .then(() => {
     return ensureCodPaymentMethodBackfilled();
+  })
+  .then(() => {
+    return ensureChequePaymentMethodBackfilled();
   })
   .then(() => {
     return ensureSaleBankAccountsAllowDuplicates();

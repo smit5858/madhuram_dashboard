@@ -1,4 +1,4 @@
-const { AccountEntry, User } = require("../models");
+const { AccountEntry, User, BankAccount } = require("../models");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const sequelize = require("../config/db");
@@ -7,6 +7,11 @@ const { notify } = require("../services/notification.service");
 const { canViewAllRecords } = require("../helper/permissionScope");
 
 const errorResponse = (res, err) => res.status(err.statusCode || 500).json({ success: false, message: err.message });
+
+// BankTransfer/UPI need a configured bank account named ("Select Bank") — matches
+// order.service.js#needsBankSplit's same two methods.
+const needsBankAccount = (paymentMethod) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
+const BANK_ACCOUNT_INCLUDE = { model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] };
 
 // AccountEntry reuses its Income columns (customerName/customerPhone/productName) for
 // Expense's Name/Mobile/Product fields — this maps the API's expense-shaped request/response
@@ -23,6 +28,8 @@ const serializeExpense = (row) => ({
   entryDate: row.entryDate,
   paymentMethod: row.paymentMethod,
   bankName: row.bankName,
+  bankAccountId: row.bankAccountId,
+  bankAccount: row.bankAccount || null,
   description: row.description,
   status: row.status,
   creator: row.creator || null,
@@ -64,7 +71,7 @@ exports.getExpenses = async (req, res) => {
 
     const { rows, count } = await AccountEntry.findAndCountAll({
       where,
-      include: [{ model: User, as: "creator", attributes: ["id", "name"] }],
+      include: [{ model: User, as: "creator", attributes: ["id", "name"] }, BANK_ACCOUNT_INCLUDE],
       order: [["entryDate", "DESC"], ["createdAt", "DESC"]],
       limit: limitNum,
       offset: (pageNum - 1) * limitNum,
@@ -116,7 +123,7 @@ exports.getExpenseById = async (req, res) => {
   try {
     const entry = await AccountEntry.findOne({
       where: { id: req.params.id, entryType: "EXPENSE", category: { [Op.ne]: "Pending Bill" } },
-      include: [{ model: User, as: "creator", attributes: ["id", "name"] }],
+      include: [{ model: User, as: "creator", attributes: ["id", "name"] }, BANK_ACCOUNT_INCLUDE],
     });
     if (!entry) return res.status(404).json({ success: false, message: "Expense not found" });
 
@@ -132,12 +139,13 @@ exports.getExpenseById = async (req, res) => {
 };
 
 const validateExpensePayload = (body) => {
-  const { name, amount, entryDate } = body || {};
+  const { name, amount, entryDate, paymentMethod, bankAccountId } = body || {};
   if (!name || !String(name).trim()) return "Name is required";
   if (amount === undefined || amount === null || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
     return "A valid amount greater than 0 is required";
   }
   if (!entryDate) return "Date is required";
+  if (needsBankAccount(paymentMethod) && !bankAccountId) return "Select a bank account for this payment method";
   return null;
 };
 
@@ -149,9 +157,9 @@ exports.createExpense = async (req, res) => {
     const validationError = validateExpensePayload(req.body);
     if (validationError) return res.status(400).json({ success: false, message: validationError });
 
-    const { customerId, name, mobile, product, amount, entryDate, paymentMethod, bankName, description } = req.body;
+    const { customerId, name, mobile, product, amount, entryDate, paymentMethod, bankAccountId, description } = req.body;
 
-    const entry = await AccountEntry.create({
+    let entry = await AccountEntry.create({
       entryType: "EXPENSE",
       category: "Expense",
       customerId: customerId || null,
@@ -161,11 +169,12 @@ exports.createExpense = async (req, res) => {
       amount: parseFloat(amount),
       entryDate,
       paymentMethod: paymentMethod || null,
-      bankName: paymentMethod === "BankTransfer" ? bankName || null : null,
+      bankAccountId: needsBankAccount(paymentMethod) ? bankAccountId || null : null,
       description: description || null,
       status: "PENDING",
       createdBy: req.user.id,
     });
+    entry = await AccountEntry.findByPk(entry.id, { include: [BANK_ACCOUNT_INCLUDE] });
 
     await notify([
       {
@@ -202,7 +211,7 @@ exports.updateExpense = async (req, res) => {
     });
     if (!entry) return res.status(404).json({ success: false, message: "Expense not found" });
 
-    const { customerId, name, mobile, product, amount, entryDate, paymentMethod, bankName, description, status } = req.body;
+    const { customerId, name, mobile, product, amount, entryDate, paymentMethod, bankAccountId, description, status } = req.body;
 
     const wasApproved = entry.status === "APPROVED";
     const oldDate = entry.entryDate;
@@ -214,7 +223,7 @@ exports.updateExpense = async (req, res) => {
     entry.amount = parseFloat(amount);
     entry.entryDate = entryDate;
     entry.paymentMethod = paymentMethod || null;
-    entry.bankName = paymentMethod === "BankTransfer" ? bankName || null : null;
+    entry.bankAccountId = needsBankAccount(paymentMethod) ? bankAccountId || null : null;
     entry.description = description || null;
     if (status && ["PENDING", "APPROVED", "REJECTED"].includes(status)) entry.status = status;
 
@@ -227,7 +236,9 @@ exports.updateExpense = async (req, res) => {
       if (oldDate !== entry.entryDate) await recalculateDay(oldDate);
     }
 
-    return res.status(200).json({ success: true, message: "Expense updated successfully", data: serializeExpense(entry) });
+    const withBank = await AccountEntry.findByPk(entry.id, { include: [BANK_ACCOUNT_INCLUDE] });
+
+    return res.status(200).json({ success: true, message: "Expense updated successfully", data: serializeExpense(withBank) });
   } catch (err) {
     return errorResponse(res, err);
   }

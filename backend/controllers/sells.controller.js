@@ -73,7 +73,18 @@ const buildSalesWhere = async (user, query) => {
   }
 
   if (platform) where.platform = { [Op.like]: `%${platform}%` };
-  if (paymentMethod) where.paymentMethod = paymentMethod;
+  // Matches any sale that used this method for at least one of its (possibly several) payments —
+  // not just a sale whose header paymentMethod is an exact match — so filtering by "Cash" still
+  // finds a split Cash+UPI order (header value "Multiple") that included a Cash payment.
+  if (paymentMethod) {
+    const matchingSaleIds = await Payment.findAll({
+      where: { method: paymentMethod },
+      attributes: ["saleId"],
+      group: ["saleId"],
+      raw: true,
+    });
+    where.id = { [Op.in]: matchingSaleIds.map((row) => row.saleId).concat([-1]) };
+  }
   if (status) where.status = status;
   if (city) where.city = { [Op.like]: `%${city}%` };
   if (customerName) where.customerName = { [Op.like]: `%${customerName}%` };
@@ -153,6 +164,7 @@ exports.exportSales = async (req, res) => {
         },
         { model: User, as: "creator", attributes: ["id", "name", "email"] },
         { model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] },
+        { model: Payment, as: "payments", attributes: ["id", "amount", "method"] },
       ],
       order: [["createdAt", "DESC"]],
     });
@@ -345,13 +357,12 @@ exports.updateSale = async (req, res) => {
       customerId,
       customerName,
       customerNumber,
-      paymentMethod,
       bankPayments,
+      payments,
       city,
       fromAddress,
       pincode,
       sellingAmount,
-      collectedAmount,
       status,
       notes,
       createCourierEntry,
@@ -371,15 +382,10 @@ exports.updateSale = async (req, res) => {
       return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to update this sale" });
     }
 
-    // Captured before any mutation below — used after save() to log the actual change (if any)
-    // against Payment history and the customer ledger, same as a real "Record Payment" would.
-    const previousCollectedAmount = parseFloat(sale.collectedAmount) || 0;
-
     if (platform !== undefined) sale.platform = platform;
     if (customerId !== undefined) sale.customerId = customerId;
     if (customerName !== undefined) sale.customerName = customerName;
     if (customerNumber !== undefined) sale.customerNumber = customerNumber;
-    if (paymentMethod !== undefined) sale.paymentMethod = paymentMethod;
     if (city !== undefined) sale.city = city;
     if (fromAddress !== undefined) sale.fromAddress = fromAddress;
     if (pincode !== undefined) sale.pincode = pincode;
@@ -398,7 +404,8 @@ exports.updateSale = async (req, res) => {
     }
 
     if (sellingAmount !== undefined) sale.sellingAmount = parseFloat(sellingAmount);
-    if (collectedAmount !== undefined) sale.collectedAmount = parseFloat(collectedAmount);
+    // Recomputed again below if `payments` adds/corrects a payment — this covers the
+    // sellingAmount-only edit case (no new payment) so pendingAmount/paymentStatus never go stale.
     sale.pendingAmount = Math.max(0, parseFloat(sale.sellingAmount) - parseFloat(sale.collectedAmount));
     sale.paymentStatus = orderService.computePaymentStatus({
       sellingAmount: parseFloat(sale.sellingAmount),
@@ -428,6 +435,17 @@ exports.updateSale = async (req, res) => {
       });
     }
 
+    // New payment entries submitted with this edit — e.g. the Sales member finishing a
+    // Lead-originated sale that started at ₹0 fills in the actual amount(s) collected right in
+    // this form, possibly split across more than one method. Each entry becomes its own Payment
+    // row and customer-ledger entry (see orderService.applyPaymentsToSale) — a positive amount is
+    // a real payment received, a negative one corrects an earlier over-collection. Mutates
+    // collectedAmount/pendingAmount/paymentStatus/paymentMethod on `sale` in-memory; persisted by
+    // the single sale.save() below together with every other header edit in this request.
+    if (payments !== undefined) {
+      await orderService.applyPaymentsToSale(sale, payments, { userId: user.id }, { transaction: t });
+    }
+
     await sale.save({ transaction: t });
 
     if (bankPaymentRows !== undefined) {
@@ -435,50 +453,6 @@ exports.updateSale = async (req, res) => {
       if (bankPaymentRows.length > 0) {
         await SaleBankAccount.bulkCreate(
           bankPaymentRows.map((row) => ({ saleId: sale.id, bankAccountId: row.bankAccountId, amount: row.amount })),
-          { transaction: t }
-        );
-      }
-    }
-
-    // Collected Amount is directly editable here (not just via "Record Payment") — e.g. the
-    // Sales member finishing a Lead-originated sale that started at ₹0 fills in the actual
-    // amount collected right in this form. Log the actual delta as a Payment row (Payment
-    // model: "the itemized history that Sale.collectedAmount is the running total of") and a
-    // matching customer-ledger entry, so payment history and the customer's running balance
-    // never drift from this edit. An increase is a real payment received (recordPayment, same
-    // ledger entry type the dedicated "Record Payment" flow creates) — a decrease is a
-    // correction, not a payment, so it's logged as an adjustment instead (recordPayment is
-    // credit-only and would reject a negative amount).
-    const collectedAmountDelta = parseFloat(sale.collectedAmount) - previousCollectedAmount;
-    if (collectedAmount !== undefined && Math.abs(collectedAmountDelta) > 0.001) {
-      const isPayment = collectedAmountDelta > 0;
-      await Payment.create(
-        {
-          saleId: sale.id,
-          amount: collectedAmountDelta,
-          method: sale.paymentMethod || null,
-          bankAccountId: sale.bankAccountId || null,
-          notes: isPayment ? "Payment recorded via sale edit" : "Collected amount corrected via sale edit",
-          createdBy: user.id,
-        },
-        { transaction: t }
-      );
-
-      if (sale.customerId) {
-        const ledgerRecordFn = isPayment ? customerLedgerService.recordPayment : customerLedgerService.recordAdjustment;
-        await ledgerRecordFn(
-          {
-            customerId: sale.customerId,
-            saleId: sale.id,
-            amount: collectedAmountDelta,
-            paymentMethod: sale.paymentMethod || null,
-            bankAccountId: sale.bankAccountId || null,
-            bankPayments: sale.bankAccountId
-              ? [{ bankAccountId: sale.bankAccountId, amount: Math.abs(collectedAmountDelta) }]
-              : [],
-            note: isPayment ? "Payment recorded via sale edit" : "Collected amount corrected via sale edit",
-            userId: user.id,
-          },
           { transaction: t }
         );
       }
@@ -613,14 +587,18 @@ exports.getPayments = async (req, res) => {
   }
 };
 
-// POST /sells/:id/payments
+// POST /sells/:id/payments — accepts either a `payments` array (one or more entries, e.g. the
+// remaining balance collected as part Cash/part UPI in one go) or the older single
+// {amount, method, bankAccountId, notes} shape, for backward compatibility.
 exports.recordPayment = async (req, res) => {
   try {
     const { id } = req.params;
     const user = req.user;
-    const { amount, method, bankAccountId, notes } = req.body || {};
+    const { amount, method, bankAccountId, transactionRef, notes, payments } = req.body || {};
 
-    const sale = await orderService.recordPayment({ saleId: id, amount, method, bankAccountId, userId: user.id, notes });
+    const sale = Array.isArray(payments)
+      ? await orderService.recordPayments({ saleId: id, payments, userId: user.id })
+      : await orderService.recordPayment({ saleId: id, amount, method, bankAccountId, transactionRef, userId: user.id, notes });
     return res.status(200).json({ success: true, message: "Payment recorded successfully", data: sale });
   } catch (err) {
     return errorResponse(res, err);

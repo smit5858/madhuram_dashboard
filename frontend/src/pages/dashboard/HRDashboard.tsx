@@ -2,6 +2,7 @@ import { Users, UserCheck, UserX, FileClock, ClipboardCheck, UserPlus, Info } fr
 import KpiCard from "./components/KpiCard";
 import GenericTrendChart from "./components/GenericTrendChart";
 import { HR_MOCK_TOTALS, HR_MOCK_ACTIVITY, getHrAttendanceTrend } from "./mock/hrMockData";
+import { formatDisplayDate } from "@/shared/utils/date";
 
 // HR dashboard — no Employee/Attendance/Leave/Payroll model exists anywhere in this codebase
 // yet, so every number here is static sample data from mock/hrMockData.ts (also the source
@@ -50,7 +51,7 @@ const HRDashboard = () => {
                 <p className="truncate text-sm font-medium text-slate-800">{row.name}</p>
                 <p className="text-[11px] text-slate-400">{row.activity}</p>
               </div>
-              <span className="shrink-0 text-xs text-slate-400">{row.date}</span>
+              <span className="shrink-0 text-xs text-slate-400">{formatDisplayDate(row.date)}</span>
             </li>
           ))}
         </ul>

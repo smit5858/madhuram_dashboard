@@ -391,7 +391,7 @@ const Leads = () => {
                           <LeadStatusBadge status={lead.status} />
                         </div>
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-gray-500">{lead.createdAt?.slice(0, 10)}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-500">{formatDisplayDate(lead.createdAt)}</td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div className="flex items-center gap-2">
                           <button

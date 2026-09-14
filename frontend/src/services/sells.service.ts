@@ -32,10 +32,22 @@ export interface PaymentData {
   method?: "Cash" | "UPI" | "Card" | "BankTransfer" | "Other" | null;
   bankAccountId?: number | null;
   bankAccount?: { id: number; bankName: string; accountHolderName: string; accountNumber: string } | null;
+  /** Optional transaction/reference number for this specific payment — most useful for UPI/BankTransfer. */
+  transactionRef?: string | null;
   notes?: string | null;
   createdAt?: string;
   creator?: { id: number; name: string };
   Sale?: { id: number; customerName: string; sellingAmount: number; paymentStatus?: string };
+}
+
+/** One entry in a multi-payment-method write payload — see PAYMENT_METHOD_OPTIONS/PaymentsEditor.
+ *  A sale/order can be paid for with more than one of these at once (e.g. part Cash, part UPI). */
+export interface PaymentEntry {
+  method: "Cash" | "UPI" | "Card" | "BankTransfer" | "Other";
+  amount: number;
+  bankAccountId?: number | null;
+  transactionRef?: string | null;
+  notes?: string | null;
 }
 
 export interface SaleData {
@@ -45,7 +57,10 @@ export interface SaleData {
   customerId?: number;
   customerName: string;
   customerNumber?: string;
-  paymentMethod?: "Cash" | "UPI" | "Card" | "BankTransfer" | "Other";
+  /** Read-only quick-glance summary of the sale's Payment rows: null (nothing collected yet), the
+   *  single method used, or "Multiple" once more than one distinct method contributed to
+   *  collectedAmount. The itemized breakdown always lives in `payments`. */
+  paymentMethod?: "Cash" | "UPI" | "Card" | "BankTransfer" | "Other" | "Multiple";
   /** Legacy single-account fields — superseded by `bankPayments` (amount per bank), kept for
    *  backend responses that still mirror the first allocation's bank. */
   bankAccountId?: number | null;
@@ -109,11 +124,9 @@ export interface CreateSalePayload {
   customerId?: number;
   customerName: string;
   customerNumber?: string;
-  paymentMethod?: string;
-  /** Splits the sale's collected amount across bank accounts — one {bankAccountId, amount} row
-   *  per allocation. The same bank account may appear in more than one row (never merged), and
-   *  the rows' amounts must not exceed the collected amount. */
-  bankPayments?: { bankAccountId: number; amount: number }[];
+  /** The order's initial payment(s) — one entry per method (e.g. part Cash, part UPI). Omit or
+   *  leave empty for an order with nothing collected yet. collectedAmount is derived as the sum. */
+  payments?: PaymentEntry[];
   city?: string;
   fromAddress?: string;
   pincode?: string;
@@ -127,6 +140,8 @@ export interface CreateSalePayload {
    *  negative. Distinct from the monthly Courier Charge aggregate on the Couriers page. */
   courierCharge?: number;
   sellingAmount: number;
+  /** Derived from `payments` — kept for callers (e.g. a Lead's placeholder sale) that don't
+   *  collect anything at creation and never send `payments` at all. */
   collectedAmount: number;
   notes?: string;
   /** Whether to create a Courier record for each order line after the sale is created.
@@ -194,7 +209,7 @@ const getSaleById = (id: number) =>
 const createSale = (data: CreateSalePayload) =>
   httpService.post<{ success: boolean; message: string; data: SaleData }>("/sells", data);
 
-const updateSale = (id: number, data: Partial<SaleData>) =>
+const updateSale = (id: number, data: Omit<Partial<SaleData>, "payments"> & { payments?: PaymentEntry[] }) =>
   httpService.put<{ success: boolean; message: string; data: SaleData }>(`/sells/${id}`, data);
 
 const deleteSale = (id: number, options?: CancelSaleOptions) =>
@@ -206,8 +221,13 @@ const exportSales = (format: "pdf" | "excel", filters?: SalesFilters) =>
 const getPayments = (saleId: number) =>
   httpService.get<{ success: boolean; data: PaymentData[] }>(`/sells/${saleId}/payments`);
 
-const recordPayment = (saleId: number, data: { amount: number; method?: string; bankAccountId?: number | null; notes?: string }) =>
+const recordPayment = (saleId: number, data: { amount: number; method?: string; bankAccountId?: number | null; transactionRef?: string; notes?: string }) =>
   httpService.post<{ success: boolean; message: string; data: SaleData }>(`/sells/${saleId}/payments`, data);
+
+// Records one or more new payments against an existing sale in one call — e.g. the remaining
+// balance collected as part Cash/part UPI at once. See PaymentEntry.
+const recordPayments = (saleId: number, payments: PaymentEntry[]) =>
+  httpService.post<{ success: boolean; message: string; data: SaleData }>(`/sells/${saleId}/payments`, { payments });
 
 // Adds a new product line to an existing sale — lets a Sales member finish filling in a sale
 // after the fact (e.g. a Lead-originated sale that started with just one placeholder line).
@@ -231,6 +251,7 @@ export default {
   exportSales,
   getPayments,
   recordPayment,
+  recordPayments,
   addSaleItem,
   updateSaleItem,
 };

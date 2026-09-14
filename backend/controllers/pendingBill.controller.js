@@ -1,4 +1,4 @@
-const { PendingBill, PendingBillPayment, AccountEntry, Product, Dealer, User } = require("../models");
+const { PendingBill, PendingBillPayment, AccountEntry, Product, Dealer, User, BankAccount } = require("../models");
 const { Op } = require("sequelize");
 const sequelize = require("../config/db");
 const { recalculateDay } = require("../services/dailyBalance.service");
@@ -17,10 +17,14 @@ const BILL_INCLUDE = [
 const PAYMENT_INCLUDE = [
   { model: User, as: "creator", attributes: ["id", "name"] },
   { model: User, as: "verifier", attributes: ["id", "name"] },
+  { model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] },
 ];
 
 const VALID_STATUSES = ["PENDING", "PARTIALLY_PAID", "PENDING_VERIFICATION", "APPROVED", "REJECTED", "CANCELLED"];
-const VALID_PAYMENT_METHODS = ["Cash", "UPI", "Card", "BankTransfer", "Cheque", "Other"];
+const VALID_PAYMENT_METHODS = ["Cash", "UPI", "Card", "BankTransfer", "Other"];
+// BankTransfer/UPI need a configured bank account named ("Select Bank") — matches
+// order.service.js#needsBankSplit's same two methods.
+const needsBankAccount = (paymentMethod) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
 
 const serializePendingBill = (row) => ({
   id: row.id,
@@ -58,6 +62,8 @@ function serializePayment(p) {
     paymentMethod: p.paymentMethod,
     paymentDate: p.paymentDate,
     transactionRef: p.transactionRef,
+    bankAccountId: p.bankAccountId,
+    bankAccount: p.bankAccount || null,
     notes: p.notes,
     status: p.status,
     createdBy: p.createdBy,
@@ -332,7 +338,7 @@ exports.cancelPendingBill = async (req, res) => {
 // Verification"; only once Admin verifies it does it count toward the paid amount.
 exports.createPayment = async (req, res) => {
   try {
-    const { amount, paymentMethod, paymentDate, transactionRef, notes } = req.body || {};
+    const { amount, paymentMethod, paymentDate, transactionRef, bankAccountId, notes } = req.body || {};
 
     const parsedAmount = parseFloat(amount);
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
@@ -343,6 +349,9 @@ exports.createPayment = async (req, res) => {
     }
     if (!paymentDate) {
       return res.status(400).json({ success: false, message: "paymentDate is required" });
+    }
+    if (needsBankAccount(paymentMethod) && !bankAccountId) {
+      return res.status(400).json({ success: false, message: "Select a bank account for this payment method" });
     }
 
     const { bill, payment } = await sequelize.transaction(async (transaction) => {
@@ -370,6 +379,7 @@ exports.createPayment = async (req, res) => {
           paymentMethod,
           paymentDate,
           transactionRef: transactionRef || null,
+          bankAccountId: needsBankAccount(paymentMethod) ? bankAccountId || null : null,
           notes: notes || null,
           status: "Pending Verification",
           createdBy: req.user.id,
@@ -378,7 +388,7 @@ exports.createPayment = async (req, res) => {
       );
 
       const { bill: updatedBill } = await pendingBillService.recalculateStatus(row.id, { transaction });
-      return { bill: updatedBill, payment: newPayment };
+      return { bill: updatedBill, payment: await PendingBillPayment.findByPk(newPayment.id, { include: PAYMENT_INCLUDE, transaction }) };
     });
 
     await notify([

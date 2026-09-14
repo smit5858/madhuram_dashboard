@@ -123,6 +123,11 @@ AccountEntry.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
 Customer.hasMany(AccountEntry, { foreignKey: "customerId" });
 AccountEntry.belongsTo(Customer, { foreignKey: "customerId", as: "customer" });
 
+// BankAccount ↔ AccountEntry (which configured bank account an Income/Expense BankTransfer/UPI
+// entry used — the "Select Bank" field, same pattern as Sale/Payment below).
+BankAccount.hasMany(AccountEntry, { foreignKey: "bankAccountId" });
+AccountEntry.belongsTo(BankAccount, { foreignKey: "bankAccountId", as: "bankAccount" });
+
 // BankAccount ↔ Sale/Payment (which configured bank account a BankTransfer sale/payment used)
 BankAccount.hasMany(Sale, { foreignKey: "bankAccountId" });
 Sale.belongsTo(BankAccount, { foreignKey: "bankAccountId", as: "bankAccount" });
@@ -180,6 +185,11 @@ User.hasMany(PendingBillPayment, { foreignKey: "createdBy" });
 PendingBillPayment.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
 User.hasMany(PendingBillPayment, { foreignKey: "verifiedBy" });
 PendingBillPayment.belongsTo(User, { foreignKey: "verifiedBy", as: "verifier" });
+
+// BankAccount ↔ PendingBillPayment (which configured bank account a BankTransfer/UPI payment
+// used — the "Select Bank" field, same pattern as Sale/Payment above).
+BankAccount.hasMany(PendingBillPayment, { foreignKey: "bankAccountId" });
+PendingBillPayment.belongsTo(BankAccount, { foreignKey: "bankAccountId", as: "bankAccount" });
 
 // Lead ↔ User (the owning Sales Employee who created it + the Admin who approved/rejected it) +
 // Platform (lead source) + Product (what they're interested in) — see lead.model.js.

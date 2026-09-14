@@ -36,6 +36,12 @@ const Payment = sequelize.define(
         key: "id",
       },
     },
+    // Optional transaction/reference number for this specific payment entry — most useful for
+    // UPI/BankTransfer entries, but never enforced, since not every payment channel produces one.
+    transactionRef: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
     notes: {
       type: DataTypes.TEXT,
       allowNull: true,

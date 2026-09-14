@@ -1,6 +1,6 @@
-// Separate from paymentMethod.ts (used by Sale/Payment forms) — the ledger's payment method
-// list includes Cheque per the Customer Account spec, which the Sale/Payment enum doesn't have.
-// Kept isolated so existing Sale forms are unaffected.
+// Separate from paymentMethod.ts (used by Sale/Payment forms) so the ledger's own list can
+// diverge without touching existing Sale forms. "Cheque" was retired (no direct equivalent among
+// the remaining methods) — see backend server.js#ensureChequePaymentMethodBackfilled.
 export type LedgerPaymentMethod = "Cash" | "UPI" | "BankTransfer" | "Card" | "Other";
 
 export const LEDGER_PAYMENT_METHODS: LedgerPaymentMethod[] = ["Cash", "UPI", "BankTransfer", "Card", "Other"];

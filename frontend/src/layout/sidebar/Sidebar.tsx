@@ -1,6 +1,6 @@
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useSelector, useDispatch } from "react-redux";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { RootState } from "../../store/store";
 import { logout } from "../../store/slices/authSlice";
 import LOGO from "@/assets/logo.jpg";
@@ -15,6 +15,8 @@ import {
     Wallet,
     Contact,
     ChevronDown,
+    ChevronLeft,
+    ChevronRight,
     LogOut,
     Package,
     Settings,
@@ -30,6 +32,8 @@ import {
     ClipboardList,
     type LucideIcon,
 } from "lucide-react";
+
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "sidebar:collapsed";
 
 // Keyed by exact `path` (or `path + search` for children that share a path,
 // e.g. the couriers Outgoing/Incoming tabs) so each sidebar entry gets its
@@ -82,6 +86,24 @@ const Sidebar = () => {
         return activeGroup?.path ?? null;
     });
 
+    // Sidebar open/close (collapse) state. Persisted so the user's preference
+    // survives a refresh; purely a UI/layout concern, unrelated to permissions.
+    const [collapsed, setCollapsed] = useState<boolean>(() => {
+        try {
+            return window.sessionStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
+        } catch {
+            return false;
+        }
+    });
+
+    useEffect(() => {
+        try {
+            window.sessionStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+        } catch {
+            // Ignore storage failures (e.g. private browsing) — collapse still works for the session.
+        }
+    }, [collapsed]);
+
     const canReadRoutePaths = new Set(
         (permissions ?? [])
             .filter((permission) => permission.canRead)
@@ -129,16 +151,42 @@ const Sidebar = () => {
         setOpenGroupPath((prev) => (prev === path ? null : path));
     };
 
+    // Shared classes for a nav-item label: collapses to zero width/opacity
+    // instead of unmounting, so the width/opacity change can animate.
+    const labelClasses = `overflow-hidden whitespace-nowrap transition-all duration-200 ${
+        collapsed ? "max-w-0 opacity-0" : "ml-3 max-w-[10rem] opacity-100"
+    }`;
+
     return (
-        <div className="flex h-screen w-75 flex-col overflow-hidden border-r border-[#e0e0e0] bg-[#1e293b] text-slate-300">
+        <div
+            className={`relative flex h-screen flex-col border-r border-[#e0e0e0] bg-[#1e293b] text-slate-300 transition-[width] duration-200 ease-in-out ${
+                collapsed ? "w-20" : "w-75"
+            }`}
+        >
+            {/* Collapse/expand toggle — floats on the sidebar edge so it never
+                needs to reflow with the header content. */}
+            <button
+                type="button"
+                onClick={() => setCollapsed((prev) => !prev)}
+                title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+                aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+                className="absolute -right-3 top-8 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-slate-600 bg-slate-800 text-slate-300 shadow-md transition-colors hover:bg-slate-700 hover:text-white"
+            >
+                {collapsed ? <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.8} /> : <ChevronLeft className="h-3.5 w-3.5" strokeWidth={1.8} />}
+            </button>
+
             {/* Branding/Header */}
-            <div className="flex items-center gap-3 border-b border-slate-700 px-6 py-5 shrink-0">
+            <div
+                className={`flex items-center border-b border-slate-700 py-5 shrink-0 transition-all duration-200 ${
+                    collapsed ? "justify-center gap-0 px-2" : "gap-3 px-6"
+                }`}
+            >
                 <img
                     src={LOGO}
                     alt="Madhuram Motors Logo"
-                    className="h-10 w-10 rounded-full object-cover border-2 border-blue-500"
+                    className="h-10 w-10 shrink-0 rounded-full object-cover border-2 border-blue-500"
                 />
-                <div>
+                <div className={`overflow-hidden whitespace-nowrap transition-all duration-200 ${collapsed ? "max-w-0 opacity-0" : "max-w-[10rem] opacity-100"}`}>
                     <h2 className="text-base font-bold text-white tracking-wide">
                         Madhuram Motors
                     </h2>
@@ -163,42 +211,56 @@ const Sidebar = () => {
                                         <button
                                             type="button"
                                             onClick={() => toggleGroup(item.path)}
-                                            className="flex w-full items-center justify-between rounded-lg px-4 py-3 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
+                                            title={collapsed ? item.name : undefined}
+                                            className={`flex w-full items-center rounded-lg py-3 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 hover:text-white ${
+                                                collapsed ? "justify-center px-0" : "justify-between px-4"
+                                            }`}
                                         >
-                                            <span className={`flex items-center gap-3 ${hasActiveChild ? "text-blue-400" : ""}`}>
+                                            <span className={`flex items-center ${hasActiveChild ? "text-blue-400" : ""}`}>
                                                 {getIconForRoute(item.path)}
-                                                <span>{item.name}</span>
+                                                <span className={labelClasses}>{item.name}</span>
                                             </span>
-                                            <ChevronDown
-                                                className={`h-4 w-4 transition-transform ${isOpen ? "rotate-180" : ""}`}
-                                                strokeWidth={1.8}
-                                            />
+                                            {!collapsed && (
+                                                <ChevronDown
+                                                    className={`h-4 w-4 shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`}
+                                                    strokeWidth={1.8}
+                                                />
+                                            )}
                                         </button>
 
-                                        <div className={`${isOpen ? "block" : "hidden"} space-y-1 pt-1`}>
-                                            {item.children.map((child) => {
-                                                const childTarget = child.navPath ?? child.path;
-                                                const childHref = child.search ? `${childTarget}${child.search}` : childTarget;
-                                                const currentHref = `${location.pathname}${location.search}`;
-                                                const isChildActive = child.search
-                                                    ? currentHref.toLowerCase() === childHref.toLowerCase()
-                                                    : location.pathname.toLowerCase() === childTarget.toLowerCase();
+                                        <div
+                                            className={`grid overflow-hidden transition-all duration-200 ${
+                                                isOpen ? "grid-rows-[1fr] opacity-100 pt-1" : "grid-rows-[0fr] opacity-0"
+                                            }`}
+                                        >
+                                            <div className="space-y-1 overflow-hidden">
+                                                {item.children.map((child) => {
+                                                    const childTarget = child.navPath ?? child.path;
+                                                    const childHref = child.search ? `${childTarget}${child.search}` : childTarget;
+                                                    const currentHref = `${location.pathname}${location.search}`;
+                                                    const isChildActive = child.search
+                                                        ? currentHref.toLowerCase() === childHref.toLowerCase()
+                                                        : location.pathname.toLowerCase() === childTarget.toLowerCase();
 
-                                                return (
-                                                    <NavLink
-                                                        key={childHref}
-                                                        to={childHref}
-                                                        className={`ml-3 flex items-center gap-3 rounded-lg px-4 py-3 text-sm font-medium transition-all duration-150 ${
-                                                            isChildActive
-                                                                ? "bg-[#3d6fe0] text-white shadow-md shadow-blue-500/20"
-                                                                : "hover:bg-slate-800 hover:text-white"
-                                                        }`}
-                                                    >
-                                                        {getIconForRoute(child.path, child.search)}
-                                                        <span>{child.name}</span>
-                                                    </NavLink>
-                                                );
-                                            })}
+                                                    return (
+                                                        <NavLink
+                                                            key={childHref}
+                                                            to={childHref}
+                                                            title={collapsed ? child.name : undefined}
+                                                            className={`flex items-center rounded-lg py-3 text-sm font-medium transition-all duration-150 ${
+                                                                collapsed ? "justify-center px-0" : "ml-3 px-4"
+                                                            } ${
+                                                                isChildActive
+                                                                    ? "bg-[#3d6fe0] text-white shadow-md shadow-blue-500/20"
+                                                                    : "hover:bg-slate-800 hover:text-white"
+                                                            }`}
+                                                        >
+                                                            {getIconForRoute(child.path, child.search)}
+                                                            <span className={labelClasses}>{child.name}</span>
+                                                        </NavLink>
+                                                    );
+                                                })}
+                                            </div>
                                         </div>
                                     </div>
                                 );
@@ -210,40 +272,45 @@ const Sidebar = () => {
                                 <NavLink
                                     key={item.path}
                                     to={item.path}
-                                    className={`flex items-center gap-3 rounded-lg px-4 py-3 text-sm font-medium transition-all duration-150 ${
+                                    title={collapsed ? item.name : undefined}
+                                    className={`flex items-center rounded-lg py-3 text-sm font-medium transition-all duration-150 ${
+                                        collapsed ? "justify-center px-0" : "px-4"
+                                    } ${
                                         isActive
                                             ? "bg-[#3d6fe0] text-white shadow-md shadow-blue-500/20"
                                             : "hover:bg-slate-800 hover:text-white"
                                     }`}
                                 >
                                     {getIconForRoute(item.path)}
-                                    <span>{item.name}</span>
+                                    <span className={labelClasses}>{item.name}</span>
                                 </NavLink>
                             );
                         })
                     ) : (
-                        <div className="px-4 py-3 text-xs text-slate-500">
-                            No menu routes loaded.
+                        <div className={`py-3 text-xs text-slate-500 transition-all duration-200 ${collapsed ? "px-0 text-center" : "px-4"}`}>
+                            {collapsed ? "—" : "No menu routes loaded."}
                         </div>
                     )}
                 </nav>
 
             {/* Profile & Logout Footer */}
-            <div className="border-t border-slate-700 p-4 shrink-0">
-                <div className="flex items-center justify-between rounded-lg bg-slate-800/60 p-3">
-                    <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-white">
-                            {name || "Loading User..."}
-                        </p>
-                        <p className="text-xs text-blue-400 font-medium capitalize">
-                            Role: {role || "Staff"}
-                        </p>
-                    </div>
+            <div className={`border-t border-slate-700 shrink-0 transition-all duration-200 ${collapsed ? "p-2" : "p-4"}`}>
+                <div className={`flex items-center rounded-lg bg-slate-800/60 transition-all duration-200 ${collapsed ? "flex-col gap-2 p-2" : "justify-between p-3"}`}>
+                    {!collapsed && (
+                        <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-semibold text-white">
+                                {name || "Loading User..."}
+                            </p>
+                            <p className="text-xs text-blue-400 font-medium capitalize">
+                                Role: {role || "Staff"}
+                            </p>
+                        </div>
+                    )}
 
                     <button
                         onClick={handleLogout}
                         title="Logout"
-                        className="ml-3 rounded-md p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
+                        className={`rounded-md p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors ${collapsed ? "" : "ml-3"}`}
                     >
                         <LogOut className="h-5 w-5" strokeWidth={1.5} />
                     </button>

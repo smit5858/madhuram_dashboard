@@ -1,12 +1,13 @@
-export type PaymentMethod = "Cash" | "UPI" | "Card" | "COD" | "BankTransfer" | "Other";
+// "COD" (Collect On Delivery) was retired — "Cash" now unambiguously means paid in person at the
+// office/store, and COD-style collection is no longer a distinct payment method in this system.
+export type PaymentMethod = "Cash" | "UPI" | "Card" | "BankTransfer" | "Other";
 
-export const PAYMENT_METHODS: PaymentMethod[] = ["Cash", "UPI", "Card", "COD", "BankTransfer", "Other"];
+export const PAYMENT_METHODS: PaymentMethod[] = ["Cash", "UPI", "Card", "BankTransfer", "Other"];
 
 export const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
     Cash: "Cash",
     UPI: "UPI",
     Card: "Card",
-    COD: "COD",
     BankTransfer: "Bank Transfer",
     Other: "Other",
 };

@@ -13,6 +13,7 @@ import saleService, {
   type CreateSalePayload,
   type SalesFilters,
   type SellsTotalsData,
+  type PaymentEntry,
 } from "../../services/sells.service";
 import productService, {
   type ProductData,
@@ -25,6 +26,8 @@ import { COURIER_COMPANY_OTHER } from "@/shared/constants/courierCompanies";
 import CancelSaleModal from "@/shared/components/CancelSaleModal";
 import StockShortageModal, { type StockShortageItem } from "@/pages/sells/components/StockShortageModal";
 import ProductSearchSelect from "@/pages/sells/components/ProductSearchSelect";
+import PaymentsEditor from "@/pages/sells/components/PaymentsEditor";
+import { validatePaymentRows, sumPaymentRows, type PaymentRow } from "@/pages/sells/utils/paymentRows";
 import { blurNumberInputOnWheel } from "@/shared/utils/input";
 import { formatDisplayDate } from "@/shared/utils/date";
 
@@ -40,13 +43,18 @@ interface FormItem {
   productName?: string;
 }
 
-const PAYMENT_METHODS = [
-  "Cash",
-  "UPI",
-  "Card",
-  "BankTransfer",
-  "Other",
-] as const;
+// Converts draft payment rows to the wire shape without re-validating — used to build the actual
+// submit payload once handleSubmit's validatePaymentRows call has already confirmed the rows are
+// valid (including via the stock-shortage resolution paths, which reuse that same validated state).
+const toPaymentEntries = (rows: PaymentRow[]): PaymentEntry[] =>
+  rows
+    .filter((row) => row.amount.trim() !== "" && Number(row.amount) !== 0)
+    .map((row) => ({
+      method: row.method,
+      amount: Number(row.amount),
+      bankAccountId: (row.method === "BankTransfer" || row.method === "UPI") && row.bankAccountId ? Number(row.bankAccountId) : null,
+      transactionRef: row.transactionRef.trim() || null,
+    }));
 
 const ORDER_STATUS_OPTIONS = [
   { value: "", label: "All Status" },
@@ -270,15 +278,14 @@ const Sells = () => {
   // Optional shipping/courier charge for this sale — a plain numeric string like collectedAmount,
   // defaults to "0" (no charge), never allowed to go negative (see handleSubmit's validation).
   const [courierCharge, setCourierCharge] = useState<string>("0");
-  const [paymentMethod, setPaymentMethod] = useState<string>("UPI");
-  // Bank Account field — shown every time regardless of Payment Method, optional, and splits
-  // the collected amount across bank accounts. Each row is a {bankAccountId, amount} pair; the
-  // same bank account can appear in more than one row (rows are never merged).
-  const [bankPayments, setBankPayments] = useState<{ bankAccountId: number | ""; amount: string }[]>([]);
+  // Draft payment-method rows for this form session — for a new sale, this IS the whole
+  // collected amount; for an existing sale, these are NEW payment(s) added on top of whatever's
+  // already been collected (see effectiveCollectedAmount below). Each row can use a different
+  // method (e.g. part Cash, part UPI) — see PaymentsEditor.
+  const [paymentRows, setPaymentRows] = useState<PaymentRow[]>([]);
   const [city, setCity] = useState("");
   const [fromAddress, setFromAddress] = useState("");
   const [pincode, setPincode] = useState("");
-  const [collectedAmount, setCollectedAmount] = useState<string>("0");
   // Total Selling Amount — always a plain numeric string (never mixes a derived number with a
   // typed string, which is what let the field render literal "0" and mangle typed digits into
   // "05"-style values). `sellingAmountManuallyEdited` tracks whether the user has taken control
@@ -403,14 +410,11 @@ const Sells = () => {
 
   const effectiveSellingAmount = Number(manualSellingAmount) || 0;
 
-  const bankPaymentsTotal = useMemo(
-    () => bankPayments.reduce((sum, row) => sum + (Number(row.amount) || 0), 0),
-    [bankPayments]
-  );
+  const paymentRowsTotal = useMemo(() => sumPaymentRows(paymentRows), [paymentRows]);
 
-  // Once any bank split rows exist, they define the collected amount directly — the field is
-  // just a readOnly reflection of their sum instead of independently-tracked state.
-  const effectiveCollectedAmount = bankPayments.length > 0 ? bankPaymentsTotal : Number(collectedAmount) || 0;
+  // Creating a new sale: the draft payment rows ARE the whole collected amount. Editing an
+  // existing sale: they're NEW payment(s) added on top of whatever's already been collected.
+  const effectiveCollectedAmount = selectedSale ? Number(selectedSale.collectedAmount ?? 0) + paymentRowsTotal : paymentRowsTotal;
 
   const pendingAmount = Math.max(0, effectiveSellingAmount - effectiveCollectedAmount);
 
@@ -455,7 +459,7 @@ const Sells = () => {
 
   // Mutation: Update Sale
   const updateSaleMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: Partial<SaleData> }) =>
+    mutationFn: ({ id, data }: { id: number; data: Omit<Partial<SaleData>, "payments"> & { payments?: PaymentEntry[] } }) =>
       saleService.updateSale(id, data),
     onSuccess: (res) => {
       toast.success(res.data?.message || "Sale updated successfully");
@@ -518,23 +522,18 @@ const Sells = () => {
   // fall back to the list-row summary while the detail query is still loading.
   const detail: SaleData | null = saleDetail ?? selectedSale;
 
-  // Payment-history "Record Payment" mini-form state (inside the detail modal)
-  const [paymentAmount, setPaymentAmount] = useState("");
-  const [paymentMethodInput, setPaymentMethodInput] = useState<string>("Cash");
-  const [bankAccountIdInput, setBankAccountIdInput] = useState<number | "">("");
-  const [paymentNotes, setPaymentNotes] = useState("");
+  // "Record Payment" draft rows (inside the detail modal) — lets the remaining balance on an
+  // existing sale be collected as more than one method at once (e.g. part Cash, part UPI).
+  const [detailPaymentRows, setDetailPaymentRows] = useState<PaymentRow[]>([]);
 
-  const recordPaymentMutation = useMutation({
-    mutationFn: ({ saleId, amount, method, bankAccountId, notes }: { saleId: number; amount: number; method: string; bankAccountId?: number | null; notes?: string }) =>
-      saleService.recordPayment(saleId, { amount, method, bankAccountId, notes }),
+  const recordPaymentsMutation = useMutation({
+    mutationFn: ({ saleId, payments }: { saleId: number; payments: PaymentEntry[] }) => saleService.recordPayments(saleId, payments),
     onSuccess: (res) => {
       toast.success(res.data?.message || "Payment recorded successfully");
       queryClient.invalidateQueries({ queryKey: ["sells"] });
       queryClient.invalidateQueries({ queryKey: ["sells-totals"] });
       queryClient.invalidateQueries({ queryKey: ["sale-detail", selectedSale?.id] });
-      setPaymentAmount("");
-      setBankAccountIdInput("");
-      setPaymentNotes("");
+      setDetailPaymentRows([]);
     },
     onError: (err: any) => {
       toast.error(err.response?.data?.message || err.message || "Failed to record payment");
@@ -555,12 +554,10 @@ const Sells = () => {
     setCourierName("");
     setOtherCourierName("");
     setCourierCharge("0");
-    setPaymentMethod("UPI");
-    setBankPayments([]);
+    setPaymentRows([]);
     setCity("");
     setFromAddress("");
     setPincode("");
-    setCollectedAmount("0");
     setManualSellingAmount("0");
     setSellingAmountManuallyEdited(false);
     setNotes("");
@@ -596,18 +593,12 @@ const Sells = () => {
     setCourierName(courierNameIsOther ? COURIER_COMPANY_OTHER : savedCourierName);
     setOtherCourierName(courierNameIsOther ? savedCourierName : "");
     setCourierCharge(String(sale.courierCharge ?? 0));
-    setPaymentMethod(sale.paymentMethod || "UPI");
-    setBankPayments(
-      sale.bankPayments && sale.bankPayments.length > 0
-        ? sale.bankPayments.map((bp) => ({ bankAccountId: bp.bankAccountId, amount: String(bp.amount) }))
-        : sale.bankAccountId
-        ? [{ bankAccountId: sale.bankAccountId, amount: String(sale.collectedAmount ?? 0) }]
-        : []
-    );
+    // The draft payment rows start empty on Edit — they represent NEW payment(s) to add on top
+    // of whatever's already been collected (shown separately), not the sale's existing history.
+    setPaymentRows([]);
     setCity(sale.city || "");
     setFromAddress(sale.fromAddress || "");
     setPincode(sale.pincode || "");
-    setCollectedAmount(String(sale.collectedAmount ?? 0));
     // Prefer the saved sellingAmount, but fall back to the items' own total if it's missing/zero
     // (a legacy/bad record) so the field never opens showing an incorrect 0 — computed directly
     // from `sale.items` rather than the `calculatedItemsTotal` memo, since the `items` state
@@ -685,10 +676,7 @@ const Sells = () => {
   const closeDetailModal = () => {
     setIsDetailOpen(false);
     setSelectedSale(null);
-    setPaymentAmount("");
-    setPaymentMethodInput("Cash");
-    setBankAccountIdInput("");
-    setPaymentNotes("");
+    setDetailPaymentRows([]);
   };
 
   const handleAddItemRow = () => {
@@ -741,61 +729,6 @@ const Sells = () => {
     });
   };
 
-  const handleAddBankPaymentRow = () => {
-    setBankPayments((prev) => [...prev, { bankAccountId: "", amount: "" }]);
-  };
-
-  const handleRemoveBankPaymentRow = (index: number) => {
-    setBankPayments((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const handleBankPaymentChange = (
-    index: number,
-    field: "bankAccountId" | "amount",
-    value: number | "" | string
-  ) => {
-    setBankPayments((prev) => {
-      const copy = [...prev];
-      copy[index] = { ...copy[index], [field]: value } as { bankAccountId: number | ""; amount: string };
-      return copy;
-    });
-  };
-
-  // Validates the bank payment rows against the sale's total paid amount (the live
-  // Collected Amount input, editable both while creating and while editing). Returns the
-  // sanitized rows to submit, or null (after showing a toast) if invalid.
-  const validateBankPayments = (totalPaid: number) => {
-    if (paymentMethod === "Cash" || paymentMethod === "Other") return [];
-
-    // BankTransfer/UPI must name at least one bank account once there's an actual amount
-    // collected to attribute to it — mirrors order.service.js#normalizeBankPayments' server-side
-    // check so a bank-routed payment can never be saved with no bank account on it.
-    if (totalPaid > 0 && bankPayments.length === 0) {
-      toast.error("Select at least one bank account");
-      return null;
-    }
-
-    for (let i = 0; i < bankPayments.length; i++) {
-      const row = bankPayments[i];
-      if (!row.bankAccountId) {
-        toast.error(`Select a bank account for payment row #${i + 1}`);
-        return null;
-      }
-      if (!row.amount || Number(row.amount) <= 0) {
-        toast.error(`Enter a valid amount for payment row #${i + 1}`);
-        return null;
-      }
-    }
-
-    const total = bankPayments.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
-    if (total > totalPaid + 0.01) {
-      toast.error("Bank account payment amounts cannot exceed the total paid amount");
-      return null;
-    }
-
-    return bankPayments.map((row) => ({ bankAccountId: Number(row.bankAccountId), amount: Number(row.amount) }));
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -832,10 +765,14 @@ const Sells = () => {
       }
     }
 
-    // Bank payment rows split the total paid amount across bank accounts — validated against
-    // the live Collected Amount (editable both while creating and while editing).
-    const validatedBankPayments = validateBankPayments(effectiveCollectedAmount);
-    if (validatedBankPayments === null) return;
+    // The draft payment rows must not exceed the order total — for a new sale that's the whole
+    // selling amount; for an existing sale it's whatever's still pending (new rows are on top of
+    // what's already been collected, and may go negative to correct an over-collection).
+    const maxPaymentTotal = selectedSale
+      ? Math.max(0, effectiveSellingAmount - Number(selectedSale.collectedAmount ?? 0))
+      : effectiveSellingAmount;
+    const validatedPayments = validatePaymentRows(paymentRows, maxPaymentTotal, { allowNegative: !!selectedSale });
+    if (validatedPayments === null) return;
 
     if (selectedSale?.id) {
       const saleId = selectedSale.id;
@@ -902,13 +839,11 @@ const Sells = () => {
           to: to || "Madhuram Motor",
           courierName: resolvedCourierName || undefined,
           courierCharge: Number(courierCharge) || 0,
-          paymentMethod: paymentMethod as any,
-          bankPayments: validatedBankPayments,
+          payments: validatedPayments,
           city: city || undefined,
           fromAddress: fromAddress || undefined,
           pincode: pincode || undefined,
           sellingAmount: effectiveSellingAmount,
-          collectedAmount: effectiveCollectedAmount,
           notes: notes || undefined,
           createCourierEntry,
         },
@@ -953,15 +888,9 @@ const Sells = () => {
     );
     const sellingAmountForItems = sellingAmountManuallyEdited ? Number(manualSellingAmount) || 0 : itemsTotal;
 
-    // Bank Account isn't applicable to Cash/Other — never submit a stale selection carried
-    // over from a different payment method. Rows were already validated in handleSubmit before
-    // this is called (including via the stock-shortage resolution paths, which run after it).
-    const bankPaymentsPayload =
-      paymentMethod === "Cash" || paymentMethod === "Other"
-        ? []
-        : bankPayments
-            .filter((row) => row.bankAccountId && Number(row.amount) > 0)
-            .map((row) => ({ bankAccountId: Number(row.bankAccountId), amount: Number(row.amount) }));
+    // Rows were already validated in handleSubmit before this is called (including via the
+    // stock-shortage resolution paths, which run after it) — just convert them to the wire shape.
+    const paymentsPayload = toPaymentEntries(paymentRows);
 
     return {
       customerId: customerId || undefined,
@@ -971,13 +900,12 @@ const Sells = () => {
       to: to || "Madhuram Motor",
       courierName: resolvedCourierName || undefined,
       courierCharge: Number(courierCharge) || 0,
-      paymentMethod,
-      bankPayments: bankPaymentsPayload,
+      payments: paymentsPayload,
       city: city || undefined,
       fromAddress: fromAddress || undefined,
       pincode: pincode || undefined,
       sellingAmount: sellingAmountForItems,
-      collectedAmount: effectiveCollectedAmount,
+      collectedAmount: paymentRowsTotal,
       notes: notes || undefined,
       createCourierEntry,
       items: payloadItems,
@@ -1696,29 +1624,6 @@ const Sells = () => {
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Payment Method
-                    </label>
-                    <select
-                      value={paymentMethod}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        setPaymentMethod(value);
-                        // Bank Account isn't applicable to Cash/Other — clear any rows entered
-                        // while a different method was active.
-                        if (value === "Cash" || value === "Other") setBankPayments([]);
-                      }}
-                      className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
-                    >
-                      {PAYMENT_METHODS.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       From
                     </label>
                     <input
@@ -1762,93 +1667,6 @@ const Sells = () => {
                     </div>
                   )}
 
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Bank Account Split{" "}
-                      <span className="font-normal text-slate-400">
-                        {(paymentMethod === "BankTransfer" || paymentMethod === "UPI") && effectiveCollectedAmount > 0
-                          ? "(required — select at least one bank account for the collected amount)"
-                          : "(optional — split the paid amount across bank accounts)"}
-                      </span>
-                    </label>
-                    {(() => {
-                      const isBankPaymentsDisabled = paymentMethod === "Cash" || paymentMethod === "Other";
-                      return (
-                        <div
-                          className={`rounded-lg border border-slate-200 bg-slate-50 p-2.5 ${
-                            isBankPaymentsDisabled ? "opacity-50" : ""
-                          }`}
-                        >
-                          {isBankPaymentsDisabled ? (
-                            <p className="text-[10px] text-slate-400">Not applicable for {paymentMethod} payments.</p>
-                          ) : bankAccountsList.length === 0 ? (
-                            <p className="text-[10px] text-amber-600">
-                              No bank accounts configured yet — add one under Account → Manage Bank Account Details.
-                            </p>
-                          ) : (
-                            <>
-                              {bankPayments.length === 0 && (
-                                <p className="text-[10px] text-slate-400 mb-2">
-                                  No bank account rows added — add one to record which bank(s) the payment went into.
-                                </p>
-                              )}
-                              <div className="space-y-2">
-                                {bankPayments.map((row, index) => (
-                                  <div key={index} className="flex items-center gap-2">
-                                    <select
-                                      value={row.bankAccountId}
-                                      onChange={(e) =>
-                                        handleBankPaymentChange(
-                                          index,
-                                          "bankAccountId",
-                                          e.target.value ? Number(e.target.value) : ""
-                                        )
-                                      }
-                                      className="flex-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
-                                    >
-                                      <option value="">-- Select Bank Account --</option>
-                                      {bankAccountsList.map((acc) => (
-                                        <option key={acc.id} value={acc.id}>
-                                          {acc.bankName} — {acc.accountHolderName}
-                                        </option>
-                                      ))}
-                                    </select>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      step="0.01"
-                                      value={row.amount}
-                                      onChange={(e) => handleBankPaymentChange(index, "amount", e.target.value)}
-                                      onWheel={blurNumberInputOnWheel}
-                                      placeholder="Amount"
-                                      className="w-28 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={() => handleRemoveBankPaymentRow(index)}
-                                      className="rounded p-1 text-slate-400 hover:text-rose-600 transition"
-                                      title="Remove Row"
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5" />
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                              <div className="mt-2">
-                                <button
-                                  type="button"
-                                  onClick={handleAddBankPaymentRow}
-                                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
-                                >
-                                  <Plus className="h-3 w-3" /> Add Payment Row
-                                </button>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      );
-                    })()}
-                  </div>
                 </div>
 
               </div>
@@ -2025,7 +1843,7 @@ const Sells = () => {
                   4. Payment & Amount Calculations
                 </h4>
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Total Selling Amount (₹)
@@ -2064,63 +1882,6 @@ const Sells = () => {
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Collected Amount (₹) *
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      required
-                      readOnly={bankPayments.length > 0}
-                      value={bankPayments.length > 0 ? String(effectiveCollectedAmount) : collectedAmount}
-                      onFocus={(e) => {
-                        // Typing into the default "0" appends after it (e.g. "0" + "5" = "05")
-                        // instead of replacing it — clear it on focus so the first keystroke starts fresh.
-                        if (e.target.value === "0") setCollectedAmount("");
-                      }}
-                      onBlur={() => {
-                        if (collectedAmount.trim() === "") setCollectedAmount("0");
-                      }}
-                      onChange={(e) => setCollectedAmount(e.target.value)}
-                      onWheel={blurNumberInputOnWheel}
-                      placeholder="0.00"
-                      className={`w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-emerald-600 focus:border-[#3d6fe0] focus:outline-none ${
-                        bankPayments.length > 0 ? "bg-slate-100" : "bg-white"
-                      }`}
-                    />
-                    {selectedSale && (
-                      <p className="mt-0.5 text-[10px] text-slate-400">
-                        {Number(selectedSale.collectedAmount ?? 0) === 0
-                          ? "Enter the amount actually collected — it's recorded as this sale's payment automatically."
-                          : "Increasing this records an additional payment; decreasing it records a correction. To log a same-day payment with its own method/notes instead, use \"Record Payment\" in the sale details."}
-                      </p>
-                    )}
-                    {bankPayments.length > 0 && (
-                      <p className="mt-0.5 text-[10px] text-slate-400">
-                        Auto-filled from the bank split rows below.
-                      </p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Pending Amount (₹)
-                    </label>
-                    <div
-                      className={`w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold ${pendingAmount > 0
-                        ? "bg-rose-50 text-rose-600"
-                        : "bg-slate-100 text-slate-500"
-                        }`}
-                    >
-                      ₹{pendingAmount.toLocaleString("en-IN")}
-                    </div>
-                    <p className="mt-0.5 text-[10px] text-slate-400">
-                      Auto-calculated: Selling − Collected
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Courier Charge (₹)
                     </label>
                     <input
@@ -2144,6 +1905,60 @@ const Sells = () => {
                     <p className="mt-0.5 text-[10px] text-slate-400">
                       Optional shipping/courier charge for this sale — 0 if none.
                     </p>
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Payment Method{" "}
+                    <span className="font-normal text-slate-400">
+                      {selectedSale ? "(add new payment(s) collected now)" : "(how the customer is paying — split across methods if needed)"}
+                    </span>
+                  </label>
+                  {selectedSale && (
+                    <p className="mb-2 text-[10px] text-slate-400">
+                      Already collected: ₹{Number(selectedSale.collectedAmount ?? 0).toLocaleString("en-IN")}. Rows below
+                      are added as new payment(s) on top of that — enter a negative amount to correct an
+                      over-collection instead.
+                    </p>
+                  )}
+                  <PaymentsEditor
+                    rows={paymentRows}
+                    onChange={setPaymentRows}
+                    bankAccounts={bankAccountsList}
+                    allowNegative={!!selectedSale}
+                    addLabel="Add Payment"
+                  />
+                </div>
+
+                <div className="mt-4 grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-4">
+                  <div>
+                    <span className="block text-[10px] font-bold uppercase text-slate-400">Order Total</span>
+                    <span className="text-sm font-bold text-slate-900">₹{effectiveSellingAmount.toLocaleString("en-IN")}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] font-bold uppercase text-slate-400">Total Paid</span>
+                    <span className="text-sm font-bold text-emerald-600">₹{effectiveCollectedAmount.toLocaleString("en-IN")}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] font-bold uppercase text-slate-400">Remaining</span>
+                    <span className={`text-sm font-bold ${pendingAmount > 0 ? "text-rose-600" : "text-slate-500"}`}>
+                      ₹{pendingAmount.toLocaleString("en-IN")}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] font-bold uppercase text-slate-400">Status</span>
+                    <span
+                      className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                        pendingAmount <= 0 && effectiveCollectedAmount > 0
+                          ? "bg-emerald-100 text-emerald-700"
+                          : effectiveCollectedAmount > 0
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      {pendingAmount <= 0 && effectiveCollectedAmount > 0 ? "Paid" : effectiveCollectedAmount > 0 ? "Partially Paid" : "Unpaid"}
+                    </span>
                   </div>
                 </div>
 
@@ -2322,7 +2137,7 @@ const Sells = () => {
                 Manage Line Items, Fulfillment & Courier History in Couriers →
               </button>
 
-              <div className="grid grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+              <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200 sm:grid-cols-4">
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase font-bold">
                     Selling Amount
@@ -2350,6 +2165,32 @@ const Sells = () => {
                       }`}
                   >
                     ₹{Number(detail.pendingAmount).toLocaleString("en-IN")}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px] uppercase font-bold">
+                    Status
+                  </span>
+                  <span
+                    className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                      detail.paymentStatus === "PAID"
+                        ? "bg-emerald-100 text-emerald-700"
+                        : detail.paymentStatus === "PARTIALLY_PAID"
+                          ? "bg-amber-100 text-amber-700"
+                          : detail.paymentStatus === "REFUNDED" || detail.paymentStatus === "PARTIALLY_REFUNDED"
+                            ? "bg-purple-100 text-purple-700"
+                            : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    {detail.paymentStatus === "PAID"
+                      ? "Paid"
+                      : detail.paymentStatus === "PARTIALLY_PAID"
+                        ? "Partially Paid"
+                        : detail.paymentStatus === "REFUNDED"
+                          ? "Refunded"
+                          : detail.paymentStatus === "PARTIALLY_REFUNDED"
+                            ? "Partially Refunded"
+                            : "Unpaid"}
                   </span>
                 </div>
               </div>
@@ -2395,6 +2236,7 @@ const Sells = () => {
                         <tr>
                           <th className="p-2.5">Date</th>
                           <th className="p-2.5">Method</th>
+                          <th className="p-2.5">Ref #</th>
                           <th className="p-2.5">Recorded By</th>
                           <th className="p-2.5 text-right">Amount</th>
                         </tr>
@@ -2407,13 +2249,14 @@ const Sells = () => {
                             </td>
                             <td className="p-2.5 text-slate-600">
                               {p.method || "—"}
-                              {p.method === "BankTransfer" && p.bankAccount && (
+                              {(p.method === "BankTransfer" || p.method === "UPI") && p.bankAccount && (
                                 <div className="text-[10px] text-slate-400">{p.bankAccount.bankName} — {p.bankAccount.accountNumber}</div>
                               )}
                             </td>
+                            <td className="p-2.5 text-slate-600">{p.transactionRef || "—"}</td>
                             <td className="p-2.5 text-slate-600">{p.creator?.name || "—"}</td>
-                            <td className="p-2.5 text-right font-bold text-emerald-600">
-                              ₹{Number(p.amount).toLocaleString("en-IN")}
+                            <td className={`p-2.5 text-right font-bold ${Number(p.amount) < 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                              {Number(p.amount) < 0 ? "-" : ""}₹{Math.abs(Number(p.amount)).toLocaleString("en-IN")}
                             </td>
                           </tr>
                         ))}
@@ -2425,79 +2268,35 @@ const Sells = () => {
                 </div>
 
                 {pagePermission.canUpdate && Number(detail.pendingAmount) > 0 && (
-                  <div className="mt-2.5 flex flex-wrap items-end gap-2 rounded-lg bg-emerald-50/60 border border-emerald-100 p-2.5">
-                    <div>
-                      <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-0.5">Amount (₹)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        max={Number(detail.pendingAmount)}
-                        value={paymentAmount}
-                        onChange={(e) => setPaymentAmount(e.target.value)}
-                        onWheel={blurNumberInputOnWheel}
-                        placeholder="0.00"
-                        className="w-24 rounded-md border border-emerald-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-0.5">Method</label>
-                      <select
-                        value={paymentMethodInput}
-                        onChange={(e) => setPaymentMethodInput(e.target.value)}
-                        className="rounded-md border border-emerald-200 bg-white px-2 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                  <div className="mt-2.5 rounded-lg bg-emerald-50/60 border border-emerald-100 p-2.5">
+                    <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-1.5">
+                      Record Payment — remaining ₹{Number(detail.pendingAmount).toLocaleString("en-IN")}
+                    </label>
+                    <PaymentsEditor
+                      rows={detailPaymentRows}
+                      onChange={setDetailPaymentRows}
+                      bankAccounts={bankAccountsList}
+                      addLabel="Add Payment"
+                    />
+                    {detailPaymentRows.length > 0 && (
+                      <button
+                        type="button"
+                        disabled={recordPaymentsMutation.isPending || !detail.id}
+                        onClick={() => {
+                          if (!detail.id) return;
+                          const validated = validatePaymentRows(detailPaymentRows, Number(detail.pendingAmount));
+                          if (validated === null) return;
+                          if (validated.length === 0) {
+                            toast.error("Enter a valid payment amount");
+                            return;
+                          }
+                          recordPaymentsMutation.mutate({ saleId: detail.id, payments: validated });
+                        }}
+                        className="mt-2 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
                       >
-                        {PAYMENT_METHODS.map((m) => (
-                          <option key={m} value={m}>{m}</option>
-                        ))}
-                      </select>
-                    </div>
-                    {paymentMethodInput === "BankTransfer" && (
-                      <div>
-                        <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-0.5">Bank Account</label>
-                        <select
-                          value={bankAccountIdInput}
-                          onChange={(e) => setBankAccountIdInput(e.target.value ? Number(e.target.value) : "")}
-                          className="rounded-md border border-emerald-200 bg-white px-2 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
-                        >
-                          <option value="">Select account</option>
-                          {bankAccountsList.map((acc) => (
-                            <option key={acc.id} value={acc.id}>{acc.bankName} — {acc.accountNumber}</option>
-                          ))}
-                        </select>
-                      </div>
+                        {recordPaymentsMutation.isPending ? "Recording..." : "Save Payment"}
+                      </button>
                     )}
-                    <div className="flex-1  x">
-                      <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-0.5">Note (optional)</label>
-                      <input
-                        type="text"
-                        value={paymentNotes}
-                        onChange={(e) => setPaymentNotes(e.target.value)}
-                        placeholder="e.g. remaining balance"
-                        className="w-full rounded-md border border-emerald-200 bg-white px-2 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      disabled={recordPaymentMutation.isPending || !detail.id}
-                      onClick={() => {
-                        const amt = Number(paymentAmount);
-                        if (!detail.id || !amt || amt <= 0) {
-                          toast.error("Enter a valid payment amount");
-                          return;
-                        }
-                        recordPaymentMutation.mutate({
-                          saleId: detail.id,
-                          amount: amt,
-                          method: paymentMethodInput,
-                          bankAccountId: paymentMethodInput === "BankTransfer" ? (bankAccountIdInput || null) : null,
-                          notes: paymentNotes || undefined,
-                        });
-                      }}
-                      className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
-                    >
-                      {recordPaymentMutation.isPending ? "Recording..." : "Record Payment"}
-                    </button>
                   </div>
                 )}
               </div>

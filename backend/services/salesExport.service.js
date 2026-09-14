@@ -24,6 +24,16 @@ const SALES_EXPORT_COLUMNS = [
   },
   { key: "platform", header: "Platform", width: 14, pdfWidth: 55, get: (s) => s.platform || "" },
   { key: "paymentMethod", header: "Payment Method", width: 16, pdfWidth: 60, get: (s) => s.paymentMethod || "" },
+  {
+    key: "paymentDetails",
+    header: "Payment Details",
+    width: 28,
+    pdfWidth: 110,
+    // Itemized breakdown for a split payment (e.g. "Cash: 2000.00, UPI: 3000.00") — the single
+    // paymentMethod column above only shows "Multiple" for these, so this is where the actual
+    // per-method amounts are visible in the export.
+    get: (s) => (s.payments || []).map((p) => `${p.method || "—"}: ${Number(p.amount || 0).toFixed(2)}`).join(", "),
+  },
   { key: "city", header: "City", width: 14, pdfWidth: 55, get: (s) => s.city || "" },
   { key: "to", header: "From", width: 16, pdfWidth: 60, get: (s) => s.to || "" },
   { key: "sellingAmount", header: "Selling Amount", width: 15, pdfWidth: 60, get: (s) => Number(s.sellingAmount || 0).toFixed(2) },

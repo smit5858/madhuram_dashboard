@@ -52,8 +52,8 @@ const createIncomeForSale = async (sale, { transaction, userId }) => {
       customerPhone: sale.customerNumber || null,
       productName,
       serialNumber,
-      // Income = cash actually received, not the full order value — a partially-paid/COD
-      // order's Income row starts at whatever was collected up front (0 for a pure COD order).
+      // Income = cash actually received, not the full order value — a partially-paid order's
+      // Income row starts at whatever was collected up front (0 for one with nothing collected yet).
       amount: parseFloat(sale.collectedAmount) || 0,
       entryDate,
       paymentMethod: sale.paymentMethod || null,

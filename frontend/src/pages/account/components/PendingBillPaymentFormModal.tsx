@@ -1,8 +1,9 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Field, Form, Formik, useFormikContext } from "formik";
 import toast from "react-hot-toast";
 import { XCircle } from "lucide-react";
 import pendingBillService, { type PendingBillData } from "@/services/pendingBill.service";
+import bankAccountService from "@/services/bankAccount.service";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
 import FormikDate from "@/shared/components/formik-fields/FormikDate";
 import FormikSelect from "@/shared/components/formik-fields/FormikSelect";
@@ -12,6 +13,8 @@ import {
   type PendingBillPaymentEntryFormValues,
 } from "@/validation/pendingBill.validation";
 import { getTodayISODate } from "@/shared/utils/date";
+
+const needsBankAccount = (paymentMethod?: string) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
 
 interface ApiErrorLike {
   response?: { data?: { message?: string } };
@@ -49,11 +52,18 @@ const PendingBillPaymentFormModal = ({ bill, onClose }: PendingBillPaymentFormMo
   const queryClient = useQueryClient();
   const remaining = Number(bill.remainingAmount ?? bill.amount);
 
+  const { data: bankAccountsResponse } = useQuery({
+    queryKey: ["bank-accounts-active"],
+    queryFn: () => bankAccountService.getActiveBankAccounts(),
+  });
+  const bankAccountsList = bankAccountsResponse?.data?.data || [];
+
   const initialValues: PendingBillPaymentEntryFormValues = {
     amount: "",
     paymentMethod: "Cash",
     paymentDate: getTodayISODate(),
     transactionRef: "",
+    bankAccountId: "",
     notes: "",
   };
 
@@ -105,42 +115,53 @@ const PendingBillPaymentFormModal = ({ bill, onClose }: PendingBillPaymentFormMo
         </div>
 
         <Formik initialValues={initialValues} validate={validate} onSubmit={(values) => saveMutation.mutate(values)}>
-          <Form className="flex flex-1 flex-col overflow-hidden">
-            <div className="flex-1 overflow-y-auto px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2 flex flex-col gap-2">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Quick fill</span>
-                <QuickFillButtons remaining={remaining} />
+          {({ values }) => (
+            <Form className="flex flex-1 flex-col overflow-hidden">
+              <div className="flex-1 overflow-y-auto px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="sm:col-span-2 flex flex-col gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Quick fill</span>
+                  <QuickFillButtons remaining={remaining} />
+                </div>
+                <Field name="amount" label="Amount" type="number" placeholder="0.00" component={FormikInput} />
+                <Field name="paymentMethod" label="Payment Method" options={methodOptions} component={FormikSelect} />
+                <Field name="paymentDate" label="Payment Date" component={FormikDate} />
+                <Field name="transactionRef" label="Transaction / Reference No. (optional)" placeholder="e.g. UTR / cheque no." component={FormikInput} />
+                {needsBankAccount(values.paymentMethod) && (
+                  <Field
+                    name="bankAccountId"
+                    label="Select Bank"
+                    placeholder="Select a bank account"
+                    options={bankAccountsList.map((acc) => ({ value: String(acc.id), label: `${acc.bankName} — ${acc.accountHolderName}` }))}
+                    component={FormikSelect}
+                  />
+                )}
+                <div className="sm:col-span-2">
+                  <Field name="notes" label="Notes (optional)" placeholder="Optional notes" multiline component={FormikInput} />
+                </div>
               </div>
-              <Field name="amount" label="Amount" type="number" placeholder="0.00" component={FormikInput} />
-              <Field name="paymentMethod" label="Payment Method" options={methodOptions} component={FormikSelect} />
-              <Field name="paymentDate" label="Payment Date" component={FormikDate} />
-              <Field name="transactionRef" label="Transaction / Reference No. (optional)" placeholder="e.g. UTR / cheque no." component={FormikInput} />
-              <div className="sm:col-span-2">
-                <Field name="notes" label="Notes (optional)" placeholder="Optional notes" multiline component={FormikInput} />
+
+              <p className="px-6 pb-1 text-[11px] text-slate-400">
+                This payment will be recorded as Pending Verification until an Admin verifies it — it will not count toward the paid amount until then.
+              </p>
+
+              <div className="flex justify-end gap-2 border-t border-slate-100 px-6 py-4">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={saveMutation.isPending}
+                  className="rounded-lg bg-[#3d6fe0] px-4 py-2 text-xs font-bold text-white hover:bg-[#3560c4] disabled:opacity-50"
+                >
+                  {saveMutation.isPending ? "Submitting..." : "Record Payment"}
+                </button>
               </div>
-            </div>
-
-            <p className="px-6 pb-1 text-[11px] text-slate-400">
-              This payment will be recorded as Pending Verification until an Admin verifies it — it will not count toward the paid amount until then.
-            </p>
-
-            <div className="flex justify-end gap-2 border-t border-slate-100 px-6 py-4">
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={saveMutation.isPending}
-                className="rounded-lg bg-[#3d6fe0] px-4 py-2 text-xs font-bold text-white hover:bg-[#3560c4] disabled:opacity-50"
-              >
-                {saveMutation.isPending ? "Submitting..." : "Record Payment"}
-              </button>
-            </div>
-          </Form>
+            </Form>
+          )}
         </Formik>
       </div>
     </div>

@@ -93,8 +93,14 @@ const ExpenseViewModal = ({ entry, onClose }: ExpenseViewModalProps) => {
                 label="Payment Method"
                 value={entry.paymentMethod ? PAYMENT_METHOD_LABEL[entry.paymentMethod] : undefined}
               />
-              {entry.paymentMethod === "BankTransfer" && (
-                <DetailItem icon={Banknote} label="Bank Name" value={entry.bankName} />
+              {(entry.paymentMethod === "BankTransfer" || entry.paymentMethod === "UPI") && (
+                <DetailItem
+                  icon={Banknote}
+                  label="Bank"
+                  // entry.bankAccount is the current "Select Bank" pick; entry.bankName is the
+                  // legacy free-text value from before that field existed.
+                  value={entry.bankAccount ? `${entry.bankAccount.bankName} — ${entry.bankAccount.accountNumber}` : entry.bankName}
+                />
               )}
               <DetailItem icon={Receipt} label="Status" value={<ExpenseStatusBadge status={entry.status} />} />
             </Section>
