@@ -62,24 +62,57 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
         !!courier?.courierName && !companies.some((c) => c.name === courier.courierName);
     const [otherCompanyName, setOtherCompanyName] = useState(initialCompanyIsOther ? courier?.courierName || "" : "");
 
-    // Serial numbers stay editable whether the line is still reserved (not yet fulfilled) or
+    // Sale-linked couriers (direction OUT, created by order.service.js#createOrder) get one
+    // Courier row per SaleItem — the whole shipment is shown/edited as a group here rather
+    // than just the one row that happened to be clicked, so editing a multi-product order
+    // shows (and can update) every product in it, not only the first one.
+    const isSaleLinked = !!courier?.saleId;
+
+    // Serial numbers stay editable whether a line is still reserved (not yet fulfilled) or
     // already sold — inventoryService.reassignSerials swaps whichever state the unit is
     // currently in, so a wrong pick can still be corrected after fulfillment. Reserved takes
     // priority since a line is never in both states at once.
     const { data: saleDetailResponse } = useQuery({
         queryKey: ["courier-edit-sale-detail", courier?.saleId],
         queryFn: () => saleService.getSaleById(courier!.saleId!),
-        enabled: !!courier?.saleId && !!courier?.saleItemId,
+        enabled: isSaleLinked,
     });
     const sale = saleDetailResponse?.data?.data;
-    const saleItem = sale?.items?.find((i) => i.id === courier?.saleItemId);
-    const isSerialized = saleItem?.Product?.productType === "SERIALIZED";
-    const reservedSerials = (saleItem?.SerialUnits || []).filter((u) => u.status === "RESERVED").map((u) => u.serialNumber);
-    const committedSerials = (saleItem?.SerialUnits || []).filter((u) => u.status === "SOLD").map((u) => u.serialNumber);
-    const currentSerials = reservedSerials.length > 0 ? reservedSerials : committedSerials;
-    const requiredSerialCount = currentSerials.length;
-    const canEditSerials = isSerialized && requiredSerialCount > 0;
-    const showShipmentType = !!courier?.saleId && (sale?.items?.length ?? 0) > 1;
+
+    // Every Courier row created for this sale — needed to resolve each product's own row id so
+    // its own serial selection can be saved back independently (see handleSubmit).
+    const { data: siblingsResponse } = useQuery({
+        queryKey: ["courier-edit-siblings", courier?.saleId],
+        queryFn: () => courierService.getCouriers({ saleId: courier!.saleId! }),
+        enabled: isSaleLinked,
+    });
+    const courierRowBySaleItemId = new Map((siblingsResponse?.data?.data || []).map((c) => [c.saleItemId, c]));
+
+    // One entry per product in the sale, each carrying its own quantity, its own serial
+    // requirement, and its own currently-assigned serials — Product A's serials must never leak
+    // into Product B's picker, so each row is resolved independently from that item's own
+    // SerialUnits, never from a shared pool.
+    const productRows = (sale?.items || []).map((item) => {
+        const reserved = (item.SerialUnits || []).filter((u) => u.status === "RESERVED").map((u) => u.serialNumber);
+        const sold = (item.SerialUnits || []).filter((u) => u.status === "SOLD").map((u) => u.serialNumber);
+        const currentSerials = reserved.length > 0 ? reserved : sold;
+        return {
+            saleItemId: item.id as number,
+            courierId: courierRowBySaleItemId.get(item.id)?.id,
+            productId: item.productId,
+            name: item.Product?.name || item.productName || "Product",
+            quantity: item.quantity,
+            isSerialized: item.Product?.productType === "SERIALIZED",
+            requiredSerialCount: currentSerials.length,
+            currentSerials,
+        };
+    });
+
+    // The Ship Complete Order vs Ship Available Products choice only means anything when this
+    // sale actually has a product still waiting on stock — with every line already allocated
+    // there's nothing to split, so the control would just be a confusing no-op.
+    const hasBackorderedItems = (sale?.items || []).some((i) => (i.backorderedQuantity ?? 0) > 0);
+    const showShipmentType = !!courier?.saleId && (sale?.items?.length ?? 0) > 1 && hasBackorderedItems;
 
     const saveMutation = useMutation({
         mutationFn: (data: Partial<CourierData> & { serialNumbers?: string[] }) =>
@@ -97,6 +130,25 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
         },
     });
 
+    // Sale-linked, multi-row save: one PUT per product's own Courier row (there is no
+    // single-record "update the whole shipment" endpoint — each product is its own row, see
+    // order.service.js#createOrder), each carrying the shared shipment fields plus that
+    // product's own serial selection, so every product's serials update independently in one
+    // Save without disturbing its siblings.
+    const groupSaveMutation = useMutation({
+        mutationFn: (updates: { courierId: number; payload: Partial<CourierData> & { serialNumbers?: string[] } }[]) =>
+            Promise.all(updates.map((u) => courierService.updateCourier(u.courierId, u.payload))),
+        onSuccess: () => {
+            toast.success("Courier shipment updated successfully");
+            queryClient.invalidateQueries({ queryKey: ["couriers"] });
+            queryClient.invalidateQueries({ queryKey: ["courier-charge"] });
+            onClose();
+        },
+        onError: (err: any) => {
+            toast.error(err.response?.data?.message || err.message || "Failed to update courier shipment");
+        },
+    });
+
     const shipmentTypeMutation = useMutation({
         mutationFn: (shipmentType: ShipmentType) => courierService.updateShipmentType(courier!.id!, shipmentType),
         onSuccess: (res) => {
@@ -111,7 +163,9 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
 
     type FormValues = Omit<CourierEditFormValues, "city"> & {
         entryDate: string;
-        serialNumbers: string[];
+        // Keyed by saleItemId — each sale-linked product's serial selection lives independently
+        // here so Product A's picker can never touch Product B's selection.
+        serialsByItem: Record<number, string[]>;
     };
 
     const initialValues: FormValues = {
@@ -128,22 +182,29 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
         note: courier?.note || "",
         entryDate: courier?.entryDate || getTodayISODate(),
         to: courier?.to || "Madhuram Motor",
-        serialNumbers: currentSerials,
+        serialsByItem: Object.fromEntries(
+            productRows.filter((r) => r.isSerialized && r.requiredSerialCount > 0).map((r) => [r.saleItemId, r.currentSerials])
+        ),
     };
 
     const validate = (values: FormValues) => {
         const result = courierEditSchema.safeParse({ ...values, city });
-        const errors: Partial<Record<keyof FormValues, string>> = {};
+        const errors: Partial<Record<Exclude<keyof FormValues, "serialsByItem">, string>> & {
+            serialsByItem?: Record<number, string>;
+        } = {};
         if (!result.success) {
             for (const issue of result.error.issues) {
-                const field = issue.path[0] as keyof FormValues;
+                const field = issue.path[0] as Exclude<keyof FormValues, "serialsByItem">;
                 if (!errors[field]) errors[field] = issue.message;
             }
         }
-        if (canEditSerials) {
-            const serialError = validateSerialNumbers(values.serialNumbers || [], requiredSerialCount);
-            if (serialError) errors.serialNumbers = serialError;
+        const serialErrors: Record<number, string> = {};
+        for (const row of productRows) {
+            if (!row.isSerialized || row.requiredSerialCount === 0) continue;
+            const err = validateSerialNumbers(values.serialsByItem?.[row.saleItemId] || [], row.requiredSerialCount);
+            if (err) serialErrors[row.saleItemId] = err;
         }
+        if (Object.keys(serialErrors).length > 0) errors.serialsByItem = serialErrors;
         return errors;
     };
 
@@ -165,12 +226,14 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
             pincode: values.pincode || null,
             charge: values.charge ? parseFloat(values.charge) : null,
             address: values.address || null,
-            productName: values.productName || null,
+            // Product Name/Quantity are per-product for a sale-linked shipment (see the Products
+            // section below) — sending one shared value here would overwrite every product's own
+            // name/quantity with the same text, so they're only included for manual entries.
+            ...(isSaleLinked ? {} : { productName: values.productName || null, quantity: values.quantity ? parseInt(values.quantity, 10) : null }),
             freePickup,
             courierName: resolvedCourierName || undefined,
             trackId: values.trackId || null,
             kg: values.kg ? parseFloat(values.kg) : null,
-            quantity: values.quantity ? parseInt(values.quantity, 10) : null,
             note: values.note || null,
             entryDate: values.entryDate || undefined,
             to: values.to || "Madhuram Motor",
@@ -182,8 +245,18 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
             deliveryMode: isEdit ? undefined : "OFFICE_PICKUP",
         };
 
-        if (canEditSerials) {
-            data.serialNumbers = values.serialNumbers;
+        if (isSaleLinked && productRows.length > 0) {
+            const updates = productRows
+                .filter((row) => !!row.courierId)
+                .map((row) => {
+                    const payload: Partial<CourierData> & { serialNumbers?: string[] } = { ...data };
+                    if (row.isSerialized && row.requiredSerialCount > 0) {
+                        payload.serialNumbers = values.serialsByItem?.[row.saleItemId] || [];
+                    }
+                    return { courierId: row.courierId as number, payload };
+                });
+            groupSaveMutation.mutate(updates);
+            return;
         }
 
         saveMutation.mutate(data);
@@ -243,7 +316,11 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
                             </div>
 
                             <Field name="mobileNo" label="Mobile" placeholder="9876543210" component={FormikPhoneInput} />
-                            <Field name="productName" label="Product Name" placeholder="e.g. Engine Oil" component={FormikInput} />
+                            {/* Product Name is per-product for a sale-linked shipment (see the Products
+                                section below) — shown here only for manual (non-sale) entries. */}
+                            {!isSaleLinked && (
+                                <Field name="productName" label="Product Name" placeholder="e.g. Engine Oil" component={FormikInput} />
+                            )}
 
                             <div>
                                 <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide">City</label>
@@ -303,7 +380,11 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
 
                             <Field name="trackId" label="Track ID" placeholder="Tracking number" component={FormikInput} />
                             <Field name="entryDate" label="Date" component={FormikDate} />
-                            <Field name="quantity" label="Quantity" type="number" placeholder="Units to ship" component={FormikInput} />
+                            {/* Quantity is per-product for a sale-linked shipment (see the Products
+                                section below) — shown here only for manual (non-sale) entries. */}
+                            {!isSaleLinked && (
+                                <Field name="quantity" label="Quantity" type="number" placeholder="Units to ship" component={FormikInput} />
+                            )}
                             <Field name="to" label="To" placeholder="Madhuram Motor" component={FormikInput} />
 
                             {/* Always Office Pickup for this flow — locked, not user-editable. Submitted as
@@ -339,15 +420,44 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
                                 </div>
                             )}
 
-                            {canEditSerials && (
-                                <Field
-                                    name="serialNumbers"
-                                    label={requiredSerialCount > 1 ? "Serial Numbers" : "Product Serial Number"}
-                                    productId={saleItem?.productId}
-                                    requiredCount={requiredSerialCount}
-                                    currentlyAssigned={currentSerials}
-                                    component={FormikSerialPicker}
-                                />
+                            {/* Every product in this sale, each with its own quantity and (when serialized)
+                                its own independent serial-number picker — Product A's serials can never
+                                leak into Product B's since each Field below is scoped to that product's
+                                own productId and its own `serialsByItem.<saleItemId>` form field. */}
+                            {isSaleLinked && (
+                                <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-700">
+                                        Products{productRows.length > 0 ? ` (${productRows.length})` : ""}
+                                    </p>
+                                    {productRows.length === 0 ? (
+                                        <p className="text-xs text-slate-400">Loading products…</p>
+                                    ) : (
+                                        <div className="flex flex-col gap-3">
+                                            {productRows.map((row) => (
+                                                <div key={row.saleItemId} className="rounded-lg border border-slate-200 bg-white p-3">
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="text-sm font-semibold text-slate-800">{row.name}</span>
+                                                        <span className="text-xs font-medium text-slate-500">Qty: {row.quantity ?? "—"}</span>
+                                                    </div>
+                                                    {!row.isSerialized ? (
+                                                        <p className="mt-2 text-xs text-slate-400">Serial Number: Not Required</p>
+                                                    ) : row.requiredSerialCount === 0 ? (
+                                                        <p className="mt-2 text-xs text-slate-400">No serial numbers assigned to this product yet.</p>
+                                                    ) : (
+                                                        <Field
+                                                            name={`serialsByItem.${row.saleItemId}`}
+                                                            label={row.requiredSerialCount > 1 ? "Serial Numbers" : "Serial Number"}
+                                                            productId={row.productId}
+                                                            requiredCount={row.requiredSerialCount}
+                                                            currentlyAssigned={row.currentSerials}
+                                                            component={FormikSerialPicker}
+                                                        />
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
                             )}
 
                             <div className="sm:col-span-2">
@@ -358,8 +468,16 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
                                 <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
                                     Cancel
                                 </button>
-                                <button type="submit" disabled={saveMutation.isPending} className="rounded-lg bg-[#3d6fe0] px-4 py-2 text-sm font-semibold text-white hover:bg-[#3162d2]">
-                                    {saveMutation.isPending ? "Saving..." : isEdit ? "Save Changes" : "Create Courier"}
+                                <button
+                                    type="submit"
+                                    disabled={saveMutation.isPending || groupSaveMutation.isPending}
+                                    className="rounded-lg bg-[#3d6fe0] px-4 py-2 text-sm font-semibold text-white hover:bg-[#3162d2]"
+                                >
+                                    {saveMutation.isPending || groupSaveMutation.isPending
+                                        ? "Saving..."
+                                        : isEdit
+                                            ? "Save Changes"
+                                            : "Create Courier"}
                                 </button>
                             </div>
                         </Form>

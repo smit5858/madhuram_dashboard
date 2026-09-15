@@ -21,6 +21,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import courierService, { type CourierData } from "../../../services/courier.service";
 import courierCompanyService, { buildTrackingLink } from "../../../services/courierCompany.service";
+import saleService from "../../../services/sells.service";
 import { STATUS_LABEL, SHIPMENT_TYPE_LABEL, STATUS_BADGE_CLASS } from "../../../shared/constants/courierStatus";
 import { STOCK_STATUS_LABEL, STOCK_STATUS_BADGE_CLASS } from "../../../shared/constants/productStockStatus";
 import { formatDateTime, formatDisplayDate } from "../../../shared/utils/date";
@@ -83,6 +84,29 @@ const CourierViewModal = ({ courier, onClose }: CourierViewModalProps) => {
     enabled: !!courier.saleId,
   });
   const siblings = siblingsResponse?.data?.data || [];
+
+  // Same sale-detail fetch CourierEditModal uses to resolve each line's currently-assigned
+  // serial numbers (reserved takes priority over sold — a line is never in both states at
+  // once) — reused here read-only so the view shows "Serial Number: Not Required" for
+  // non-serialized lines and the actual assigned serials for serialized ones.
+  const { data: saleDetailResponse } = useQuery({
+    queryKey: ["courier-edit-sale-detail", courier.saleId],
+    queryFn: () => saleService.getSaleById(courier.saleId!),
+    enabled: !!courier.saleId,
+  });
+  const saleItems = saleDetailResponse?.data?.data?.items || [];
+  /** null = no sale-item data to show a Serial Number field for at all (not a sale-linked
+   *  line, or the detail fetch hasn't resolved yet). Otherwise an empty array means
+   *  "not a serialized product" (renders as "Not Required"), non-empty means the serials
+   *  currently reserved/sold against this line. */
+  const serialInfoForSaleItem = (saleItemId?: number | null): string[] | null => {
+    const item = saleItemId ? saleItems.find((i) => i.id === saleItemId) : undefined;
+    if (!item) return null;
+    if (item.Product?.productType !== "SERIALIZED") return [];
+    const reserved = (item.SerialUnits || []).filter((u) => u.status === "RESERVED").map((u) => u.serialNumber);
+    const sold = (item.SerialUnits || []).filter((u) => u.status === "SOLD").map((u) => u.serialNumber);
+    return reserved.length > 0 ? reserved : sold;
+  };
 
   const { data: companiesResponse } = useQuery({
     queryKey: ["courier-companies-picker"],
@@ -166,6 +190,18 @@ const CourierViewModal = ({ courier, onClose }: CourierViewModalProps) => {
                 }
               />
               <DetailItem icon={Layers} label="Quantity" value={courier.quantity} />
+              {(() => {
+                const serials = serialInfoForSaleItem(courier.saleItemId);
+                if (serials === null) return null;
+                return (
+                  <DetailItem
+                    icon={Hash}
+                    label={serials.length > 1 ? "Serial Numbers" : "Serial Number"}
+                    value={serials.length > 0 ? serials.join(", ") : "Not Required"}
+                    full
+                  />
+                );
+              })()}
               <DetailItem icon={Weight} label="Weight (KG)" value={courier.kg !== undefined && courier.kg !== null ? `${courier.kg} kg` : undefined} />
               <DetailItem icon={Building2} label="Courier Company" value={courier.courierName} />
               <DetailItem
@@ -229,25 +265,32 @@ const CourierViewModal = ({ courier, onClose }: CourierViewModalProps) => {
                   <thead className="bg-slate-50 text-slate-500">
                     <tr>
                       <th className="px-3 py-2.5 text-left font-semibold">Product</th>
+                      <th className="px-3 py-2.5 text-left font-semibold">Serial Number</th>
                       <th className="px-3 py-2.5 text-left font-semibold">Status</th>
                       <th className="px-3 py-2.5 text-left font-semibold">Shipment</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {siblings.map((s) => (
-                      <tr key={s.id} className={s.id === courier.id ? "bg-blue-50/40" : ""}>
-                        <td className="px-3 py-2.5 text-slate-700">
-                          {s.productName}
-                          {s.quantity ? ` × ${s.quantity}` : ""}
-                        </td>
-                        <td className="px-3 py-2.5">
-                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${STATUS_BADGE_CLASS[s.status || "PENDING"]}`}>
-                            {STATUS_LABEL[s.status || "PENDING"]}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2.5 text-slate-500 font-mono text-[10px]">{s.shipmentGroupId || "—"}</td>
-                      </tr>
-                    ))}
+                    {siblings.map((s) => {
+                      const serials = serialInfoForSaleItem(s.saleItemId);
+                      return (
+                        <tr key={s.id} className={s.id === courier.id ? "bg-blue-50/40" : ""}>
+                          <td className="px-3 py-2.5 text-slate-700">
+                            {s.productName}
+                            {s.quantity ? ` × ${s.quantity}` : ""}
+                          </td>
+                          <td className="px-3 py-2.5 font-mono text-[10px] text-slate-600">
+                            {serials === null ? "—" : serials.length > 0 ? serials.join(", ") : "Not Required"}
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${STATUS_BADGE_CLASS[s.status || "PENDING"]}`}>
+                              {STATUS_LABEL[s.status || "PENDING"]}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5 text-slate-500 font-mono text-[10px]">{s.shipmentGroupId || "—"}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
