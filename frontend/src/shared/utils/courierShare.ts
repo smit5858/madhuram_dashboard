@@ -38,12 +38,13 @@ export const formatCourierShareDate = (entryDate: string | null | undefined): st
 };
 
 /** "Product Name(qty)" list for the products a courier share message should mention. When the
- *  courier belongs to a multi-product shipment group, every sibling sharing that same
- *  `shipmentGroupId` is included (matches what CourierViewModal's "Products in this Order"
- *  table shows as actually going out together); otherwise it falls back to this record alone. */
+ *  courier belongs to a multi-product sale, every sibling sharing that same `saleId` is included
+ *  (matches what CourierViewModal's "Products in this Order" table shows as belonging to the
+ *  same order, even across a Ship Available Products split into separate shipment groups);
+ *  otherwise it falls back to this record alone. */
 export const getCourierProductsLine = (courier: CourierData, siblings?: CourierData[]): string => {
-  const grouped = courier.shipmentGroupId
-    ? (siblings || []).filter((s) => s.shipmentGroupId === courier.shipmentGroupId)
+  const grouped = courier.saleId
+    ? (siblings || []).filter((s) => s.saleId === courier.saleId)
     : [];
   const items = grouped.length > 0 ? grouped : [courier];
 

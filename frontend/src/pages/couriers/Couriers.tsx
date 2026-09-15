@@ -4,7 +4,7 @@ import { useSelector } from "react-redux";
 import { useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Formik, Form, Field, useFormikContext, type FormikProps } from "formik";
-import { Download, ChevronDown, ChevronRight, ExternalLink, Eye, PackageCheck, RotateCcw, Search, Truck } from "lucide-react";
+import { Download, ChevronDown, ExternalLink, Eye, PackageCheck, RotateCcw, Search, Truck } from "lucide-react";
 import { type RootState } from "../../store/store";
 import courierService, { type CourierData, type CourierFilters } from "../../services/courier.service";
 import courierCompanyService, { buildTrackingLink } from "../../services/courierCompany.service";
@@ -48,9 +48,9 @@ const StockStatusBadge = ({ status }: { status?: CourierData["productStockStatus
 
 // Renders one courier table with its own search filter — used to show
 // Pending and Completed couriers as two independently filterable lists. Rows are grouped by
-// shipmentGroupId (see utils/groupCouriers.ts) so a multi-product sale — which creates one
-// Courier record per line item (order.service.js#createOrder) — renders as a single
-// expandable entry instead of one row per product.
+// saleId (see utils/groupCouriers.ts) so a multi-product sale — which creates one Courier
+// record per line item (order.service.js#createOrder) — renders as a single expandable entry
+// instead of one row per product, even if it was later split across shipment groups.
 const CourierTable = ({
     title,
     badgeClassName,
@@ -64,7 +64,9 @@ const CourierTable = ({
     onView,
     onStatus,
     onEdit,
+    onStatusGroup,
     onDelete,
+    onDeleteGroup,
     columnsVariant = "full",
 }: {
     title: string;
@@ -81,7 +83,9 @@ const CourierTable = ({
     onView: (courier: CourierData) => void;
     onStatus: (courier: CourierData) => void;
     onEdit: (courier: CourierData) => void;
+    onStatusGroup: (group: CourierGroup) => void;
     onDelete: (courier: CourierData) => void;
+    onDeleteGroup: (group: CourierGroup) => void;
     /** "outgoing" trims the table to Sr No/Customer/Mobile/Product/Courier Company/Tracking ID/
      *  Action only — the Incoming table keeps the full column set. */
     columnsVariant?: "full" | "outgoing";
@@ -157,6 +161,7 @@ const CourierTable = ({
                             )}
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap">{courier.to || <span className="text-slate-300">—</span>}</td>
+                        <td className="px-4 py-3 whitespace-nowrap">{formatDisplayDate(courier.createdAt) || <span className="text-slate-300">—</span>}</td>
                     </>
                 ) : (
                     <>
@@ -271,6 +276,7 @@ const CourierTable = ({
         const commonCourierName = commonCourierValue(group.items, "courierName");
         const commonTrackId = commonCourierValue(group.items, "trackId");
         const commonTo = commonCourierValue(group.items, "to");
+        const commonCreatedAt = commonCourierValue(group.items, "createdAt");
         const matchedCompany = courierCompanies.find((c) => c.name === commonCourierName);
         const trackingLink = commonTrackId ? buildTrackingLink(matchedCompany?.trackingLinkTemplate, commonTrackId) : null;
 
@@ -287,11 +293,7 @@ const CourierTable = ({
                     <td className="px-4 py-3 font-mono text-xs text-slate-400">{srNo}</td>
                     <td className="px-4 py-3 font-semibold text-slate-900 whitespace-nowrap">
                         <div className="flex items-center gap-1.5">
-                            <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
                             {first.customerName || first.name || <span className="text-slate-300">—</span>}
-                            <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
-                                {group.items.length} items
-                            </span>
                         </div>
                     </td>
                     {columnsVariant === "outgoing" ? (
@@ -300,7 +302,7 @@ const CourierTable = ({
                             <td className="px-4 py-3 max-w-[220px]">
                                 <div className="flex flex-wrap gap-1">
                                     {group.items.map((item) => (
-                                        <span key={item.id} className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                                        <span key={item.id} className="inline-flex items-center rounded-sm px-2 py-0.5 text-[11px] font-medium ">
                                             {item.productName || "—"}{item.quantity ? ` ×${item.quantity}` : ""}
                                         </span>
                                     ))}
@@ -334,6 +336,7 @@ const CourierTable = ({
                                 )}
                             </td>
                             <td className="px-4 py-3 whitespace-nowrap">{commonTo || <span className="text-slate-300">—</span>}</td>
+                            <td className="px-4 py-3 whitespace-nowrap">{formatDisplayDate(commonCreatedAt) || <span className="text-slate-300">—</span>}</td>
                         </>
                     ) : (
                         <td className="px-4 py-3 text-xs text-slate-400" colSpan={14}>
@@ -351,6 +354,26 @@ const CourierTable = ({
                             </button>
                             {columnsVariant === "outgoing" && (
                                 <CourierShareButton courier={first} siblings={group.items} compact />
+                            )}
+                            {pagePermission.canUpdate && (
+                                <button
+                                    onClick={() => (group.saleId ? onStatusGroup(group) : onStatus(first))}
+                                    className="rounded p-1.5 text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700"
+                                    title="Update Status"
+                                >
+                                    <Truck className="h-4 w-4" />
+                                </button>
+                            )}
+                            {pagePermission.canDelete && (
+                                <button
+                                    onClick={() => (group.saleId ? onDeleteGroup(group) : onDelete(first))}
+                                    className="rounded p-1.5 text-red-500 hover:bg-red-50 hover:text-red-700"
+                                    title="Delete"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-4 w-4">
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                                    </svg>
+                                </button>
                             )}
                         </div>
                     </td>
@@ -399,6 +422,7 @@ const CourierTable = ({
                                 <th className="px-4 py-3 whitespace-nowrap">Courier Company Name</th>
                                 <th className="px-4 py-3 whitespace-nowrap">Tracking ID</th>
                                 <th className="px-4 py-3 whitespace-nowrap">To</th>
+                                <th className="px-4 py-3 whitespace-nowrap">Date</th>
                                 <th className="px-4 py-3 text-right whitespace-nowrap">Action</th>
                             </tr>
                         ) : (
@@ -593,7 +617,9 @@ const Couriers = () => {
     const [isCreatingCourier, setIsCreatingCourier] = useState(false);
     const [viewingCourier, setViewingCourier] = useState<CourierData | null>(null);
     const [statusCourier, setStatusCourier] = useState<CourierData | null>(null);
+    const [statusGroup, setStatusGroup] = useState<CourierGroup | null>(null);
     const [deletingCourier, setDeletingCourier] = useState<CourierData | null>(null);
+    const [deletingGroup, setDeletingGroup] = useState<CourierGroup | null>(null);
 
     const openCreateModal = () => {
         setEditingCourier(null);
@@ -632,6 +658,27 @@ const Couriers = () => {
         }
     };
 
+    // Mutation: Delete whole shipment group — the grouped entry's Delete action (see
+    // renderGroupRow). Removes every Courier row created for the group's sale together.
+    const deleteGroupMutation = useMutation({
+        mutationFn: (saleId: number) => courierService.deleteCourierBySale(saleId),
+        onSuccess: (res) => {
+            toast.success(res.data?.message || "Courier shipment deleted successfully");
+            queryClient.invalidateQueries({ queryKey: ["couriers"] });
+            queryClient.invalidateQueries({ queryKey: ["courier-charge"] });
+            setDeletingGroup(null);
+        },
+        onError: (err: any) => {
+            toast.error(err.response?.data?.message || err.message || "Failed to delete shipment");
+        },
+    });
+
+    const handleConfirmDeleteGroup = () => {
+        if (deletingGroup?.saleId) {
+            deleteGroupMutation.mutate(deletingGroup.saleId);
+        }
+    };
+
     // Mutation: Status change
     const statusMutation = useMutation({
         mutationFn: ({ id, status }: { id: number; status: string }) =>
@@ -647,6 +694,23 @@ const Couriers = () => {
         },
     });
 
+    // Mutation: Status change for a whole shipment group — applies to every product in the
+    // sale at once via updateCourierBySale, avoiding the per-row "Mixed" status drift a single
+    // updateCourier call on just the summary row would cause.
+    const groupStatusMutation = useMutation({
+        mutationFn: ({ saleId, status }: { saleId: number; status: string }) =>
+            courierService.updateCourierBySale(saleId, { status: status as CourierData["status"] }),
+        onSuccess: (res) => {
+            toast.success(res.data?.message || "Status updated successfully");
+            queryClient.invalidateQueries({ queryKey: ["couriers"] });
+            queryClient.invalidateQueries({ queryKey: ["courier-charge"] });
+            setStatusGroup(null);
+        },
+        onError: (err: any) => {
+            toast.error(err.response?.data?.message || err.message || "Failed to update status");
+        },
+    });
+
     const couriersList: CourierData[] = useMemo(() => response?.data?.data || [], [response]);
 
     // Incoming keeps its own simple client-side search box (out of scope for this feature —
@@ -655,10 +719,10 @@ const Couriers = () => {
     const [pendingSearch, setPendingSearch] = useState("");
     const [completedSearch, setCompletedSearch] = useState("");
 
-    // Groups every Courier row into one entry per shipment (shipmentGroupId) — see
-    // utils/groupCouriers.ts — so a multi-product sale shows as a single Pending/Completed
-    // entry instead of one per product line. A group counts as pending while any of its
-    // products still needs work, same rule the ungrouped list used per row.
+    // Groups every Courier row into one entry per sale (saleId) — see utils/groupCouriers.ts —
+    // so a multi-product sale shows as a single Pending/Completed entry instead of one per
+    // product line, even after a Ship Available Products split. A group counts as pending while
+    // any of its products still needs work, same rule the ungrouped list used per row.
     const allCourierGroups = useMemo(() => groupOutgoingCouriers(couriersList), [couriersList]);
     const pendingGroups = useMemo(() => allCourierGroups.filter((g) => g.pending), [allCourierGroups]);
     const completedGroups = useMemo(() => allCourierGroups.filter((g) => !g.pending), [allCourierGroups]);
@@ -864,7 +928,9 @@ const Couriers = () => {
                         onView={setViewingCourier}
                         onStatus={setStatusCourier}
                         onEdit={openEditModal}
+                        onStatusGroup={setStatusGroup}
                         onDelete={setDeletingCourier}
+                        onDeleteGroup={setDeletingGroup}
                         columnsVariant="outgoing"
                     />
                     <CourierTable
@@ -884,7 +950,9 @@ const Couriers = () => {
                         onView={setViewingCourier}
                         onStatus={setStatusCourier}
                         onEdit={openEditModal}
+                        onStatusGroup={setStatusGroup}
                         onDelete={setDeletingCourier}
+                        onDeleteGroup={setDeletingGroup}
                         columnsVariant="outgoing"
                     />
                 </div>
@@ -915,6 +983,20 @@ const Couriers = () => {
                 />
             )}
 
+            {/* Group Status Modal — the Truck action on a multi-product shipment's summary row */}
+            {statusGroup && (
+                <CourierStatusModal
+                    courier={statusGroup.items[0]}
+                    productLabel={`${statusGroup.items.length} products`}
+                    onClose={() => setStatusGroup(null)}
+                    isSubmitting={groupStatusMutation.isPending}
+                    onConfirm={(status) =>
+                        statusGroup.saleId &&
+                        groupStatusMutation.mutate({ saleId: statusGroup.saleId, status })
+                    }
+                />
+            )}
+
             {/* Delete Modal */}
             {deletingCourier && (
                 <DeleteCourierModal
@@ -925,8 +1007,20 @@ const Couriers = () => {
                 />
             )}
 
+            {/* Group Delete Modal — the Delete action on a multi-product shipment's summary row */}
+            {deletingGroup && (
+                <DeleteCourierModal
+                    courier={deletingGroup.items[0]}
+                    itemCount={deletingGroup.items.length}
+                    onClose={() => setDeletingGroup(null)}
+                    isSubmitting={deleteGroupMutation.isPending}
+                    onConfirm={handleConfirmDeleteGroup}
+                />
+            )}
+
         </div>
     );
 };
 
 export default Couriers;
+    

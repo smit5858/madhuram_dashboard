@@ -537,7 +537,8 @@ exports.updateCourier = async (req, res) => {
       courier.completedDate = new Date().toISOString().slice(0, 10);
     }
 
-    // Serial numbers can only be re-picked before this shipment has been fulfilled.
+    // Re-picks whichever serial numbers are currently assigned to this line — reserved (not yet
+    // fulfilled) or already sold (see inventoryService.reassignSerials for the swap logic).
     if (Array.isArray(serialNumbers) && serialNumbers.length > 0 && courier.saleItemId) {
       const saleItem = await SaleItem.findByPk(courier.saleItemId, { transaction: t, lock: true });
       if (saleItem) {
@@ -581,6 +582,161 @@ exports.updateCourier = async (req, res) => {
       success: true,
       message: "Courier updated successfully",
       data: courier,
+    });
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    return res.status(err.statusCode || 500).json({ success: false, message: err.message });
+  }
+};
+
+// PUT /couriers/sale/:saleId — updates the status across every Courier row created for one sale
+// at once. One sales entry produces one Courier row per product line (see
+// order.service.js#createOrder) — the frontend groups them into a single entry keyed on saleId
+// (utils/groupCouriers.ts) and this is that entry's Truck/status action, so a status set here is
+// consistent across every product in the sale instead of drifting per-row (which previously left
+// siblings showing "Mixed"). Scoped to saleId rather than shipmentGroupId so a "Ship Available
+// Products" split (which moves some rows to a second shipmentGroupId — see updateShipmentType
+// below) still lands on the same one Courier entry instead of splitting it in the UI.
+exports.updateCourierBySale = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const { saleId } = req.params;
+    const user = req.user;
+    const { status } = req.body || {};
+
+    if (status !== undefined && !COURIER_STATUSES.includes(status)) {
+      await t.rollback();
+      return res.status(400).json({ success: false, message: `status must be one of: ${COURIER_STATUSES.join(", ")}` });
+    }
+    if (status === "WAITING_FOR_STOCK") {
+      await t.rollback();
+      return res
+        .status(400)
+        .json({ success: false, message: "status \"WAITING_FOR_STOCK\" is system-managed and cannot be set directly" });
+    }
+
+    const groupRows = await Courier.findAll({ where: { saleId }, transaction: t, lock: true });
+    if (groupRows.length === 0) {
+      await t.rollback();
+      return res.status(404).json({ success: false, message: "No courier records found for this sale" });
+    }
+
+    const allowed = await verifyScope(groupRows[0], user);
+    if (!allowed) {
+      await t.rollback();
+      return res.status(403).json({ success: false, message: "Access denied: shipment is outside your allowed scope" });
+    }
+    if (!(await hasDirectionPermission(user, groupRows[0].direction, "update"))) {
+      await t.rollback();
+      return res.status(403).json({ success: false, message: "Insufficient permissions" });
+    }
+
+    const previousStatus = groupRows[0].status;
+    if (status !== undefined && status !== previousStatus) {
+      if (previousStatus === "WAITING_FOR_STOCK") {
+        await t.rollback();
+        return res.status(400).json({
+          success: false,
+          message: "This shipment is waiting for stock and will become available for processing automatically once every product in it is in stock.",
+        });
+      }
+      if (user.roleName !== "Admin" && STATUS_RANK[status] < STATUS_RANK[previousStatus]) {
+        await t.rollback();
+        return res.status(400).json({ success: false, message: "Cannot move a courier status backward" });
+      }
+    }
+
+    const entryDates = groupRows.map((c) => c.entryDate);
+    const today = new Date().toISOString().slice(0, 10);
+
+    for (const courier of groupRows) {
+      if (status !== undefined && status !== courier.status && courier.status !== "WAITING_FOR_STOCK") {
+        courier.status = status;
+        courier.pending = courier.status !== "DONE";
+        if (courier.status === "DONE" && !courier.completedDate) {
+          courier.completedDate = today;
+        }
+        await courier.save({ transaction: t });
+      }
+    }
+
+    await recalculateCourierChargeForDates(entryDates, { transaction: t });
+
+    await t.commit();
+
+    // Notify the salesperson who created the linked sale when the shipment is marked Done —
+    // once per sale, not once per product row.
+    if (previousStatus !== "DONE" && status === "DONE") {
+      const sale = await Sale.findByPk(saleId, { attributes: ["id", "invoiceNumber", "customerName", "createdBy"] });
+      if (sale && sale.createdBy) {
+        const productNames = groupRows.map((c) => c.productName).filter(Boolean).join(", ");
+        await notify([
+          {
+            recipientModule: "account",
+            recipientUserId: sale.createdBy,
+            type: "ORDER_FULFILLED",
+            title: "Order Delivered",
+            message: `Invoice ${sale.invoiceNumber}: ${productNames || "order"} for ${sale.customerName} marked Done by the courier team.`,
+            referenceType: "sale",
+            referenceId: sale.id,
+            event: "order_delivered",
+            payload: { sale: { id: sale.id, invoiceNumber: sale.invoiceNumber } },
+          },
+        ]);
+      }
+    }
+
+    const updated = await Courier.findAll({
+      where: { saleId },
+      include: [{ model: User, attributes: ["id", "name", "email"] }, SALE_ITEM_INCLUDE, SALE_INCLUDE],
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Courier shipment updated successfully",
+      data: updated,
+    });
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    return res.status(err.statusCode || 500).json({ success: false, message: err.message });
+  }
+};
+
+// DELETE /couriers/sale/:saleId — deletes every Courier row created for one sale at
+// once (the grouped entry's Delete action — see Couriers.tsx#renderGroupRow). Deleting rows
+// individually would orphan siblings still sharing the group's shared fields, so this always
+// removes the whole shipment together, same scope/permission checks as the single-row delete.
+exports.deleteCourierBySale = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const { saleId } = req.params;
+    const user = req.user;
+
+    const groupRows = await Courier.findAll({ where: { saleId }, transaction: t, lock: true });
+    if (groupRows.length === 0) {
+      await t.rollback();
+      return res.status(404).json({ success: false, message: "No courier records found for this sale" });
+    }
+
+    const allowed = await verifyScope(groupRows[0], user);
+    if (!allowed) {
+      await t.rollback();
+      return res.status(403).json({ success: false, message: "Access denied: shipment is outside your allowed scope" });
+    }
+    if (!(await hasDirectionPermission(user, groupRows[0].direction, "delete"))) {
+      await t.rollback();
+      return res.status(403).json({ success: false, message: "Insufficient permissions" });
+    }
+
+    const entryDates = groupRows.map((c) => c.entryDate);
+    await Courier.destroy({ where: { saleId }, transaction: t });
+    await recalculateCourierChargeForDates(entryDates, { transaction: t });
+
+    await t.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: "Courier shipment deleted successfully",
     });
   } catch (err) {
     if (!t.finished) await t.rollback();

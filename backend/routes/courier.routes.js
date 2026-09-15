@@ -24,9 +24,15 @@ router.put("/charge/reset", authenticate, courierChargeController.resetCurrentCo
 router.get("/:id", authenticate, courierController.getCourierById);
 router.post("/", authenticate, courierController.createCourier);
 router.put("/:id", authenticate, courierController.updateCourier);
+// Sale-wide status update for a multi-product shipment (see Couriers.tsx's grouped entry Truck
+// action) — scoped to saleId (not shipmentGroupId) so a Ship Available Products split still lands
+// on one Courier entry. The two-segment path can't collide with "/:id" above regardless of route order.
+router.put("/sale/:saleId", authenticate, courierController.updateCourierBySale);
 // Shipment-type splitting only ever applies to Outgoing shipment groups.
 router.put("/:id/shipment-type", authenticate, authorize("/couriers", "update"), courierController.updateShipmentType);
 router.put("/:id/done", authenticate, authorize("/couriers/incoming", "update"), courierController.completeIncomingCourier);
 router.delete("/:id", authenticate, courierController.deleteCourier);
+// Sale-wide delete for a multi-product shipment — same two-segment-path rationale as the PUT above.
+router.delete("/sale/:saleId", authenticate, courierController.deleteCourierBySale);
 
 module.exports = router;

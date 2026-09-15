@@ -6,10 +6,13 @@ interface DeleteCourierModalProps {
   onClose: () => void;
   onConfirm: () => void;
   isSubmitting?: boolean;
+  /** When deleting a whole shipment group (see Couriers.tsx's group Delete action), the number
+   *  of products it covers — makes clear this removes every one of them, not just one row. */
+  itemCount?: number;
 }
 
 /** Confirmation dialog for deleting a courier record — replaces a plain window.confirm(). */
-const DeleteCourierModal = ({ courier, onClose, onConfirm, isSubmitting }: DeleteCourierModalProps) => {
+const DeleteCourierModal = ({ courier, onClose, onConfirm, isSubmitting, itemCount }: DeleteCourierModalProps) => {
   return (
     <div
       className="fixed inset-0 z-70 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-sm"
@@ -28,11 +31,11 @@ const DeleteCourierModal = ({ courier, onClose, onConfirm, isSubmitting }: Delet
         </div>
 
         <p className="text-xs text-slate-500">
-          Are you sure you want to delete the courier record for{" "}
+          Are you sure you want to delete the {itemCount && itemCount > 1 ? "entire shipment" : "courier record"} for{" "}
           <span className="font-semibold text-slate-700">
             {courier.customerName || courier.name || "this entry"}
           </span>
-          ? This cannot be undone.
+          {itemCount && itemCount > 1 ? ` — all ${itemCount} products in it` : ""}? This cannot be undone.
         </p>
 
         <div className="mt-4 flex justify-end gap-2">

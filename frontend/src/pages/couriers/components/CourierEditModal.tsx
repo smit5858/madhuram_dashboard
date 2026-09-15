@@ -62,10 +62,10 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
         !!courier?.courierName && !companies.some((c) => c.name === courier.courierName);
     const [otherCompanyName, setOtherCompanyName] = useState(initialCompanyIsOther ? courier?.courierName || "" : "");
 
-    // Serial numbers can only be re-picked before this shipment's stock has actually been
-    // committed (inventoryService.reassignSerials only allows it while the line's
-    // allocatedQuantity still matches the count of RESERVED units for it) — once fulfilled,
-    // allocatedQuantity drops to 0 and there's nothing left to reassign, so the picker hides.
+    // Serial numbers stay editable whether the line is still reserved (not yet fulfilled) or
+    // already sold — inventoryService.reassignSerials swaps whichever state the unit is
+    // currently in, so a wrong pick can still be corrected after fulfillment. Reserved takes
+    // priority since a line is never in both states at once.
     const { data: saleDetailResponse } = useQuery({
         queryKey: ["courier-edit-sale-detail", courier?.saleId],
         queryFn: () => saleService.getSaleById(courier!.saleId!),
@@ -75,7 +75,9 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
     const saleItem = sale?.items?.find((i) => i.id === courier?.saleItemId);
     const isSerialized = saleItem?.Product?.productType === "SERIALIZED";
     const reservedSerials = (saleItem?.SerialUnits || []).filter((u) => u.status === "RESERVED").map((u) => u.serialNumber);
-    const requiredSerialCount = saleItem?.allocatedQuantity ?? 0;
+    const committedSerials = (saleItem?.SerialUnits || []).filter((u) => u.status === "SOLD").map((u) => u.serialNumber);
+    const currentSerials = reservedSerials.length > 0 ? reservedSerials : committedSerials;
+    const requiredSerialCount = currentSerials.length;
     const canEditSerials = isSerialized && requiredSerialCount > 0;
     const showShipmentType = !!courier?.saleId && (sale?.items?.length ?? 0) > 1;
 
@@ -126,7 +128,7 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
         note: courier?.note || "",
         entryDate: courier?.entryDate || getTodayISODate(),
         to: courier?.to || "Madhuram Motor",
-        serialNumbers: reservedSerials,
+        serialNumbers: currentSerials,
     };
 
     const validate = (values: FormValues) => {
@@ -340,10 +342,10 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
                             {canEditSerials && (
                                 <Field
                                     name="serialNumbers"
-                                    label="Serial Numbers"
+                                    label={requiredSerialCount > 1 ? "Serial Numbers" : "Product Serial Number"}
                                     productId={saleItem?.productId}
                                     requiredCount={requiredSerialCount}
-                                    currentlyAssigned={reservedSerials}
+                                    currentlyAssigned={currentSerials}
                                     component={FormikSerialPicker}
                                 />
                             )}

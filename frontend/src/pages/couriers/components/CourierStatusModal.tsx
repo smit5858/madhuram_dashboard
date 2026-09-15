@@ -12,10 +12,13 @@ interface CourierStatusModalProps {
   onClose: () => void;
   onConfirm: (status: CourierStatus) => void;
   isSubmitting?: boolean;
+  /** Overrides the subtitle's product line — used when updating a whole shipment group at once
+   *  (see Couriers.tsx's group Truck action), where "productName" would only reflect one product. */
+  productLabel?: string;
 }
 
 /** Focused modal for moving a courier through Pending -> In Progress -> Out for Delivery -> Done. */
-const CourierStatusModal = ({ courier, onClose, onConfirm, isSubmitting }: CourierStatusModalProps) => {
+const CourierStatusModal = ({ courier, onClose, onConfirm, isSubmitting, productLabel }: CourierStatusModalProps) => {
   const currentStatus = (courier.status as CourierStatus) || "PENDING";
   const isWaiting = currentStatus === "WAITING_FOR_STOCK";
   const [status, setStatus] = useState<CourierStatus>(isWaiting ? "PENDING" : currentStatus);
@@ -39,7 +42,7 @@ const CourierStatusModal = ({ courier, onClose, onConfirm, isSubmitting }: Couri
 
         <p className="mb-3 text-xs text-slate-500">
           {courier.customerName || courier.name || "This courier record"}
-          {courier.productName ? ` — ${courier.productName}` : ""}
+          {productLabel ? ` — ${productLabel}` : courier.productName ? ` — ${courier.productName}` : ""}
         </p>
 
         {isWaiting && (

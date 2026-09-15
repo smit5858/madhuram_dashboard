@@ -152,12 +152,23 @@ const createCourier = (data: Partial<CourierData>) =>
 const updateCourier = (id: number, data: Partial<CourierData> & { serialNumbers?: string[] }) =>
     httpService.put<{ success: boolean; message: string; data: CourierData }>(`/couriers/${id}`, data);
 
+/** Sale-wide status update for a multi-product shipment — applies to every Courier row created
+ *  for this sale at once (regardless of any Ship Available Products split into separate shipment
+ *  groups), avoiding the per-row "Mixed" status drift a single updateCourier call would cause. */
+const updateCourierBySale = (saleId: number, data: { status: CourierData["status"] }) =>
+    httpService.put<{ success: boolean; message: string; data: CourierData[] }>(`/couriers/sale/${saleId}`, data);
+
 /** Ship Complete Order vs Ship Available Products — acts on the whole shipment group. */
 const updateShipmentType = (id: number, shipmentType: ShipmentType) =>
     httpService.put<{ success: boolean; message: string; data: CourierData[] }>(`/couriers/${id}/shipment-type`, { shipmentType });
 
 const deleteCourier = (id: number) =>
     httpService.delete<{ success: boolean; message: string }>(`/couriers/${id}`);
+
+/** Deletes every Courier row created for this sale at once — the grouped entry's Delete
+ *  action, since removing rows individually would orphan the rest of the shipment. */
+const deleteCourierBySale = (saleId: number) =>
+    httpService.delete<{ success: boolean; message: string }>(`/couriers/sale/${saleId}`);
 
 /** Marks an Incoming courier record Done — server-side transaction also creates the mirrored
  *  Outgoing Courier record and an Accounts (Expense) entry, and notifies Admin + the owning
@@ -190,8 +201,10 @@ export default {
     getCourierById,
     createCourier,
     updateCourier,
+    updateCourierBySale,
     updateShipmentType,
     deleteCourier,
+    deleteCourierBySale,
     completeIncomingCourier,
     exportCouriers,
     getCurrentCourierCharge,

@@ -499,10 +499,14 @@ const fulfillStock = async ({ productId, saleItemId, quantity, userId, serialNum
   });
 };
 
-// Re-picks the serial numbers reserved for a courier's line item, before it has been
-// fulfilled (units still RESERVED, not yet SOLD). Releases the units currently held for this
-// saleItemId and reserves the newly chosen ones, validating count and AVAILABLE status the same
-// way reserveStock's explicit-serials path does, so a unit can never be double-assigned.
+// Re-picks the serial numbers currently assigned to a courier's line item — either before
+// fulfillment (units still RESERVED) or after (units already SOLD, e.g. correcting which
+// physical unit actually went out). Releases the units currently held for this saleItemId and
+// assigns the newly chosen ones into that same state, validating count and AVAILABLE status the
+// same way reserveStock's explicit-serials path does, so a unit can never be double-assigned.
+// Swapping SOLD units doesn't touch Stock/StockMovement quantities — SERIALIZED availability is
+// derived entirely from serial_units status (see getSerialAvailability), so on-hand count is
+// unaffected either way; only which unit is on record for this line changes.
 const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId }, { transaction } = {}) => {
   return withTransaction(transaction, async (t) => {
     if (!Array.isArray(serialNumbers) || serialNumbers.length === 0) {
@@ -518,29 +522,38 @@ const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId },
       throw err;
     }
 
-    const currentlyReserved = await SerialUnit.findAll({
+    let currentUnits = await SerialUnit.findAll({
       where: { productId, saleItemId, status: "RESERVED" },
       transaction: t,
       lock: true,
     });
-    if (currentlyReserved.length !== item.allocatedQuantity) {
-      const err = new Error("Serial numbers can only be reassigned before this shipment has been fulfilled");
+    let targetStatus = "RESERVED";
+    if (currentUnits.length === 0) {
+      currentUnits = await SerialUnit.findAll({
+        where: { productId, saleItemId, status: "SOLD" },
+        transaction: t,
+        lock: true,
+      });
+      targetStatus = "SOLD";
+    }
+    if (currentUnits.length === 0) {
+      const err = new Error("No serial numbers are currently assigned to this line");
       err.statusCode = 400;
       throw err;
     }
-    if (serialNumbers.length !== currentlyReserved.length) {
+    if (serialNumbers.length !== currentUnits.length) {
       const err = new Error(
-        `Number of selected serial numbers (${serialNumbers.length}) must match the reserved quantity (${currentlyReserved.length})`
+        `Number of selected serial numbers (${serialNumbers.length}) must match the assigned quantity (${currentUnits.length})`
       );
       err.statusCode = 400;
       throw err;
     }
 
-    const currentNumbers = currentlyReserved.map((u) => u.serialNumber);
+    const currentNumbers = currentUnits.map((u) => u.serialNumber);
     const unchanged =
       serialNumbers.length === currentNumbers.length && serialNumbers.every((s) => currentNumbers.includes(s));
     if (unchanged) {
-      return { serialUnitIds: currentlyReserved.map((u) => u.id) };
+      return { serialUnitIds: currentUnits.map((u) => u.id) };
     }
 
     const candidates = await SerialUnit.findAll({
@@ -557,7 +570,7 @@ const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId },
       throw err;
     }
 
-    // A candidate is fine if it's AVAILABLE, or if it's already ours (part of currentlyReserved,
+    // A candidate is fine if it's AVAILABLE, or if it's already ours (part of currentUnits,
     // re-selected as-is) — anything else (reserved/sold for a different line) is a conflict.
     const unavailable = candidates.filter((u) => u.status !== "AVAILABLE" && u.saleItemId !== saleItemId);
     if (unavailable.length > 0) {
@@ -568,27 +581,29 @@ const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId },
       throw err;
     }
 
-    for (const unit of currentlyReserved) {
+    for (const unit of currentUnits) {
       unit.status = "AVAILABLE";
       unit.saleItemId = null;
+      if (targetStatus === "SOLD") unit.soldAt = null;
       await unit.save({ transaction: t });
     }
     for (const unit of candidates) {
-      unit.status = "RESERVED";
+      unit.status = targetStatus;
       unit.saleItemId = saleItemId;
+      if (targetStatus === "SOLD") unit.soldAt = new Date();
       await unit.save({ transaction: t });
     }
 
     await StockMovement.create(
       {
         productId,
-        type: "RESERVATION",
+        type: targetStatus === "SOLD" ? "SALE" : "RESERVATION",
         quantity: 0,
         reservedDelta: 0,
         referenceType: "saleItem",
         referenceId: saleItemId,
         createdBy: userId,
-        notes: `Reassigned serial numbers for sale item #${saleItemId}: ${candidates.map((u) => u.serialNumber).join(", ")}`,
+        notes: `Reassigned ${targetStatus === "SOLD" ? "sold" : "reserved"} serial numbers for sale item #${saleItemId}: ${candidates.map((u) => u.serialNumber).join(", ")}`,
       },
       { transaction: t }
     );

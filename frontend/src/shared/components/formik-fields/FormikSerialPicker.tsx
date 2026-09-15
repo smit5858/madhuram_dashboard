@@ -71,10 +71,15 @@ const FormikSerialPicker = ({
     const toggle = (serial: string) => {
         if (selected.includes(serial)) {
             setFieldValue(field.name, selected.filter((s) => s !== serial));
-        } else {
-            if (selected.length >= requiredCount) return; // full — deselect one first
-            setFieldValue(field.name, [...selected, serial]);
+            return;
         }
+        if (selected.length >= requiredCount) {
+            // Already full (the common case is requiredCount === 1) — picking a new serial
+            // replaces the oldest selection instead of requiring a manual unselect first.
+            setFieldValue(field.name, [...selected.slice(1), serial]);
+            return;
+        }
+        setFieldValue(field.name, [...selected, serial]);
     };
 
     return (

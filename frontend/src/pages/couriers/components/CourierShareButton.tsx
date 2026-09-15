@@ -5,9 +5,9 @@ import { getCourierShareUrl } from "../../../shared/utils/courierShare";
 
 interface CourierShareButtonProps {
   courier: CourierData;
-  /** Sibling courier rows sharing the same shipmentGroupId, when already loaded (e.g. by the
-   *  view modal) — used to list every product in a multi-product shipment. Omit to share just
-   *  this record's own product, as from a table row. */
+  /** Sibling courier rows created for the same sale, when already loaded (e.g. by the view
+   *  modal) — used to list every product in a multi-product sale. Omit to share just this
+   *  record's own product, as from a table row. */
   siblings?: CourierData[];
   /** Icon-only trigger for a table row; labeled button otherwise. */
   compact?: boolean;
