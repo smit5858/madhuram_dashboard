@@ -75,7 +75,8 @@ const Sale = sequelize.define(
       allowNull: false,
       defaultValue: 0,
     },
-    // Backend-computed: sellingAmount - collectedAmount
+    // Backend-computed: (sellingAmount + courierCharge) - collectedAmount, floored at 0 —
+    // overpayment is allowed and shows up as extra collectedAmount, never a negative pendingAmount.
     pendingAmount: {
       type: DataTypes.DECIMAL(10, 2),
       allowNull: false,

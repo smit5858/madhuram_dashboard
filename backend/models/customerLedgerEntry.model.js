@@ -21,6 +21,17 @@ const CustomerLedgerEntry = sequelize.define(
       allowNull: true,
       references: { model: "sells", key: "id" },
     },
+    // Traceability only — which specific Payment row (sale_payments) this entry mirrors, when it
+    // was created alongside one (see order.service.js#applyPaymentsToSale/createOrder). Nullable:
+    // a MANUAL_DEBIT, a customer-level payment collected from the Ledger page, or any entry
+    // predating this column has none. Lets editing/deleting a Payment row keep its mirrored
+    // ledger entry in sync instead of leaving it stale — see
+    // sells.controller.js#updatePayment/deletePayment.
+    paymentId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: { model: "sale_payments", key: "id" },
+    },
     // SALE = debit (amount stored negative), PAYMENT = credit (positive), ADJUSTMENT = manual
     // correction (signed either way, created internally e.g. for a collected-amount correction —
     // see order.service.js#recordPayment). MANUAL_DEBIT = a debit added by hand from Account →
@@ -69,7 +80,7 @@ const CustomerLedgerEntry = sequelize.define(
   {
     tableName: "customer_ledger_entries",
     timestamps: true,
-    indexes: [{ fields: ["customerId"] }, { fields: ["saleId"] }],
+    indexes: [{ fields: ["customerId"] }, { fields: ["saleId"] }, { fields: ["paymentId"] }],
   }
 );
 

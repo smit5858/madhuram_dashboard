@@ -253,7 +253,6 @@ const IncomingCourier = () => {
                         </button>
 
                         <div className="flex h-11.75 items-center gap-2 sm:justify-end">
-                            {hasActiveFilters && <span className="text-[11px] font-semibold text-blue-600">Filters active</span>}
                             {isFetching && !isLoading && <span className="text-[11px] text-slate-400">Refreshing…</span>}
                         </div>
                     </Form>

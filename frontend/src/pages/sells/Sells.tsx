@@ -14,6 +14,7 @@ import saleService, {
   type SalesFilters,
   type SellsTotalsData,
   type PaymentEntry,
+  type PaymentData,
 } from "../../services/sells.service";
 import productService, {
   type ProductData,
@@ -27,7 +28,7 @@ import CancelSaleModal from "@/shared/components/CancelSaleModal";
 import StockShortageModal, { type StockShortageItem } from "@/pages/sells/components/StockShortageModal";
 import ProductSearchSelect from "@/pages/sells/components/ProductSearchSelect";
 import PaymentsEditor from "@/pages/sells/components/PaymentsEditor";
-import { validatePaymentRows, sumPaymentRows, type PaymentRow } from "@/pages/sells/utils/paymentRows";
+import { validatePaymentRows, sumPaymentRows, needsBankAccount, PAYMENT_ENTRY_METHODS, type PaymentRow, type PaymentEntryMethod } from "@/pages/sells/utils/paymentRows";
 import { blurNumberInputOnWheel } from "@/shared/utils/input";
 import { formatDisplayDate, getTodayISODate } from "@/shared/utils/date";
 
@@ -254,6 +255,9 @@ const Sells = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [selectedSale, setSelectedSale] = useState<SaleData | null>(null);
+  // Set to a sale's id while handleEditClick is fetching its full detail (payment history
+  // included) before opening Edit — the list query row itself doesn't carry `payments`.
+  const [loadingEditSaleId, setLoadingEditSaleId] = useState<number | null>(null);
 
   // Stock-shortage confirm prompt (create flow only) — snapshots the items being submitted so
   // the user's chosen resolution ("available only" / "all products") applies to exactly what
@@ -291,6 +295,18 @@ const Sells = () => {
   // already been collected (see effectiveCollectedAmount below). Each row can use a different
   // method (e.g. part Cash, part UPI) — see PaymentsEditor.
   const [paymentRows, setPaymentRows] = useState<PaymentRow[]>([]);
+  // The sale's already-recorded Payment rows, loaded when opening Edit (see openEditModal) — shown
+  // as an editable list (edit/delete) above the "Add Payment" rows for new entries. Empty for a
+  // brand-new sale (nothing recorded yet).
+  const [existingPayments, setExistingPayments] = useState<PaymentData[]>([]);
+  const [editingPaymentId, setEditingPaymentId] = useState<number | null>(null);
+  const [editPaymentDraft, setEditPaymentDraft] = useState<{
+    method: PaymentEntryMethod;
+    amount: string;
+    bankAccountId: number | "";
+    transactionRef: string;
+  }>({ method: "Cash", amount: "", bankAccountId: "", transactionRef: "" });
+  const [deletePaymentConfirmId, setDeletePaymentConfirmId] = useState<number | null>(null);
   const [city, setCity] = useState("");
   const [fromAddress, setFromAddress] = useState("");
   const [pincode, setPincode] = useState("");
@@ -456,13 +472,21 @@ const Sells = () => {
 
   const effectiveSellingAmount = Number(manualSellingAmount) || 0;
 
+  // Order Total = Total Selling Amount + Courier Charge — the actual figure payments are
+  // measured against everywhere in this form (summary strip, remaining/overpaid, submission).
+  const effectiveCourierCharge = Number(courierCharge) || 0;
+  const effectiveOrderTotal = effectiveSellingAmount + effectiveCourierCharge;
+
   const paymentRowsTotal = useMemo(() => sumPaymentRows(paymentRows), [paymentRows]);
 
   // Creating a new sale: the draft payment rows ARE the whole collected amount. Editing an
   // existing sale: they're NEW payment(s) added on top of whatever's already been collected.
   const effectiveCollectedAmount = selectedSale ? Number(selectedSale.collectedAmount ?? 0) + paymentRowsTotal : paymentRowsTotal;
 
-  const pendingAmount = Math.max(0, effectiveSellingAmount - effectiveCollectedAmount);
+  // Overpaying the order total is allowed by design — remaining floors at 0 and the extra is
+  // surfaced separately as overpaidAmount instead of blocking submission.
+  const pendingAmount = Math.max(0, effectiveOrderTotal - effectiveCollectedAmount);
+  const overpaidAmount = Math.max(0, effectiveCollectedAmount - effectiveOrderTotal);
 
   // Resolves the Courier field's select value ("Other" needs the free-text sibling state)
   // down to the plain string sent to the backend. Optional — an empty result is fine.
@@ -586,6 +610,61 @@ const Sells = () => {
     },
   });
 
+  // Refetches the full sale (including its payments) after an edit/delete so both the Existing
+  // Payments list and the header totals (collectedAmount/pendingAmount/paymentStatus) shown in
+  // this form reflect the change immediately, without closing the modal.
+  const refreshEditingSale = async (saleId: number) => {
+    try {
+      const res = await saleService.getSaleById(saleId);
+      const fresh = res.data?.data;
+      if (fresh) {
+        setSelectedSale(fresh);
+        setExistingPayments(fresh.payments || []);
+      }
+    } catch {
+      // Non-fatal — the mutation itself already succeeded and its own toast fired; the list
+      // simply stays as it was until the next natural refresh (e.g. reopening the modal).
+    }
+  };
+
+  const updatePaymentMutation = useMutation({
+    mutationFn: ({
+      saleId,
+      paymentId,
+      data,
+    }: {
+      saleId: number;
+      paymentId: number;
+      data: { amount?: number; method?: string; bankAccountId?: number | null; transactionRef?: string | null };
+    }) => saleService.updatePayment(saleId, paymentId, data),
+    onSuccess: async (res, variables) => {
+      toast.success(res.data?.message || "Payment updated successfully");
+      setEditingPaymentId(null);
+      await refreshEditingSale(variables.saleId);
+      queryClient.invalidateQueries({ queryKey: ["sells"] });
+      queryClient.invalidateQueries({ queryKey: ["sells-totals"] });
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.message || err.message || "Failed to update payment");
+    },
+  });
+
+  const deletePaymentMutation = useMutation({
+    mutationFn: ({ saleId, paymentId }: { saleId: number; paymentId: number }) => saleService.deletePayment(saleId, paymentId),
+    onSuccess: async (res, variables) => {
+      toast.success(res.data?.message || "Payment deleted successfully");
+      setDeletePaymentConfirmId(null);
+      await refreshEditingSale(variables.saleId);
+      queryClient.invalidateQueries({ queryKey: ["sells"] });
+      queryClient.invalidateQueries({ queryKey: ["sells-totals"] });
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.message || err.message || "Failed to delete payment");
+    },
+  });
+
   const resetForm = () => {
     setCustomerId(null);
     setCustomerLookupStatus("idle");
@@ -601,6 +680,9 @@ const Sells = () => {
     setOtherCourierName("");
     setCourierCharge("0");
     setPaymentRows([]);
+    setExistingPayments([]);
+    setEditingPaymentId(null);
+    setDeletePaymentConfirmId(null);
     setCity("");
     setFromAddress("");
     setPincode("");
@@ -647,8 +729,14 @@ const Sells = () => {
     setCourierCharge(String(sale.courierCharge ?? 0));
     setSaleDate(sale.saleDate || (sale.createdAt ? sale.createdAt.slice(0, 10) : getTodayISODate()));
     // The draft payment rows start empty on Edit — they represent NEW payment(s) to add on top
-    // of whatever's already been collected (shown separately), not the sale's existing history.
+    // of whatever's already been collected. The sale's actual payment history is loaded
+    // separately below (existingPayments) and shown as its own editable list.
     setPaymentRows([]);
+    setEditingPaymentId(null);
+    setDeletePaymentConfirmId(null);
+    // `sale.payments` is only populated when the caller fetched the full sale detail first (see
+    // handleEditClick below) — the Sells list query itself doesn't include payment history.
+    setExistingPayments(sale.payments || []);
     setCity(sale.city || "");
     setFromAddress(sale.fromAddress || "");
     setPincode(sale.pincode || "");
@@ -690,6 +778,23 @@ const Sells = () => {
       setOriginalItemsById({});
     }
     setIsModalOpen(true);
+  };
+
+  // Edit button handler for a list row — the row itself (from the Sells list query) doesn't
+  // carry payment history, so the full sale is fetched first (same as the Leads deep-link below)
+  // and only then handed to openEditModal, guaranteeing existingPayments is always populated.
+  const handleEditClick = async (sell: SaleData) => {
+    if (!sell.id) return;
+    setLoadingEditSaleId(sell.id);
+    try {
+      const res = await saleService.getSaleById(sell.id);
+      const fullSale = res.data?.data || sell;
+      openEditModal(fullSale);
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || err.message || "Could not load the sale for editing");
+    } finally {
+      setLoadingEditSaleId(null);
+    }
   };
 
   // Deep-link from the Leads page: a lead auto-creates its own Sell once marked Complete (see
@@ -818,13 +923,11 @@ const Sells = () => {
       }
     }
 
-    // The draft payment rows must not exceed the order total — for a new sale that's the whole
-    // selling amount; for an existing sale it's whatever's still pending (new rows are on top of
-    // what's already been collected, and may go negative to correct an over-collection).
-    const maxPaymentTotal = selectedSale
-      ? Math.max(0, effectiveSellingAmount - Number(selectedSale.collectedAmount ?? 0))
-      : effectiveSellingAmount;
-    const validatedPayments = validatePaymentRows(paymentRows, maxPaymentTotal, { allowNegative: !!selectedSale });
+    // Overpaying the order total (Total Selling Amount + Courier Charge) is allowed by design —
+    // validatePaymentRows only rejects a genuinely invalid row (missing/zero amount, missing bank
+    // account), never a total that's "too high". New rows may go negative on an existing sale to
+    // correct an over-collection.
+    const validatedPayments = validatePaymentRows(paymentRows, { allowNegative: !!selectedSale });
     if (validatedPayments === null) return;
 
     if (selectedSale?.id) {
@@ -1419,11 +1522,16 @@ const Sells = () => {
                           </button>
                           {pagePermission.canUpdate && (
                             <button
-                              onClick={() => openEditModal(sell)}
-                              className="rounded p-1 text-blue-600 hover:bg-blue-50 transition"
+                              onClick={() => handleEditClick(sell)}
+                              disabled={loadingEditSaleId === sell.id}
+                              className="rounded p-1 text-blue-600 hover:bg-blue-50 transition disabled:opacity-50"
                               title="Edit"
                             >
-                              <Edit2 className="h-4 w-4" />
+                              {loadingEditSaleId === sell.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Edit2 className="h-4 w-4" />
+                              )}
                             </button>
                           )}
                           {pagePermission.canDelete && (
@@ -1976,6 +2084,188 @@ const Sells = () => {
                   </div>
                 </div>
 
+                {selectedSale && existingPayments.length > 0 && (
+                  <div className="mt-4">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                      Existing Payments
+                    </label>
+                    <div className="rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
+                      {existingPayments.map((p) => {
+                        const isEditing = editingPaymentId === p.id;
+                        const isConfirmingDelete = deletePaymentConfirmId === p.id;
+                        return (
+                          <div key={p.id} className="p-2.5">
+                            {isEditing ? (
+                              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                                <select
+                                  value={editPaymentDraft.method}
+                                  onChange={(e) =>
+                                    setEditPaymentDraft((prev) => ({ ...prev, method: e.target.value as PaymentEntryMethod }))
+                                  }
+                                  className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-800 focus:border-[#3d6fe0] focus:outline-none"
+                                >
+                                  {PAYMENT_ENTRY_METHODS.map((m) => (
+                                    <option key={m} value={m}>{m}</option>
+                                  ))}
+                                </select>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={editPaymentDraft.amount}
+                                  onChange={(e) => setEditPaymentDraft((prev) => ({ ...prev, amount: e.target.value }))}
+                                  onWheel={blurNumberInputOnWheel}
+                                  placeholder="Amount"
+                                  className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-800 focus:border-[#3d6fe0] focus:outline-none"
+                                />
+                                {needsBankAccount(editPaymentDraft.method) ? (
+                                  <select
+                                    value={editPaymentDraft.bankAccountId}
+                                    onChange={(e) =>
+                                      setEditPaymentDraft((prev) => ({
+                                        ...prev,
+                                        bankAccountId: e.target.value ? Number(e.target.value) : "",
+                                      }))
+                                    }
+                                    className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-800 focus:border-[#3d6fe0] focus:outline-none"
+                                  >
+                                    <option value="">Select bank account</option>
+                                    {bankAccountsList
+                                      .filter((b): b is typeof b & { id: number } => b.id != null)
+                                      .map((b) => (
+                                        <option key={b.id} value={b.id}>
+                                          {b.bankName} — {b.accountNumber}
+                                        </option>
+                                      ))}
+                                  </select>
+                                ) : (
+                                  <input
+                                    type="text"
+                                    value={editPaymentDraft.transactionRef}
+                                    onChange={(e) => setEditPaymentDraft((prev) => ({ ...prev, transactionRef: e.target.value }))}
+                                    placeholder="Ref/Txn #"
+                                    className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-800 focus:border-[#3d6fe0] focus:outline-none"
+                                  />
+                                )}
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    disabled={updatePaymentMutation.isPending}
+                                    onClick={() => {
+                                      if (!selectedSale?.id || !p.id) return;
+                                      const amount = Number(editPaymentDraft.amount);
+                                      if (!editPaymentDraft.amount.trim() || isNaN(amount) || amount <= 0) {
+                                        toast.error("Amount must be greater than 0");
+                                        return;
+                                      }
+                                      if (needsBankAccount(editPaymentDraft.method) && !editPaymentDraft.bankAccountId) {
+                                        toast.error(`Select a bank account for the ${editPaymentDraft.method} payment`);
+                                        return;
+                                      }
+                                      updatePaymentMutation.mutate({
+                                        saleId: selectedSale.id,
+                                        paymentId: p.id,
+                                        data: {
+                                          amount,
+                                          method: editPaymentDraft.method,
+                                          bankAccountId: needsBankAccount(editPaymentDraft.method)
+                                            ? Number(editPaymentDraft.bankAccountId) || null
+                                            : null,
+                                          transactionRef: editPaymentDraft.transactionRef.trim() || null,
+                                        },
+                                      });
+                                    }}
+                                    className="rounded-md bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+                                  >
+                                    {updatePaymentMutation.isPending ? "Saving..." : "Save"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingPaymentId(null)}
+                                    className="rounded-md bg-slate-100 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:bg-slate-200"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="text-[11px]">
+                                  <span className="font-bold text-slate-800">{p.method || "—"}</span>
+                                  {(p.method === "BankTransfer" || p.method === "UPI") && p.bankAccount && (
+                                    <span className="ml-1.5 text-slate-400">
+                                      {p.bankAccount.bankName} — {p.bankAccount.accountNumber}
+                                    </span>
+                                  )}
+                                  {p.transactionRef && <span className="ml-1.5 text-slate-400">Ref: {p.transactionRef}</span>}
+                                  {p.createdAt && <span className="ml-1.5 text-slate-300">{formatDisplayDate(p.createdAt)}</span>}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className={`text-xs font-bold ${Number(p.amount) < 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                                    {Number(p.amount) < 0 ? "-" : ""}₹{Math.abs(Number(p.amount)).toLocaleString("en-IN")}
+                                  </span>
+                                  {isConfirmingDelete ? (
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-[10px] text-slate-500">Delete?</span>
+                                      <button
+                                        type="button"
+                                        disabled={deletePaymentMutation.isPending}
+                                        onClick={() => {
+                                          if (!selectedSale?.id || !p.id) return;
+                                          deletePaymentMutation.mutate({ saleId: selectedSale.id, paymentId: p.id });
+                                        }}
+                                        className="rounded p-1 text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50"
+                                        title="Confirm delete"
+                                      >
+                                        <CheckCircle2 className="h-3.5 w-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setDeletePaymentConfirmId(null)}
+                                        className="rounded p-1 text-slate-500 hover:bg-slate-100"
+                                        title="Cancel"
+                                      >
+                                        <XCircle className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (!p.id) return;
+                                          setEditingPaymentId(p.id);
+                                          setEditPaymentDraft({
+                                            method: (p.method as PaymentEntryMethod) || "Cash",
+                                            amount: String(p.amount ?? ""),
+                                            bankAccountId: p.bankAccountId || "",
+                                            transactionRef: p.transactionRef || "",
+                                          });
+                                        }}
+                                        className="rounded p-1 text-blue-600 hover:bg-blue-50"
+                                        title="Edit payment"
+                                      >
+                                        <Edit2 className="h-3.5 w-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setDeletePaymentConfirmId(p.id ?? null)}
+                                        className="rounded p-1 text-rose-600 hover:bg-rose-50"
+                                        title="Delete payment"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 <div className="mt-4">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Payment Method{" "}
@@ -1999,10 +2289,13 @@ const Sells = () => {
                   />
                 </div>
 
-                <div className="mt-4 grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-4">
+                <div className="mt-4 grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-5">
                   <div>
                     <span className="block text-[10px] font-bold uppercase text-slate-400">Order Total</span>
-                    <span className="text-sm font-bold text-slate-900">₹{effectiveSellingAmount.toLocaleString("en-IN")}</span>
+                    <span className="text-sm font-bold text-slate-900">₹{effectiveOrderTotal.toLocaleString("en-IN")}</span>
+                    <p className="mt-0.5 text-[10px] text-slate-400">
+                      ₹{effectiveSellingAmount.toLocaleString("en-IN")} selling + ₹{effectiveCourierCharge.toLocaleString("en-IN")} courier
+                    </p>
                   </div>
                   <div>
                     <span className="block text-[10px] font-bold uppercase text-slate-400">Total Paid</span>
@@ -2014,6 +2307,12 @@ const Sells = () => {
                       ₹{pendingAmount.toLocaleString("en-IN")}
                     </span>
                   </div>
+                  {overpaidAmount > 0 && (
+                    <div>
+                      <span className="block text-[10px] font-bold uppercase text-slate-400">Overpaid</span>
+                      <span className="text-sm font-bold text-amber-600">₹{overpaidAmount.toLocaleString("en-IN")}</span>
+                    </div>
+                  )}
                   <div>
                     <span className="block text-[10px] font-bold uppercase text-slate-400">Status</span>
                     <span
@@ -2025,7 +2324,13 @@ const Sells = () => {
                             : "bg-slate-100 text-slate-600"
                       }`}
                     >
-                      {pendingAmount <= 0 && effectiveCollectedAmount > 0 ? "Paid" : effectiveCollectedAmount > 0 ? "Partially Paid" : "Unpaid"}
+                      {pendingAmount <= 0 && effectiveCollectedAmount > 0
+                        ? overpaidAmount > 0
+                          ? "Paid (Overpaid)"
+                          : "Paid"
+                        : effectiveCollectedAmount > 0
+                          ? "Partially Paid"
+                          : "Unpaid"}
                     </span>
                   </div>
                 </div>
@@ -2212,13 +2517,13 @@ const Sells = () => {
                 Manage Line Items, Fulfillment & Courier History in Couriers →
               </button>
 
-              <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200 sm:grid-cols-3">
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase font-bold">
-                    Selling Amount
+                    Order Total
                   </span>
                   <span className="text-sm font-bold text-slate-900">
-                    ₹{Number(detail.sellingAmount).toLocaleString("en-IN")}
+                    ₹{(Number(detail.sellingAmount || 0) + Number(detail.courierCharge || 0)).toLocaleString("en-IN")}
                   </span>
                 </div>
                 <div>
@@ -2242,6 +2547,16 @@ const Sells = () => {
                     ₹{Number(detail.pendingAmount).toLocaleString("en-IN")}
                   </span>
                 </div>
+                {Number(detail.collectedAmount || 0) > Number(detail.sellingAmount || 0) + Number(detail.courierCharge || 0) && (
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">
+                      Overpaid
+                    </span>
+                    <span className="text-sm font-bold text-amber-600">
+                      ₹{(Number(detail.collectedAmount || 0) - Number(detail.sellingAmount || 0) - Number(detail.courierCharge || 0)).toLocaleString("en-IN")}
+                    </span>
+                  </div>
+                )}
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase font-bold">
                     Status
@@ -2359,7 +2674,7 @@ const Sells = () => {
                         disabled={recordPaymentsMutation.isPending || !detail.id}
                         onClick={() => {
                           if (!detail.id) return;
-                          const validated = validatePaymentRows(detailPaymentRows, Number(detail.pendingAmount));
+                          const validated = validatePaymentRows(detailPaymentRows);
                           if (validated === null) return;
                           if (validated.length === 0) {
                             toast.error("Enter a valid payment amount");

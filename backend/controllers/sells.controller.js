@@ -414,12 +414,14 @@ exports.updateSale = async (req, res) => {
 
     if (sellingAmount !== undefined) sale.sellingAmount = parseFloat(sellingAmount);
     // Recomputed again below if `payments` adds/corrects a payment — this covers the
-    // sellingAmount-only edit case (no new payment) so pendingAmount/paymentStatus never go stale.
-    sale.pendingAmount = Math.max(0, parseFloat(sale.sellingAmount) - parseFloat(sale.collectedAmount));
+    // sellingAmount/courierCharge-only edit case (no new payment) so pendingAmount/paymentStatus
+    // never go stale. Order total = sellingAmount + courierCharge, not sellingAmount alone.
+    sale.pendingAmount = Math.max(0, orderService.computeOrderTotal(sale.sellingAmount, sale.courierCharge) - parseFloat(sale.collectedAmount));
     sale.paymentStatus = orderService.computePaymentStatus({
       sellingAmount: parseFloat(sale.sellingAmount),
       collectedAmount: parseFloat(sale.collectedAmount),
       refundedAmount: parseFloat(sale.refundedAmount),
+      courierCharge: parseFloat(sale.courierCharge) || 0,
     });
 
     // Bank Account field — shown every time regardless of Payment Method, optional, and lets
@@ -609,6 +611,49 @@ exports.recordPayment = async (req, res) => {
       ? await orderService.recordPayments({ saleId: id, payments, userId: user.id })
       : await orderService.recordPayment({ saleId: id, amount, method, bankAccountId, transactionRef, userId: user.id, notes });
     return res.status(200).json({ success: true, message: "Payment recorded successfully", data: sale });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// PUT /sells/:id/payments/:paymentId — edits one existing payment entry (amount/method/bank
+// account/ref), e.g. correcting a mistyped amount. Recomputes the sale's collectedAmount/
+// pendingAmount/paymentStatus and keeps the mirrored customer-ledger entry in sync — see
+// orderService.updatePayment.
+exports.updatePayment = async (req, res) => {
+  try {
+    const { id, paymentId } = req.params;
+    const user = req.user;
+    const canViewAll = user && (await canViewAllRecords(user, "/sells"));
+    const { amount, method, bankAccountId, transactionRef, notes } = req.body || {};
+
+    const sale = await orderService.updatePayment({
+      saleId: id,
+      paymentId,
+      amount,
+      method,
+      bankAccountId,
+      transactionRef,
+      notes,
+      canViewAll,
+      userId: user.id,
+    });
+    return res.status(200).json({ success: true, message: "Payment updated successfully", data: sale });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// DELETE /sells/:id/payments/:paymentId — removes one existing payment entry outright and
+// recomputes the sale's collectedAmount/pendingAmount/paymentStatus — see orderService.deletePayment.
+exports.deletePayment = async (req, res) => {
+  try {
+    const { id, paymentId } = req.params;
+    const user = req.user;
+    const canViewAll = user && (await canViewAllRecords(user, "/sells"));
+
+    const sale = await orderService.deletePayment({ saleId: id, paymentId, canViewAll, userId: user.id });
+    return res.status(200).json({ success: true, message: "Payment deleted successfully", data: sale });
   } catch (err) {
     return errorResponse(res, err);
   }

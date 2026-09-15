@@ -33,14 +33,15 @@ export interface BankAccountOption {
 }
 
 /**
- * Validates a draft list of payment rows against the order/remaining total they must not
- * exceed. Ignores blank/zero-amount rows entirely (an empty row left in the editor is not an
- * error). Returns the normalized {method, amount, bankAccountId, transactionRef} entries ready
- * to send to the API, or null (after showing a toast) if something's invalid.
+ * Validates a draft list of payment rows. Ignores blank/zero-amount rows entirely (an empty row
+ * left in the editor is not an error). Overpaying against the order total is allowed by design —
+ * this never blocks submission on the total being too high, only on a genuinely invalid row
+ * (missing/zero amount, missing bank account). Returns the normalized {method, amount,
+ * bankAccountId, transactionRef} entries ready to send to the API, or null (after showing a
+ * toast) if something's invalid.
  */
 export const validatePaymentRows = (
   rows: PaymentRow[],
-  maxTotal: number,
   { allowNegative = false }: { allowNegative?: boolean } = {}
 ): PaymentEntry[] | null => {
   const nonZero = rows.filter((row) => Number(row.amount) !== 0 && row.amount.trim() !== "");
@@ -56,12 +57,6 @@ export const validatePaymentRows = (
       toast.error(`Select a bank account for the ${row.method} payment (row #${i + 1})`);
       return null;
     }
-  }
-
-  const total = nonZero.reduce((sum, row) => sum + Number(row.amount), 0);
-  if (total > maxTotal + 0.01) {
-    toast.error("Total payment amount cannot exceed the order total");
-    return null;
   }
 
   return nonZero.map((row) => ({

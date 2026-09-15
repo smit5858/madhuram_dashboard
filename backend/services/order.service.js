@@ -43,6 +43,11 @@ const needsBankSplit = (paymentMethod) => paymentMethod === "BankTransfer" || pa
 // (see recomputeSalePaymentMethod below) — it can never be assigned to a single Payment row.
 const VALID_PAYMENT_METHODS = ["Cash", "UPI", "Card", "BankTransfer", "Other"];
 
+// Total amount actually owed on a sale — selling amount plus courier/shipping charge. This is
+// the figure payments are measured against everywhere (pendingAmount, paymentStatus, "how much
+// is left to collect"), not sellingAmount alone.
+const computeOrderTotal = (sellingAmount, courierCharge) => (parseFloat(sellingAmount) || 0) + (parseFloat(courierCharge) || 0);
+
 // Validates and normalizes a `payments` array — the multi-payment-method entry point used by both
 // createOrder (initial payment(s) on a brand-new sale) and applyPaymentsToSale (topping up an
 // existing sale). Each row is {method, amount, bankAccountId?, transactionRef?, notes?}; zero-amount
@@ -51,9 +56,10 @@ const VALID_PAYMENT_METHODS = ["Cash", "UPI", "Card", "BankTransfer", "Other"];
 // their amount is positive, matching normalizeBankPayments' server-side check for the same two
 // methods. `allowNegative` lets a row correct an over-collection (a negative amount) — used by
 // applyPaymentsToSale/recordPayments, never by createOrder (a brand-new sale has nothing to correct
-// yet). The combined total must not exceed `maxTotal` (the order total for a new sale, or the
-// remaining pending amount for a top-up).
-const normalizePayments = (payments, maxTotal, { allowNegative = false } = {}) => {
+// yet). Overpaying against the order total is allowed and must never block submission — the caller
+// (applyPaymentsToSale/createOrder) is responsible for clamping pendingAmount at 0 and surfacing the
+// extra as an overpaid amount, not for rejecting the payment.
+const normalizePayments = (payments, { allowNegative = false } = {}) => {
   const rows = (Array.isArray(payments) ? payments : [])
     .map((p) => ({
       method: p && p.method,
@@ -83,11 +89,6 @@ const normalizePayments = (payments, maxTotal, { allowNegative = false } = {}) =
   }
 
   const total = rows.reduce((sum, row) => sum + row.amount, 0);
-  if (total > maxTotal + 0.01) {
-    const err = new Error("Total payment amount cannot exceed the order total");
-    err.statusCode = 400;
-    throw err;
-  }
 
   return { rows, total };
 };
@@ -112,21 +113,26 @@ const recomputeSalePaymentMethod = async (saleId, { transaction: t }) => {
 // Shared by recordPayments (its own transaction) and updateSale (already inside one). Returns the
 // normalized rows that were actually applied (empty if every row was zero-amount).
 const applyPaymentsToSale = async (sale, payments, { userId, allowNegative = true } = {}, { transaction: t }) => {
-  const currentPending = Math.max(0, parseFloat(sale.sellingAmount) - parseFloat(sale.collectedAmount));
-  const { rows, total } = normalizePayments(payments, currentPending, { allowNegative });
+  const { rows, total } = normalizePayments(payments, { allowNegative });
   if (rows.length === 0) return rows;
 
+  const orderTotal = computeOrderTotal(sale.sellingAmount, sale.courierCharge);
   const newCollected = Math.max(0, parseFloat(sale.collectedAmount) + total);
   sale.collectedAmount = newCollected;
-  sale.pendingAmount = Math.max(0, parseFloat(sale.sellingAmount) - newCollected);
+  sale.pendingAmount = Math.max(0, orderTotal - newCollected);
   sale.paymentStatus = computePaymentStatus({
     sellingAmount: parseFloat(sale.sellingAmount),
     collectedAmount: newCollected,
     refundedAmount: parseFloat(sale.refundedAmount),
+    courierCharge: parseFloat(sale.courierCharge) || 0,
   });
 
+  // Keeps each created Payment row paired with the row that produced it, so the mirrored
+  // customer-ledger entry below can be linked back to it (see CustomerLedgerEntry.paymentId) —
+  // needed for updatePayment/deletePayment to find and adjust the right ledger entry later.
+  const createdPayments = [];
   for (const row of rows) {
-    await Payment.create(
+    const payment = await Payment.create(
       {
         saleId: sale.id,
         amount: row.amount,
@@ -138,18 +144,21 @@ const applyPaymentsToSale = async (sale, payments, { userId, allowNegative = tru
       },
       { transaction: t }
     );
+    createdPayments.push(payment);
     if (row.bankAccountId && !sale.bankAccountId) sale.bankAccountId = row.bankAccountId;
   }
 
   sale.paymentMethod = await recomputeSalePaymentMethod(sale.id, { transaction: t });
 
   if (sale.customerId) {
-    for (const row of rows) {
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
       const ledgerRecordFn = row.amount > 0 ? customerLedgerService.recordPayment : customerLedgerService.recordAdjustment;
       await ledgerRecordFn(
         {
           customerId: sale.customerId,
           saleId: sale.id,
+          paymentId: createdPayments[i].id,
           amount: row.amount,
           paymentMethod: row.method,
           bankAccountId: row.bankAccountId,
@@ -163,6 +172,152 @@ const applyPaymentsToSale = async (sale, payments, { userId, allowNegative = tru
   }
 
   return rows;
+};
+
+// Edits one existing Payment row directly (as opposed to applyPaymentsToSale, which only ever
+// adds new rows) — e.g. correcting a mistyped amount or the wrong method on a payment already
+// recorded against a sale. Recomputes collectedAmount as the true SUM of every remaining Payment
+// row (not a delta) so it can never drift, then pendingAmount/paymentStatus/paymentMethod off of
+// that. Only ever touches a payment already > 0 and never sets it to <= 0 — a correction that
+// needs to zero out or reverse a payment is what the negative-row path in applyPaymentsToSale is
+// for; this endpoint is for fixing a genuine data-entry mistake on a real payment. Leaves
+// SaleBankAccount (the separate, independent bank-split allocation table) untouched, same as
+// every other payment-mutating path except an explicit `bankPayments` edit on updateSale.
+const updatePayment = async ({ saleId, paymentId, amount, method, bankAccountId, transactionRef, notes, canViewAll, userId }) => {
+  const t = await sequelize.transaction();
+  try {
+    const sale = await Sale.findByPk(saleId, { transaction: t, lock: true });
+    if (!sale) {
+      const err = new Error("Sale not found");
+      err.statusCode = 404;
+      throw err;
+    }
+    if (!canViewAll && sale.createdBy !== userId) {
+      const err = new Error("Forbidden: You do not have permission to update this sale");
+      err.statusCode = 403;
+      throw err;
+    }
+
+    const payment = await Payment.findOne({ where: { id: paymentId, saleId }, transaction: t, lock: true });
+    if (!payment) {
+      const err = new Error("Payment not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const parsedAmount = amount !== undefined ? parseFloat(amount) : parseFloat(payment.amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      const err = new Error("Payment amount must be greater than 0");
+      err.statusCode = 400;
+      throw err;
+    }
+    const resolvedMethod = method !== undefined ? method : payment.method;
+    if (!VALID_PAYMENT_METHODS.includes(resolvedMethod)) {
+      const err = new Error("Each payment must have a valid payment method");
+      err.statusCode = 400;
+      throw err;
+    }
+    const resolvedBankAccountId = bankAccountId !== undefined ? (bankAccountId ? Number(bankAccountId) : null) : payment.bankAccountId;
+    if (needsBankSplit(resolvedMethod) && !resolvedBankAccountId) {
+      const err = new Error(`Select a bank account for the ${resolvedMethod} payment`);
+      err.statusCode = 400;
+      throw err;
+    }
+
+    payment.amount = parsedAmount;
+    payment.method = resolvedMethod;
+    payment.bankAccountId = resolvedBankAccountId;
+    if (transactionRef !== undefined) payment.transactionRef = transactionRef ? String(transactionRef).trim() || null : null;
+    if (notes !== undefined) payment.notes = notes ? String(notes).trim() || null : null;
+    await payment.save({ transaction: t });
+
+    const totalCollected = parseFloat(await Payment.sum("amount", { where: { saleId: sale.id }, transaction: t })) || 0;
+    const orderTotal = computeOrderTotal(sale.sellingAmount, sale.courierCharge);
+    sale.collectedAmount = totalCollected;
+    sale.pendingAmount = Math.max(0, orderTotal - totalCollected);
+    sale.paymentStatus = computePaymentStatus({
+      sellingAmount: parseFloat(sale.sellingAmount),
+      collectedAmount: totalCollected,
+      refundedAmount: parseFloat(sale.refundedAmount),
+      courierCharge: parseFloat(sale.courierCharge) || 0,
+    });
+    sale.paymentMethod = await recomputeSalePaymentMethod(sale.id, { transaction: t });
+    await sale.save({ transaction: t });
+
+    // Keep the mirrored customer-ledger entry (if any — see CustomerLedgerEntry.paymentId) in
+    // sync so the Debited/Ledger screen never shows stale numbers for a payment edited here.
+    if (sale.customerId) {
+      const entry = await customerLedgerService.findEntryByPaymentId(payment.id, { transaction: t });
+      if (entry) {
+        await customerLedgerService.updateEntry(
+          { entryId: entry.id, amount: parsedAmount, paymentMethod: resolvedMethod, reference: payment.transactionRef },
+          { transaction: t }
+        );
+        entry.bankAccountId = needsBankSplit(resolvedMethod) ? resolvedBankAccountId : null;
+        await entry.save({ transaction: t });
+      }
+    }
+
+    await t.commit();
+    return sale;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+};
+
+// Removes one existing Payment row outright (e.g. it was recorded in error) and recomputes the
+// sale's collectedAmount/pendingAmount/paymentStatus/paymentMethod, plus removes the mirrored
+// customer-ledger entry if one exists — same SUM-based recompute and SaleBankAccount hands-off
+// as updatePayment above.
+const deletePayment = async ({ saleId, paymentId, canViewAll, userId }) => {
+  const t = await sequelize.transaction();
+  try {
+    const sale = await Sale.findByPk(saleId, { transaction: t, lock: true });
+    if (!sale) {
+      const err = new Error("Sale not found");
+      err.statusCode = 404;
+      throw err;
+    }
+    if (!canViewAll && sale.createdBy !== userId) {
+      const err = new Error("Forbidden: You do not have permission to update this sale");
+      err.statusCode = 403;
+      throw err;
+    }
+
+    const payment = await Payment.findOne({ where: { id: paymentId, saleId }, transaction: t, lock: true });
+    if (!payment) {
+      const err = new Error("Payment not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    await payment.destroy({ transaction: t });
+
+    const totalCollected = parseFloat(await Payment.sum("amount", { where: { saleId: sale.id }, transaction: t })) || 0;
+    const orderTotal = computeOrderTotal(sale.sellingAmount, sale.courierCharge);
+    sale.collectedAmount = totalCollected;
+    sale.pendingAmount = Math.max(0, orderTotal - totalCollected);
+    sale.paymentStatus = computePaymentStatus({
+      sellingAmount: parseFloat(sale.sellingAmount),
+      collectedAmount: totalCollected,
+      refundedAmount: parseFloat(sale.refundedAmount),
+      courierCharge: parseFloat(sale.courierCharge) || 0,
+    });
+    sale.paymentMethod = await recomputeSalePaymentMethod(sale.id, { transaction: t });
+    await sale.save({ transaction: t });
+
+    if (sale.customerId) {
+      const entry = await customerLedgerService.findEntryByPaymentId(payment.id, { transaction: t });
+      if (entry) await customerLedgerService.deleteEntry({ entryId: entry.id }, { transaction: t });
+    }
+
+    await t.commit();
+    return sale;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
 };
 
 // Validates and normalizes a sale's bank-payment allocation rows — each {bankAccountId, amount}
@@ -201,11 +356,14 @@ const normalizeBankPayments = (bankPayments, collectedAmount, paymentMethod) => 
   return rows;
 };
 
-const computePaymentStatus = ({ sellingAmount, collectedAmount, refundedAmount }) => {
+// `courierCharge` is optional (defaults to 0) so existing callers that don't have it in scope
+// keep working — but PAID must reflect the full order total (selling + courier), not selling alone.
+const computePaymentStatus = ({ sellingAmount, collectedAmount, refundedAmount, courierCharge = 0 }) => {
+  const orderTotal = computeOrderTotal(sellingAmount, courierCharge);
   if (refundedAmount > 0 && refundedAmount >= collectedAmount) return "REFUNDED";
   if (refundedAmount > 0 && refundedAmount < collectedAmount) return "PARTIALLY_REFUNDED";
   if (collectedAmount <= 0) return "UNPAID";
-  if (collectedAmount < sellingAmount) return "PARTIALLY_PAID";
+  if (collectedAmount < orderTotal) return "PARTIALLY_PAID";
   return "PAID";
 };
 
@@ -275,7 +433,7 @@ const createOrder = async ({
     let collected;
     let bankPaymentRows;
     if (payments !== undefined) {
-      const normalized = normalizePayments(payments, selling);
+      const normalized = normalizePayments(payments);
       paymentRows = normalized.rows;
       collected = normalized.total;
       // Derived purely so the legacy sale_bank_accounts table / bankAccountId column (and the
@@ -294,8 +452,9 @@ const createOrder = async ({
           : [];
     }
 
-    const pending = Math.max(0, selling - collected);
-    const paymentStatus = computePaymentStatus({ sellingAmount: selling, collectedAmount: collected, refundedAmount: 0 });
+    const orderTotal = computeOrderTotal(selling, parsedCourierCharge);
+    const pending = Math.max(0, orderTotal - collected);
+    const paymentStatus = computePaymentStatus({ sellingAmount: selling, collectedAmount: collected, refundedAmount: 0, courierCharge: parsedCourierCharge });
     // bankAccountId is kept in sync as the first allocation's bank for any reader that still
     // uses the legacy single-account column.
     const bankAccountId = bankPaymentRows[0]?.bankAccountId || null;
@@ -391,8 +550,12 @@ const createOrder = async ({
       );
     }
 
+    // Kept paired with the row that produced each one, so the ledger entries created below (and
+    // any later edit/delete via updatePayment/deletePayment) can be linked back to it — see
+    // CustomerLedgerEntry.paymentId and applyPaymentsToSale's identical pairing above.
+    const createdPayments = [];
     for (const row of paymentRows) {
-      await Payment.create(
+      const payment = await Payment.create(
         {
           saleId: sale.id,
           amount: row.amount,
@@ -404,6 +567,7 @@ const createOrder = async ({
         },
         { transaction: t }
       );
+      createdPayments.push(payment);
     }
 
     // Sort by productId ASC so two concurrent multi-line orders touching overlapping
@@ -535,11 +699,13 @@ const createOrder = async ({
       // One ledger PAYMENT entry per payment method — mirrors the itemized Payment rows above so
       // a split payment (e.g. part Cash, part UPI) shows up as two distinct ledger lines instead
       // of one entry with a misleading single method.
-      for (const row of paymentRows) {
+      for (let i = 0; i < paymentRows.length; i++) {
+        const row = paymentRows[i];
         await customerLedgerService.recordPayment(
           {
             customerId: finalCustomerId,
             saleId: sale.id,
+            paymentId: createdPayments[i].id,
             amount: row.amount,
             paymentMethod: row.method || null,
             bankPayments: row.bankAccountId ? [{ bankAccountId: row.bankAccountId, amount: row.amount }] : [],
@@ -949,6 +1115,7 @@ const returnItem = async ({ saleItemId, quantity, userId, reason, refundAmount, 
         sellingAmount: parseFloat(sale.sellingAmount),
         collectedAmount: parseFloat(sale.collectedAmount),
         refundedAmount: parseFloat(sale.refundedAmount),
+        courierCharge: parseFloat(sale.courierCharge) || 0,
       });
       await sale.save({ transaction: t });
     }
@@ -1264,6 +1431,7 @@ const setCourierEntryForSale = async ({ saleId, createCourierEntry, userId }, { 
 };
 
 module.exports = {
+  computeOrderTotal,
   computePaymentStatus,
   normalizeBankPayments,
   normalizePayments,
@@ -1271,6 +1439,8 @@ module.exports = {
   createOrder,
   recordPayment,
   recordPayments,
+  updatePayment,
+  deletePayment,
   cancelOrder,
   cancelOrderItem,
   returnItem,

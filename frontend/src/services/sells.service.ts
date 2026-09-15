@@ -234,6 +234,18 @@ const recordPayment = (saleId: number, data: { amount: number; method?: string; 
 const recordPayments = (saleId: number, payments: PaymentEntry[]) =>
   httpService.post<{ success: boolean; message: string; data: SaleData }>(`/sells/${saleId}/payments`, { payments });
 
+// Edits one existing payment entry already recorded against a sale (amount/method/bank
+// account/ref) — e.g. correcting a mistyped amount. Returns the sale with recomputed totals.
+const updatePayment = (
+  saleId: number,
+  paymentId: number,
+  data: { amount?: number; method?: string; bankAccountId?: number | null; transactionRef?: string | null; notes?: string | null }
+) => httpService.put<{ success: boolean; message: string; data: SaleData }>(`/sells/${saleId}/payments/${paymentId}`, data);
+
+// Removes one existing payment entry outright. Returns the sale with recomputed totals.
+const deletePayment = (saleId: number, paymentId: number) =>
+  httpService.delete<{ success: boolean; message: string; data: SaleData }>(`/sells/${saleId}/payments/${paymentId}`);
+
 // Adds a new product line to an existing sale — lets a Sales member finish filling in a sale
 // after the fact (e.g. a Lead-originated sale that started with just one placeholder line).
 const addSaleItem = (
@@ -257,6 +269,8 @@ export default {
   getPayments,
   recordPayment,
   recordPayments,
+  updatePayment,
+  deletePayment,
   addSaleItem,
   updateSaleItem,
 };

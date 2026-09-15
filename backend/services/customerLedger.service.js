@@ -162,7 +162,7 @@ const updateSaleDebit = async (saleId, customerId, newSellingAmount, { transacti
 // normalizeBankPayments above). bankAccountId is kept in sync as the first row's bank account for
 // any reader that still uses the legacy single-account column.
 const recordPayment = async (
-  { customerId, saleId, amount, paymentMethod, bankPayments, reference, note, transactionDate, userId },
+  { customerId, saleId, paymentId, amount, paymentMethod, bankPayments, reference, note, transactionDate, userId },
   { transaction } = {}
 ) => {
   const parsedAmount = parseFloat(amount);
@@ -178,6 +178,7 @@ const recordPayment = async (
     {
       customerId,
       saleId: saleId || null,
+      paymentId: paymentId || null,
       type: "PAYMENT",
       amount: parsedAmount,
       paymentMethod: paymentMethod || null,
@@ -204,7 +205,7 @@ const recordPayment = async (
 // per-sale recordPayment endpoint accepts a negative amount to correct an over-collection).
 // Kept distinct from recordPayment (which is credit-only, matching the Collect Amount UI).
 const recordAdjustment = async (
-  { customerId, saleId, amount, paymentMethod, bankAccountId, reference, note, transactionDate, userId },
+  { customerId, saleId, paymentId, amount, paymentMethod, bankAccountId, reference, note, transactionDate, userId },
   { transaction } = {}
 ) => {
   const parsedAmount = parseFloat(amount) || 0;
@@ -214,6 +215,7 @@ const recordAdjustment = async (
     {
       customerId,
       saleId: saleId || null,
+      paymentId: paymentId || null,
       type: "ADJUSTMENT",
       amount: parsedAmount,
       paymentMethod: paymentMethod || null,
@@ -347,6 +349,14 @@ const updateEntry = async (
   }
 
   return entry;
+};
+
+// Finds the ledger entry mirroring a specific Payment row (see the `paymentId` column) — used by
+// order.service.js#updatePayment/deletePayment to keep the two in sync when a Sale's payment
+// history is edited directly. Returns null for a Payment row that predates the column, or one
+// that was never linked to a customer (no ledger entry created for it in the first place).
+const findEntryByPaymentId = async (paymentId, { transaction } = {}) => {
+  return CustomerLedgerEntry.findOne({ where: { paymentId }, transaction, lock: !!transaction });
 };
 
 // Hard delete — Admin-only, enforced by the controller. Financial correction here is by editing
@@ -550,6 +560,7 @@ module.exports = {
   recordAdjustment,
   recordManualDebit,
   getCustomerLedger,
+  findEntryByPaymentId,
   updateEntry,
   deleteEntry,
   removeSaleDebit,
