@@ -1,6 +1,7 @@
 import httpService from "./http-service";
 import type { PaginationMeta } from "./courier.service";
 import type { PaymentMethod } from "@/shared/constants/paymentMethod";
+import type { CourierStatus } from "@/shared/constants/courierStatus";
 
 export type IncomeStatus = "PENDING" | "APPROVED";
 
@@ -24,6 +25,14 @@ export interface IncomeEntryData {
     bankAccountId?: number | null;
     bankAccount?: { id: number; bankName: string; accountHolderName: string; accountNumber: string } | null;
     description?: string | null;
+    /** Read-only: the linked Sale's own Notes (entered by the sales employee on the Sell form),
+     *  attached server-side for sale-linked entries. Distinct from `description` above, which is
+     *  this Income entry's own independently-editable Notes field. */
+    saleNotes?: string | null;
+    /** Read-only: the linked Sale's Outgoing Courier status (e.g. "Pending", "Out for Delivery",
+     *  "Done"), attached server-side for sale-linked entries — drives the Income list's "Courier"
+     *  column. Null for a manual (non-sale) income entry, or one whose sale has no courier yet. */
+    courierStatus?: CourierStatus | null;
     status?: IncomeStatus;
     creator?: { id: number; name: string } | null;
     createdAt?: string;

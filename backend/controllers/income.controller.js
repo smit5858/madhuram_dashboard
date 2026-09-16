@@ -1,4 +1,4 @@
-const { AccountEntry, DailyAccountBalance, User, BankAccount } = require("../models");
+const { AccountEntry, DailyAccountBalance, User, BankAccount, Sale, Courier } = require("../models");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const sequelize = require("../config/db");
@@ -11,6 +11,58 @@ const errorResponse = (res, err) => res.status(err.statusCode || 500).json({ suc
 // order.service.js#needsBankSplit's same two methods.
 const needsBankAccount = (paymentMethod) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
 const BANK_ACCOUNT_INCLUDE = { model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] };
+
+/**
+ * Attaches the linked Sale's own Notes (Sale.notes, entered by the sales employee on the Sell
+ * form) to each sale-linked INCOME row as a read-only `saleNotes` field, for display in
+ * IncomeViewModal. AccountEntry has no real FK to Sale (only the loose referenceType/referenceId
+ * pair — see accountEntry.model.js), so this is a separate lookup rather than a Sequelize
+ * include, and deliberately doesn't touch AccountEntry.description, which stays the accountant's
+ * own independently-editable Notes field on the Income entry itself.
+ */
+const attachSaleNotes = async (rows) => {
+  const list = Array.isArray(rows) ? rows : [rows];
+  const saleIds = [...new Set(list.filter((r) => r.referenceType === "sale" && r.referenceId).map((r) => r.referenceId))];
+  if (saleIds.length === 0) return;
+
+  const sales = await Sale.findAll({ where: { id: saleIds }, attributes: ["id", "notes"] });
+  const notesById = new Map(sales.map((s) => [s.id, s.notes]));
+  for (const r of list) {
+    if (r.referenceType === "sale" && r.referenceId) {
+      r.dataValues.saleNotes = notesById.get(r.referenceId) || null;
+    }
+  }
+};
+
+/**
+ * Attaches the linked Sale's Outgoing Courier status (Courier.status, e.g. "Pending", "Out for
+ * Delivery", "Done") to each sale-linked INCOME row as a read-only `courierStatus` field, for
+ * the Income list's "Courier" column. Same loose referenceType/referenceId lookup pattern as
+ * attachSaleNotes above. A sale can have more than one Courier row (e.g. a split "Ship Available
+ * Products" shipment) — the earliest-created OUT-direction one is shown, since that's the
+ * original shipment for the order.
+ */
+const attachCourierStatus = async (rows) => {
+  const list = Array.isArray(rows) ? rows : [rows];
+  const saleIds = [...new Set(list.filter((r) => r.referenceType === "sale" && r.referenceId).map((r) => r.referenceId))];
+  if (saleIds.length === 0) return;
+
+  const couriers = await Courier.findAll({
+    where: { saleId: saleIds, direction: "OUT" },
+    attributes: ["saleId", "status"],
+    order: [["id", "ASC"]],
+  });
+  const statusBySale = new Map();
+  for (const c of couriers) {
+    if (!statusBySale.has(c.saleId)) statusBySale.set(c.saleId, c.status);
+  }
+
+  for (const r of list) {
+    if (r.referenceType === "sale" && r.referenceId) {
+      r.dataValues.courierStatus = statusBySale.get(r.referenceId) || null;
+    }
+  }
+};
 
 /**
  * Shared filter builder for the Income list + totals endpoints, so they can never diverge.
@@ -53,6 +105,9 @@ exports.getIncomeEntries = async (req, res) => {
       limit: limitNum,
       offset: (pageNum - 1) * limitNum,
     });
+
+    await attachSaleNotes(rows);
+    await attachCourierStatus(rows);
 
     return res.status(200).json({
       success: true,
@@ -140,6 +195,7 @@ exports.getIncomeById = async (req, res) => {
       include: [{ model: User, as: "creator", attributes: ["id", "name"] }, BANK_ACCOUNT_INCLUDE],
     });
     if (!entry) return res.status(404).json({ success: false, message: "Income record not found" });
+    await attachSaleNotes(entry);
     return res.status(200).json({ success: true, data: entry });
   } catch (err) {
     return errorResponse(res, err);

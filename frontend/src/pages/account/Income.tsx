@@ -9,6 +9,7 @@ import incomeService, { type IncomeEntryData, type IncomeFilters } from "@/servi
 import { incomeFilterSchema, type IncomeFilterValues } from "@/validation/income.validation";
 import { useDebounce } from "@/hook/useDebounce";
 import { PAYMENT_METHOD_OPTIONS } from "@/shared/constants/paymentMethod";
+import { STATUS_LABEL, STATUS_BADGE_CLASS } from "@/shared/constants/courierStatus";
 import { formatDisplayDate } from "@/shared/utils/date";
 import IncomeViewModal from "./components/IncomeViewModal";
 import IncomeFormModal from "./components/IncomeFormModal";
@@ -259,6 +260,7 @@ const Income = () => {
                   <th className="px-4 py-3 whitespace-nowrap">Amount</th>
                   <th className="px-4 py-3 whitespace-nowrap">Date</th>
                   <th className="px-4 py-3 whitespace-nowrap">Status</th>
+                  <th className="px-4 py-3 whitespace-nowrap">Courier</th>
                   <th className="px-4 py-3 whitespace-nowrap">Action</th>
                 </tr>
               </thead>
@@ -277,6 +279,17 @@ const Income = () => {
                     <td className="px-4 py-3 whitespace-nowrap text-gray-500">{formatDisplayDate(entry.entryDate)}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <IncomeStatusBadge status={entry.status} />
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {entry.courierStatus ? (
+                        <span
+                          className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_BADGE_CLASS[entry.courierStatus]}`}
+                        >
+                          {STATUS_LABEL[entry.courierStatus]}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-2">

@@ -118,6 +118,17 @@ const IncomeViewModal = ({ entry, onClose }: IncomeViewModalProps) => {
               </Section>
             )}
 
+            {entry.saleNotes && (
+              <Section title="Sale Notes">
+                <div className="sm:col-span-2 flex items-start gap-2.5">
+                  <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white text-slate-400 ring-1 ring-slate-200">
+                    <FileText className="h-3.5 w-3.5" />
+                  </div>
+                  <p className="text-sm font-medium text-slate-800 whitespace-pre-line">{entry.saleNotes}</p>
+                </div>
+              </Section>
+            )}
+
             <Section title="Record Info">
               <DetailItem icon={User} label="Added By" value={entry.creator?.name} />
               <DetailItem icon={Calendar} label="Created" value={formatDateTime(entry.createdAt)} />

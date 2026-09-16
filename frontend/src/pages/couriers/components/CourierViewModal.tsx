@@ -95,6 +95,7 @@ const CourierViewModal = ({ courier, onClose }: CourierViewModalProps) => {
     enabled: !!courier.saleId,
   });
   const saleItems = saleDetailResponse?.data?.data?.items || [];
+  const saleNotes = saleDetailResponse?.data?.data?.notes;
   /** null = no sale-item data to show a Serial Number field for at all (not a sale-linked
    *  line, or the detail fetch hasn't resolved yet). Otherwise an empty array means
    *  "not a serialized product" (renders as "Not Required"), non-empty means the serials
@@ -250,6 +251,17 @@ const CourierViewModal = ({ courier, onClose }: CourierViewModalProps) => {
                     <FileText className="h-3.5 w-3.5" />
                   </div>
                   <p className="text-sm font-medium text-slate-800 whitespace-pre-line">{courier.note}</p>
+                </div>
+              </Section>
+            )}
+
+            {saleNotes && (
+              <Section title="Sale Notes">
+                <div className="sm:col-span-2 flex items-start gap-2.5">
+                  <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white text-slate-400 ring-1 ring-slate-200">
+                    <FileText className="h-3.5 w-3.5" />
+                  </div>
+                  <p className="text-sm font-medium text-slate-800 whitespace-pre-line">{saleNotes}</p>
                 </div>
               </Section>
             )}
