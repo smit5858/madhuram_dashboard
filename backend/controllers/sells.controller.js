@@ -311,7 +311,7 @@ exports.getSaleById = async (req, res) => {
           model: SaleItem,
           as: "items",
           include: [
-            { model: Product, attributes: ["id", "name", "description", "productType"] },
+            { model: Product, attributes: ["id", "name", "description", "productType", "isMasterProduct"] },
             { model: SerialUnit, attributes: ["id", "serialNumber", "status"] },
             { model: Courier, attributes: ["id", "courierName", "trackId", "pending", "completedDate", "quantity"] },
           ],
@@ -511,8 +511,8 @@ exports.addSaleItem = async (req, res) => {
       return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to update this sale" });
     }
 
-    const { productId, quantity, sellingPrice, serialNumbers } = req.body || {};
-    const item = await orderService.addOrderItem({ saleId: sale.id, productId, quantity, sellingPrice, serialNumbers, userId: user.id });
+    const { productId, quantity, sellingPrice, serialNumbers, notes } = req.body || {};
+    const item = await orderService.addOrderItem({ saleId: sale.id, productId, quantity, sellingPrice, serialNumbers, notes, userId: user.id });
     return res.status(201).json({ success: true, message: "Product added to sale", data: item });
   } catch (err) {
     return errorResponse(res, err);
@@ -535,8 +535,8 @@ exports.updateSaleItem = async (req, res) => {
       return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to update this sale" });
     }
 
-    const { quantity, sellingPrice } = req.body || {};
-    const item = await orderService.updateOrderItem({ saleId: sale.id, saleItemId: itemId, quantity, sellingPrice, userId: user.id });
+    const { quantity, sellingPrice, notes } = req.body || {};
+    const item = await orderService.updateOrderItem({ saleId: sale.id, saleItemId: itemId, quantity, sellingPrice, notes, userId: user.id });
     return res.status(200).json({ success: true, message: "Sale item updated", data: item });
   } catch (err) {
     return errorResponse(res, err);

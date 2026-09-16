@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
-import { Plus, RotateCcw, Trash2, Eye, Edit2, AlertTriangle, CheckCircle2, XCircle, Package, IndianRupee, ShoppingBag, Search as SearchIcon, Download, ChevronDown, UserCheck, Loader2 } from "lucide-react";
+import { Plus, RotateCcw, Trash2, Eye, Edit2, AlertTriangle, CheckCircle2, XCircle, Package, PackagePlus, IndianRupee, ShoppingBag, Search as SearchIcon, Download, ChevronDown, UserCheck, Loader2 } from "lucide-react";
 import { Formik, Form, Field, useFormikContext } from "formik";
 import { useDebounce } from "@/hook/useDebounce";
 import { type RootState } from "../../store/store";
@@ -26,6 +26,7 @@ import platformService from "../../services/platform.service";
 import { COURIER_COMPANY_OTHER } from "@/shared/constants/courierCompanies";
 import CancelSaleModal from "@/shared/components/CancelSaleModal";
 import StockShortageModal, { type StockShortageItem } from "@/pages/sells/components/StockShortageModal";
+import QuickAddProductModal, { type QuickAddProductResult } from "@/pages/sells/components/QuickAddProductModal";
 import ProductSearchSelect from "@/pages/sells/components/ProductSearchSelect";
 import PaymentsEditor from "@/pages/sells/components/PaymentsEditor";
 import { validatePaymentRows, sumPaymentRows, needsBankAccount, PAYMENT_ENTRY_METHODS, type PaymentRow, type PaymentEntryMethod } from "@/pages/sells/utils/paymentRows";
@@ -42,7 +43,31 @@ interface FormItem {
   /** Product name captured from the sale record itself — used as the autocomplete's display
    *  fallback when this product isn't in the loaded active-catalog list (e.g. now inactive). */
   productName?: string;
+  /** Free-text note — currently only editable for Quick Add Product lines (see
+   *  QuickAddProductModal), but stored generically on the line item. */
+  notes?: string;
+  /** True for a line created via "Quick add product" — set explicitly at creation time (and
+   *  re-derived from Product.isMasterProduct when hydrating an existing sale's items, see
+   *  openEditModal) so the Product field can render the entered name as a plain value instead
+   *  of the searchable picker, without depending on whether the separate active-catalog
+   *  products query has refetched yet. */
+  isQuickProduct?: boolean;
+  /** Stable React list key, independent of array position — rows can be deleted from the
+   *  middle, and an index-based key would make React reuse a ProductSearchSelect instance
+   *  (which keeps its own internal display-text state) for a different row, leaving stale
+   *  text behind even though its value/badges (driven purely by props) update correctly. */
+  _key: string;
 }
+
+let formItemKeySeq = 0;
+const nextFormItemKey = () => `item-${++formItemKeySeq}`;
+
+// A row the user hasn't actually put a product into yet — no product picked, no name captured,
+// not a Quick Add line, and not already persisted. `productId === ""` alone isn't enough to mean
+// "empty": a Quick Add line intentionally carries a real Product id (see QuickAddProductModal)
+// but is still a fully valid line, so this checks the row's shape instead of just the id.
+const isEmptyProductRow = (item: FormItem) =>
+  !item.id && !item.productId && !item.productName && !item.isQuickProduct;
 
 // Converts draft payment rows to the wire shape without re-validating — used to build the actual
 // submit payload once handleSubmit's validatePaymentRows call has already confirmed the rows are
@@ -330,13 +355,16 @@ const Sells = () => {
 
   // Cancel-sale confirmation (with the defective/write-off option) — id of the sale awaiting confirmation.
   const [cancelSaleId, setCancelSaleId] = useState<number | null>(null);
-  const [items, setItems] = useState<FormItem[]>([
-    { productId: "", quantity: 1, sellingPrice: "" },
-  ]);
+  // Starts empty rather than with one blank placeholder row — an untouched placeholder used to
+  // count as "row #1" (inflating Products Included, and getting caught by the "select a product
+  // for row #1" validation the moment a Quick Add Product was added alongside it). The empty
+  // state below prompts "+ Add Product" / "Quick add product" instead.
+  const [items, setItems] = useState<FormItem[]>([]);
+  const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
   // Snapshot of each existing line's quantity/price as loaded into Edit — lets handleSubmit
   // diff against the live `items` state and only send updateSaleItem for lines the user
   // actually changed.
-  const [originalItemsById, setOriginalItemsById] = useState<Record<number, { quantity: number; sellingPrice: number }>>({});
+  const [originalItemsById, setOriginalItemsById] = useState<Record<number, { quantity: number; sellingPrice: number; notes?: string }>>({});
 
   // The pinned "Other" product field option — a real, non-catalog Product row (isMasterProduct:
   // false, productType SOFTWARE) seeded once on the backend (see server.js#ensureOtherProductSeeded)
@@ -346,9 +374,18 @@ const Sells = () => {
     () => productsList.find((p) => p.name === "Other" && p.isMasterProduct === false) || null,
     [productsList]
   );
+  // The active-catalog query above intentionally fetches every Product row (no `masterOnly`
+  // filter) because other lookups in this file (stock-shortage pre-check, existing Quick Add
+  // rows' productType, etc.) need to resolve a Quick Add Product's own row by id. But that same
+  // unfiltered list must never leak into the general search picker: a Quick Add Product
+  // (isMasterProduct: false, name !== "Other" — see QuickAddProductModal) is scoped to the sale
+  // it was created for, not a selectable Product Master catalog entry. Only real master products
+  // plus the pinned "Other" placeholder (also isMasterProduct: false, but a deliberate catalog
+  // exception — see server.js#ensureOtherProductSeeded) belong in the picker's suggestions.
   const productsListForPicker = useMemo(() => {
-    if (!otherProduct) return productsList;
-    return [otherProduct, ...productsList.filter((p) => p.id !== otherProduct.id)];
+    const masterProducts = productsList.filter((p) => p.isMasterProduct !== false || p.name === "Other");
+    if (!otherProduct) return masterProducts;
+    return [otherProduct, ...masterProducts.filter((p) => p.id !== otherProduct.id)];
   }, [productsList, otherProduct]);
 
   // "Create Courier Entry" is locked off whenever every chosen line is the "Other" placeholder —
@@ -549,14 +586,14 @@ const Sells = () => {
   // full item list with the create call instead). No standalone toast/invalidate here; these
   // run as a batch from handleSubmit, which handles success/error once for the whole batch.
   const addSaleItemMutation = useMutation({
-    mutationFn: ({ saleId, data }: { saleId: number; data: { productId: number; quantity: number; sellingPrice: number } }) =>
+    mutationFn: ({ saleId, data }: { saleId: number; data: { productId: number; quantity: number; sellingPrice: number; notes?: string } }) =>
       saleService.addSaleItem(saleId, data),
   });
 
   // Mutation: Edit an existing sale line's price and/or quantity (Edit flow only). Same
   // batch-from-handleSubmit pattern as addSaleItemMutation above.
   const updateSaleItemMutation = useMutation({
-    mutationFn: ({ saleId, itemId, data }: { saleId: number; itemId: number; data: { quantity?: number; sellingPrice?: number } }) =>
+    mutationFn: ({ saleId, itemId, data }: { saleId: number; itemId: number; data: { quantity?: number; sellingPrice?: number; notes?: string } }) =>
       saleService.updateSaleItem(saleId, itemId, data),
   });
 
@@ -666,6 +703,7 @@ const Sells = () => {
   });
 
   const resetForm = () => {
+    setIsQuickAddOpen(false);
     setCustomerId(null);
     setCustomerLookupStatus("idle");
     setFoundCustomerInfo(null);
@@ -691,7 +729,7 @@ const Sells = () => {
     setNotes("");
     setSaleDate(getTodayISODate());
     setCreateCourierEntry(true);
-    setItems([{ productId: "", quantity: 1, sellingPrice: "" }]);
+    setItems([]);
     setOriginalItemsById({});
     setSelectedSale(null);
     // Stale across sale open/close otherwise — the next sale (or a fresh Add) must start
@@ -765,16 +803,21 @@ const Sells = () => {
           productId: i.productId,
           quantity: i.quantity,
           sellingPrice: i.sellingPrice,
-          productName: i.productName,
+          productName: i.Product?.name || i.productName,
+          notes: i.notes || undefined,
+          isQuickProduct: i.Product?.isMasterProduct === false && i.Product?.name !== "Other",
+          _key: `existing-${i.id}`,
         }))
       );
       setOriginalItemsById(
         Object.fromEntries(
-          sale.items.filter((i) => i.id != null).map((i) => [i.id as number, { quantity: Number(i.quantity), sellingPrice: Number(i.sellingPrice) }])
+          sale.items
+            .filter((i) => i.id != null)
+            .map((i) => [i.id as number, { quantity: Number(i.quantity), sellingPrice: Number(i.sellingPrice), notes: i.notes || undefined }])
         )
       );
     } else {
-      setItems([{ productId: "", quantity: 1, sellingPrice: "" }]);
+      setItems([]);
       setOriginalItemsById({});
     }
     setIsModalOpen(true);
@@ -840,16 +883,43 @@ const Sells = () => {
   const handleAddItemRow = () => {
     setItems((prev) => [
       ...prev,
-      { productId: "", quantity: 1, sellingPrice: "" },
+      { productId: "", quantity: 1, sellingPrice: "", _key: nextFormItemKey() },
     ]);
   };
 
+  // Removing a row is always allowed while composing the sale, including down to zero rows —
+  // "at least one product item" is only enforced at final submit time (see handleSubmit).
   const handleRemoveItemRow = (index: number) => {
-    if (items.length <= 1) {
-      toast.error("At least one product item is required");
-      return;
-    }
     setItems((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // Adds a Quick Add Product line — the modal already created a real, non-master
+  // (isMasterProduct: false) Product row backing it. The row is added immediately with
+  // isQuickProduct: true and its entered name, so the Product field can show that name as a
+  // plain value right away instead of waiting on (or depending on) the active-catalog products
+  // query to refetch and include the brand-new row.
+  const handleQuickAddProduct = (result: QuickAddProductResult) => {
+    setItems((prev) => {
+      const quickRow: FormItem = {
+        productId: result.productId,
+        quantity: result.quantity,
+        sellingPrice: result.price,
+        productName: result.name,
+        notes: result.notes,
+        isQuickProduct: true,
+        _key: nextFormItemKey(),
+      };
+      // A leftover untouched row (e.g. one added via "+ Add Product" but never given a product)
+      // isn't a real line — replace it instead of appending after it, otherwise it stays behind
+      // as an invalid "select a product" row even though the sale now has a valid Quick Product.
+      if (prev.every(isEmptyProductRow)) return [quickRow];
+      return [...prev, quickRow];
+    });
+    setIsQuickAddOpen(false);
+    // Keeps productsList in sync (e.g. for the stock-shortage pre-check's productType lookup on
+    // this same item, and so the picker can resolve it if referenced elsewhere) — not awaited
+    // since nothing in the UI depends on this finishing.
+    queryClient.invalidateQueries({ queryKey: ["products", "active-catalog"] });
   };
 
   const handleItemChange = (
@@ -910,6 +980,13 @@ const Sells = () => {
       return;
     }
 
+    // "At least one product" is only enforced here at final submit — the user is free to delete
+    // rows down to zero while still composing the sale (see handleRemoveItemRow).
+    if (items.length === 0) {
+      toast.error("At least one product item is required");
+      return;
+    }
+
     // Validate items
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
@@ -947,6 +1024,7 @@ const Sells = () => {
                 productId: Number(row.productId),
                 quantity: Number(row.quantity),
                 sellingPrice: Number(row.sellingPrice) || 0,
+                notes: row.notes?.trim() || undefined,
               },
             });
             // Tag the row with its new SaleItem id so that if the header update below fails
@@ -963,19 +1041,22 @@ const Sells = () => {
           const original = originalItemsById[row.id];
           const newQuantity = Number(row.quantity);
           const newPrice = Number(row.sellingPrice) || 0;
+          const newNotes = row.notes?.trim() || "";
           const quantityChanged = original && newQuantity !== original.quantity;
           const priceChanged = original && newPrice !== original.sellingPrice;
-          if (quantityChanged || priceChanged) {
+          const notesChanged = original && newNotes !== (original.notes || "");
+          if (quantityChanged || priceChanged || notesChanged) {
             await updateSaleItemMutation.mutateAsync({
               saleId,
               itemId: row.id,
               data: {
                 quantity: quantityChanged ? newQuantity : undefined,
                 sellingPrice: priceChanged ? newPrice : undefined,
+                notes: notesChanged ? newNotes : undefined,
               },
             });
             const savedId = row.id;
-            setOriginalItemsById((prev) => ({ ...prev, [savedId]: { quantity: newQuantity, sellingPrice: newPrice } }));
+            setOriginalItemsById((prev) => ({ ...prev, [savedId]: { quantity: newQuantity, sellingPrice: newPrice, notes: newNotes || undefined } }));
           }
         }
       } catch (err: any) {
@@ -1014,6 +1095,10 @@ const Sells = () => {
     // for this type, not an error to interrupt the sale for).
     const shortages: StockShortageItem[] = [];
     items.forEach((item) => {
+      // Quick Add Product lines are always HARDWARE_ORDER_BASED — checked directly off the row
+      // instead of a productsList lookup, which may not have refetched to include a
+      // just-created quick product yet.
+      if (item.isQuickProduct) return;
       const prod = productsList.find((p) => p.id === Number(item.productId));
       if (prod && (prod.productType === "SOFTWARE" || prod.productType === "HARDWARE_ORDER_BASED")) return;
       const available = prod?.available ?? 0;
@@ -1038,6 +1123,7 @@ const Sells = () => {
       productId: Number(i.productId),
       quantity: Number(i.quantity),
       sellingPrice: Number(i.sellingPrice) || 0,
+      notes: i.notes?.trim() || undefined,
     }));
     const itemsTotal = forItems.reduce(
       (sum, i) => sum + (Number(i.quantity) || 0) * (Number(i.sellingPrice) || 0),
@@ -1857,6 +1943,13 @@ const Sells = () => {
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
+                      onClick={() => setIsQuickAddOpen(true)}
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+                    >
+                      <PackagePlus className="h-3 w-3" /> Quick add product
+                    </button>
+                    <button
+                      type="button"
                       onClick={handleAddItemRow}
                       className="inline-flex items-center gap-1 rounded-md bg-[#3d6fe0] px-3 py-1 text-xs font-semibold text-white shadow-sm hover:bg-[#3162d2]"
                     >
@@ -1870,12 +1963,27 @@ const Sells = () => {
                   </p>
                 )}
 
+                {items.length === 0 && (
+                  <p className="rounded-lg border border-dashed border-slate-200 bg-white py-4 text-center text-xs text-slate-400">
+                    No products added yet.
+                  </p>
+                )}
+
                 <div className="space-y-3">
                   {items.map((row, index) => {
                     const selectedProd = productsList.find(
                       (p) => p.id === Number(row.productId)
                     );
-                    const isNotStockTracked = selectedProd?.productType === "SOFTWARE" || selectedProd?.productType === "HARDWARE_ORDER_BASED";
+                    // A Quick Add Product line — a real, non-master Product row created just for
+                    // this sale (see QuickAddProductModal). Checked off the row's own explicit
+                    // flag first (always correct immediately after adding it, regardless of
+                    // whether the active-catalog products query has refetched yet); falls back to
+                    // a productsList lookup for rows hydrated from an existing sale that predate
+                    // this flag. Distinct from the pinned "Other" placeholder, also isMasterProduct: false.
+                    const isQuickProduct =
+                      row.isQuickProduct === true ||
+                      (!!selectedProd && selectedProd.isMasterProduct === false && selectedProd.name !== "Other");
+                    const isNotStockTracked = isQuickProduct || selectedProd?.productType === "SOFTWARE" || selectedProd?.productType === "HARDWARE_ORDER_BASED";
                     const stockQty = selectedProd ? (selectedProd.available ?? 0) : 0;
                     const isShort =
                       !isNotStockTracked &&
@@ -1884,7 +1992,7 @@ const Sells = () => {
 
                     return (
                       <div
-                        key={index}
+                        key={row._key}
                         className="flex flex-col gap-2.5 rounded-lg bg-white p-3 border border-slate-200 shadow-sm"
                       >
                       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2.5">
@@ -1892,21 +2000,44 @@ const Sells = () => {
                           #{index + 1}
                         </span>
 
-                        {/* Product Dropdown */}
+                        {/* Product field — a Quick Add Product line has a fixed, manually-entered
+                            name (not a catalog selection), so it's shown as plain text instead of
+                            the searchable picker: no dropdown/suggestions, and no dependency on
+                            the active-catalog products list containing this just-created row. */}
                         <div className="flex-1 w-full sm:w-auto">
                           <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
                             Product *
                           </label>
-                          <ProductSearchSelect
-                            products={productsListForPicker}
-                            value={row.productId}
-                            onChange={(productId) => handleProductSelect(index, productId)}
-                            disabled={!!row.id}
-                            isLoading={isProductsLoading}
-                            fallbackLabel={row.productName}
-                            title={row.id ? "An existing line's product can't be changed — add a new product row instead" : undefined}
-                          />
+                          {isQuickProduct ? (
+                            <input
+                              type="text"
+                              readOnly
+                              disabled
+                              value={row.productName || ""}
+                              title="Quick-added product — the name is fixed and can't be changed here"
+                              className="w-full rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none"
+                            />
+                          ) : (
+                            <ProductSearchSelect
+                              products={productsListForPicker}
+                              value={row.productId}
+                              onChange={(productId) => handleProductSelect(index, productId)}
+                              disabled={!!row.id}
+                              isLoading={isProductsLoading}
+                              fallbackLabel={row.productName}
+                              title={row.id ? "An existing line's product can't be changed — add a new product row instead" : undefined}
+                            />
+                          )}
                         </div>
+
+                        {/* Quick Product indicator */}
+                        {isQuickProduct && (
+                          <div className="sm:pt-4">
+                            <span className="rounded bg-indigo-50 border border-indigo-200 px-2 py-1 text-[10px] font-bold text-indigo-700 whitespace-nowrap">
+                              Quick Product
+                            </span>
+                          </div>
+                        )}
 
                         {/* Stock indicator badge */}
                         {row.productId && (
@@ -1915,7 +2046,7 @@ const Sells = () => {
                               <span className="rounded bg-purple-50 border border-purple-200 px-2 py-1 text-[10px] font-bold text-purple-700 whitespace-nowrap">
                                 No stock tracking
                               </span>
-                            ) : selectedProd?.productType === "HARDWARE_ORDER_BASED" ? (
+                            ) : isQuickProduct || selectedProd?.productType === "HARDWARE_ORDER_BASED" ? (
                               <span className="rounded bg-amber-50 border border-amber-200 px-2 py-1 text-[10px] font-bold text-amber-700 whitespace-nowrap">
                                 Arranged per sale
                               </span>
@@ -2006,6 +2137,22 @@ const Sells = () => {
                           </div>
                         )}
                       </div>
+
+                      {/* Notes — Quick Add Product lines only */}
+                      {isQuickProduct && (
+                        <div className="pl-7">
+                          <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                            Notes
+                          </label>
+                          <input
+                            type="text"
+                            value={row.notes || ""}
+                            onChange={(e) => handleItemChange(index, "notes", e.target.value)}
+                            placeholder="Optional note about this item"
+                            className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                          />
+                        </div>
+                      )}
                       </div>
                     );
                   })}
@@ -2730,6 +2877,13 @@ const Sells = () => {
           onClose={() => setStockShortagePrompt(null)}
           onAvailableOnly={handleStockShortageAvailableOnly}
           onAllProducts={handleStockShortageAllProducts}
+        />
+      )}
+
+      {isQuickAddOpen && (
+        <QuickAddProductModal
+          onClose={() => setIsQuickAddOpen(false)}
+          onAdd={handleQuickAddProduct}
         />
       )}
 

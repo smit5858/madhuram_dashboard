@@ -598,6 +598,7 @@ const createOrder = async ({
         throw err;
       }
 
+      const trimmedItemNotes = item.notes ? String(item.notes).trim() : null;
       const saleItem = await SaleItem.create(
         {
           saleId: sale.id,
@@ -608,6 +609,7 @@ const createOrder = async ({
           allocatedQuantity: 0,
           fulfilledQuantity: 0,
           backorderedQuantity: 0,
+          notes: trimmedItemNotes,
         },
         { transaction: t }
       );
@@ -654,6 +656,7 @@ const createOrder = async ({
               saleItemId: saleItem.id,
               shipmentGroupId,
               shipmentType: "SHIP_COMPLETE",
+              note: trimmedItemNotes,
             },
             { transaction: t }
           )
@@ -1135,7 +1138,7 @@ const returnItem = async ({ saleItemId, quantity, userId, reason, refundAmount, 
 // other lines (mirroring whatever "Create Courier Entry" currently resolves to for this sale —
 // see setCourierEntryForSale), adds this line to the same shipment group; otherwise fulfills
 // whatever was allocated directly, same as a courier-less sale.
-const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialNumbers, userId }) => {
+const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialNumbers, notes, userId }) => {
   const t = await sequelize.transaction();
   try {
     const sale = await Sale.findByPk(saleId, { transaction: t, lock: true });
@@ -1174,6 +1177,7 @@ const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialN
       throw err;
     }
 
+    const trimmedItemNotes = notes ? String(notes).trim() : null;
     const saleItem = await SaleItem.create(
       {
         saleId: sale.id,
@@ -1184,6 +1188,7 @@ const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialN
         allocatedQuantity: 0,
         fulfilledQuantity: 0,
         backorderedQuantity: 0,
+        notes: trimmedItemNotes,
       },
       { transaction: t }
     );
@@ -1227,6 +1232,7 @@ const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialN
           saleItemId: saleItem.id,
           shipmentGroupId,
           shipmentType: "SHIP_COMPLETE",
+          note: trimmedItemNotes,
         },
         { transaction: t }
       );
@@ -1256,7 +1262,7 @@ const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialN
 // touches stock. A quantity increase reserves the extra units (backordering whatever isn't
 // available, same as a fresh order line); a decrease releases whatever's still only reserved —
 // it can never drop below what's already been shipped (use the dedicated Return flow for that).
-const updateOrderItem = async ({ saleId, saleItemId, quantity, sellingPrice, userId }) => {
+const updateOrderItem = async ({ saleId, saleItemId, quantity, sellingPrice, notes, userId }) => {
   const t = await sequelize.transaction();
   try {
     const item = await SaleItem.findOne({ where: { id: saleItemId, saleId }, transaction: t, lock: true });
@@ -1273,6 +1279,9 @@ const updateOrderItem = async ({ saleId, saleItemId, quantity, sellingPrice, use
 
     if (sellingPrice !== undefined) {
       item.sellingPrice = parseFloat(sellingPrice) || 0;
+    }
+    if (notes !== undefined) {
+      item.notes = notes ? String(notes).trim() : null;
     }
 
     let newlyAllocated = 0;

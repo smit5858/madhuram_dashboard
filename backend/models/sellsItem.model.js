@@ -76,6 +76,12 @@ const SaleItem = sequelize.define(
       allowNull: false,
       defaultValue: 0,
     },
+    // Free-text line note — primarily used by Quick Add Product items from the Sells form
+    // (see Sells.tsx QuickAddProductModal) to record why a one-off item was included.
+    notes: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
   },
   {
     tableName: "sells_items",

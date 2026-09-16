@@ -12,6 +12,10 @@ export interface SaleItemData {
     name: string;
     description?: string;
     productType?: ProductType;
+    /** false for a Quick Add Product row (see QuickAddProductModal) — lets the Sells form
+     *  identify a hydrated line as quick-added without depending on the separate active-catalog
+     *  products list. */
+    isMasterProduct?: boolean;
   };
   quantity: number;
   sellingPrice: number;
@@ -20,6 +24,8 @@ export interface SaleItemData {
   fulfilledQuantity?: number;
   backorderedQuantity?: number;
   returnedQuantity?: number;
+  /** Free-text line note — primarily used by Quick Add Product items (see QuickAddProductModal). */
+  notes?: string | null;
   /** SerialUnit rows tied to this line item (SaleItem.hasMany(SerialUnit)) — RESERVED/SOLD
    *  units are the ones currently assigned to this order's shipment. */
   SerialUnits?: { id: number; serialNumber: string; status: string }[];
@@ -157,6 +163,7 @@ export interface CreateSalePayload {
     quantity: number;
     sellingPrice: number;
     serialNumbers?: string[];
+    notes?: string;
   }>;
 }
 
@@ -250,12 +257,15 @@ const deletePayment = (saleId: number, paymentId: number) =>
 // after the fact (e.g. a Lead-originated sale that started with just one placeholder line).
 const addSaleItem = (
   saleId: number,
-  data: { productId: number; quantity: number; sellingPrice: number; serialNumbers?: string[] }
+  data: { productId: number; quantity: number; sellingPrice: number; serialNumbers?: string[]; notes?: string }
 ) => httpService.post<{ success: boolean; message: string; data: SaleItemData }>(`/sells/${saleId}/items`, data);
 
 // Edits an existing line's price and/or quantity — the other half of addSaleItem above.
-const updateSaleItem = (saleId: number, itemId: number, data: { quantity?: number; sellingPrice?: number }) =>
-  httpService.put<{ success: boolean; message: string; data: SaleItemData }>(`/sells/${saleId}/items/${itemId}`, data);
+const updateSaleItem = (
+  saleId: number,
+  itemId: number,
+  data: { quantity?: number; sellingPrice?: number; notes?: string }
+) => httpService.put<{ success: boolean; message: string; data: SaleItemData }>(`/sells/${saleId}/items/${itemId}`, data);
 
 export default {
   getSales,
