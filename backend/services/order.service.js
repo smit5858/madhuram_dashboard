@@ -1134,9 +1134,10 @@ const returnItem = async ({ saleItemId, quantity, userId, reason, refundAmount, 
 // Creates a one-off, non-master (isMasterProduct: false) HARDWARE_ORDER_BASED Product + Stock row
 // to back a single "Quick Add Product" line on a sale (see QuickAddProductModal.tsx) — reuses the
 // exact same scoped-product mechanism as the pinned "Other" placeholder product. Lives here (and is
-// gated only by /sells permission via authorizeAnyAction in sells.routes.js) rather than behind
-// POST /products' /products "create" permission, since this never touches the master product
-// catalog and is really a sells-flow action, not a Products-module one.
+// gated only by /sells "update" permission in sells.routes.js) rather than behind POST /products'
+// "create" permission, since this never touches the master product catalog and is really a
+// sells-flow action, not a Products-module one — a Sales employee with sells access but no
+// Products-module access must still be able to use it.
 const quickAddProduct = async ({ name }) => {
   const trimmedName = name ? String(name).trim() : "";
   if (!trimmedName) {
