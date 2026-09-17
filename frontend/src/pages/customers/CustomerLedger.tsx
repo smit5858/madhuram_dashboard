@@ -11,6 +11,7 @@ import LedgerPaymentModal from "./components/LedgerPaymentModal";
 import DeleteLedgerEntryModal from "./components/DeleteLedgerEntryModal";
 import ShareStatementMenu from "./components/ShareStatementMenu";
 import { formatDisplayDate } from "@/shared/utils/date";
+import { formatPhoneDisplay } from "@/shared/utils/phone";
 
 const describeEntry = (entry: LedgerEntry) => {
   if (entry.type === "SALE") return `Product Sale${entry.sale?.invoiceNumber ? ` (${entry.sale.invoiceNumber})` : ""}`;
@@ -87,7 +88,7 @@ const CustomerLedger = () => {
             <ArrowLeft className="h-3.5 w-3.5" /> Back to Sells
           </button>
           <h1 className="text-xl font-bold text-slate-900">{customer.name}</h1>
-          <p className="text-xs text-slate-500 font-mono">{customer.phone}</p>
+          <p className="text-xs text-slate-500 font-mono">{formatPhoneDisplay(customer.phone)}</p>
         </div>
 
         <div className="flex items-center gap-2">

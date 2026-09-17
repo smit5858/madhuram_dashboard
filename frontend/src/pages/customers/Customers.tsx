@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
 import toast from "react-hot-toast";
@@ -25,6 +25,7 @@ import customerService, {
 } from "../../services/customer.service";
 import { useDebounce } from "@/hook/useDebounce";
 import { formatDisplayDate } from "@/shared/utils/date";
+import { normalizePhoneDigits, formatPhoneDisplay } from "@/shared/utils/phone";
 
 const CITIES = ["Rajkot", "Ahmedabad", "Surat", "Vadodara", "Morbi", "Jamnagar", "Bhavnagar", "Other"];
 
@@ -100,6 +101,18 @@ const Customers = () => {
   const [formCity, setFormCity] = useState("");
   const [formPincode, setFormPincode] = useState("");
   const [formNotes, setFormNotes] = useState("");
+
+  // Phone input caret preservation (see FormikPhoneInput for the same pattern)
+  const formPhoneInputRef = useRef<HTMLInputElement>(null);
+  const formPhoneCaretDigitsRef = useRef<number | null>(null);
+  const formPhoneDisplay = formatPhoneDisplay(formPhone);
+  useLayoutEffect(() => {
+    if (formPhoneCaretDigitsRef.current === null || !formPhoneInputRef.current) return;
+    const digitsBeforeCaret = formPhoneCaretDigitsRef.current;
+    const caretPos = digitsBeforeCaret + (digitsBeforeCaret > 5 ? 1 : 0);
+    formPhoneInputRef.current.setSelectionRange(caretPos, caretPos);
+    formPhoneCaretDigitsRef.current = null;
+  }, [formPhoneDisplay]);
 
   // Mutation: Create Customer
   const createCustomerMutation = useMutation({
@@ -400,7 +413,7 @@ const Customers = () => {
                     <td className="px-4 py-3.5 whitespace-nowrap">
                       <span className="inline-flex items-center gap-1 font-medium text-blue-600 bg-blue-50/60 px-2 py-0.5 rounded border border-blue-100">
                         <Phone className="h-3 w-3" />
-                        {customer.phone}
+                        {formatPhoneDisplay(customer.phone)}
                       </span>
                     </td>
 
@@ -541,15 +554,19 @@ const Customers = () => {
                     Phone Number *
                   </label>
                   <input
+                    ref={formPhoneInputRef}
                     type="tel"
+                    inputMode="numeric"
                     required
-                    value={formPhone}
+                    value={formPhoneDisplay}
                     onChange={(e) => {
-                      const value = e.target.value.replace(/\D/g, "").slice(0, 10);
-                      setFormPhone(value);
+                      const raw = e.target.value;
+                      const caret = e.target.selectionStart ?? raw.length;
+                      formPhoneCaretDigitsRef.current = raw.slice(0, caret).replace(/\D/g, "").length;
+                      setFormPhone(normalizePhoneDigits(raw));
                     }}
-                    maxLength={10}
-                    placeholder="9876543210"
+                    maxLength={11}
+                    placeholder="98765 43210"
                     className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                   />
                 </div>
@@ -659,7 +676,7 @@ const Customers = () => {
                 <h3 className="text-lg font-bold text-slate-900">{selectedCustomer.name}</h3>
                 <p className="text-xs text-blue-600 font-medium flex items-center gap-1 mt-0.5">
                   <Phone className="h-3 w-3" />
-                  {selectedCustomer.phone}
+                  {formatPhoneDisplay(selectedCustomer.phone)}
                 </p>
               </div>
               <button

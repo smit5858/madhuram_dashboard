@@ -12,6 +12,7 @@ import FormikPhoneInput from "../../../shared/components/formik-fields/FormikPho
 import { incomingCourierEditSchema, type IncomingCourierEditFormValues } from "../../../validation/courier.validation";
 import { COURIER_COMPANY_OTHER } from "../../../shared/constants/courierCompanies";
 import { getTodayISODate } from "../../../shared/utils/date";
+import { normalizePhoneDigits } from "../../../shared/utils/phone";
 
 interface IncomingCourierFormModalProps {
     /** null = creating a new Incoming Courier record */
@@ -65,7 +66,7 @@ const IncomingCourierFormModal = ({ courier, onClose }: IncomingCourierFormModal
 
     const initialValues: FormValues = {
         customerName: courier?.customerName || courier?.name || "",
-        mobileNo: courier?.mobileNo || courier?.phone || "",
+        mobileNo: normalizePhoneDigits(courier?.mobileNo || courier?.phone) || "",
         pincode: courier?.pincode || "",
         productName: courier?.productName || "",
         address: courier?.address || "",

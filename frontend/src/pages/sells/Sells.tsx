@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -32,6 +32,7 @@ import PaymentsEditor from "@/pages/sells/components/PaymentsEditor";
 import { validatePaymentRows, sumPaymentRows, needsBankAccount, PAYMENT_ENTRY_METHODS, type PaymentRow, type PaymentEntryMethod } from "@/pages/sells/utils/paymentRows";
 import { blurNumberInputOnWheel } from "@/shared/utils/input";
 import { formatDisplayDate, getTodayISODate } from "@/shared/utils/date";
+import { normalizePhoneDigits, formatPhoneDisplay } from "@/shared/utils/phone";
 
 interface FormItem {
   /** Set only for a line that already exists as a SaleItem on the backend (populated when
@@ -303,6 +304,17 @@ const Sells = () => {
 
   const [customerName, setCustomerName] = useState("");
   const [customerNumber, setCustomerNumber] = useState("");
+  // Phone input caret preservation (see FormikPhoneInput for the same pattern)
+  const customerNumberInputRef = useRef<HTMLInputElement>(null);
+  const customerNumberCaretDigitsRef = useRef<number | null>(null);
+  const customerNumberDisplay = formatPhoneDisplay(customerNumber);
+  useLayoutEffect(() => {
+    if (customerNumberCaretDigitsRef.current === null || !customerNumberInputRef.current) return;
+    const digitsBeforeCaret = customerNumberCaretDigitsRef.current;
+    const caretPos = digitsBeforeCaret + (digitsBeforeCaret > 5 ? 1 : 0);
+    customerNumberInputRef.current.setSelectionRange(caretPos, caretPos);
+    customerNumberCaretDigitsRef.current = null;
+  }, [customerNumberDisplay]);
   const [platform, setPlatform] = useState("Direct Store");
   // Free-text sibling for the platform select's "Other" option — mirrors otherCourierName below.
   const [otherPlatformName, setOtherPlatformName] = useState("");
@@ -1716,21 +1728,23 @@ const Sells = () => {
                       )}
                     </div>
                     <input
+                      ref={customerNumberInputRef}
                       type="tel"
                       inputMode="numeric"
-                      pattern="[0-9]*"
-                      maxLength={10}
+                      maxLength={11}
                       autoComplete="off"
-                      value={customerNumber}
+                      value={customerNumberDisplay}
                       onChange={(e) => {
-                        const numericOnly = e.target.value.replace(/\D/g, "").slice(0, 10);
-                        setCustomerNumber(numericOnly);
+                        const raw = e.target.value;
+                        const caret = e.target.selectionStart ?? raw.length;
+                        customerNumberCaretDigitsRef.current = raw.slice(0, caret).replace(/\D/g, "").length;
+                        setCustomerNumber(normalizePhoneDigits(raw));
                         setShowSuggestions(true);
                       }}
                       onFocus={() => {
                         if (customerSuggestions.length > 0) setShowSuggestions(true);
                       }}
-                      placeholder="e.g. 9876543210 (10 digits)"
+                      placeholder="e.g. 98765 43210 (10 digits)"
                       className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                     />
 
@@ -1749,7 +1763,7 @@ const Sells = () => {
                           >
                             <div>
                               <p className="font-semibold text-slate-900">{cust.name}</p>
-                              <p className="text-[11px] text-blue-600 font-mono">{cust.phone}</p>
+                              <p className="text-[11px] text-blue-600 font-mono">{formatPhoneDisplay(cust.phone)}</p>
                             </div>
                             {cust.city && (
                               <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
@@ -2619,7 +2633,7 @@ const Sells = () => {
                     Customer Phone
                   </span>
                   <span className="font-semibold text-slate-800">
-                    {detail.customerNumber || "—"}
+                    {formatPhoneDisplay(detail.customerNumber) || "—"}
                   </span>
                 </div>
                 <div>

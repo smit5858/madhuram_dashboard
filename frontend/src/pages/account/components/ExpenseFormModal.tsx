@@ -14,6 +14,7 @@ import { expenseEntrySchema, type ExpenseEntryFormValues } from "@/validation/ex
 import { PAYMENT_METHOD_OPTIONS } from "@/shared/constants/paymentMethod";
 import { getTodayISODate } from "@/shared/utils/date";
 import { useDebounce } from "@/hook/useDebounce";
+import { normalizePhoneDigits } from "@/shared/utils/phone";
 
 const needsBankAccount = (paymentMethod?: string) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
 
@@ -151,7 +152,7 @@ const ExpenseFormModal = ({ entry, onClose }: ExpenseFormModalProps) => {
 
   const initialValues: ExpenseEntryFormValues = {
     name: entry?.name || "",
-    mobile: entry?.mobile || "",
+    mobile: normalizePhoneDigits(entry?.mobile) || "",
     product: entry?.product || "",
     amount: entry?.amount !== undefined && entry?.amount !== null ? String(entry.amount) : "",
     entryDate: entry?.entryDate || getTodayISODate(),

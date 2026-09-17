@@ -13,6 +13,7 @@ import { leadFilterSchema, LEAD_STATUSES, type LeadFilterValues } from "@/valida
 import { useDebounce } from "@/hook/useDebounce";
 import { initSocket } from "@/services/socket.service";
 import { getTodayISODate, formatDisplayDate } from "@/shared/utils/date";
+import { formatPhoneDisplay } from "@/shared/utils/phone";
 import LeadStatusBadge from "./components/LeadStatusBadge";
 import LeadViewModal from "./components/LeadViewModal";
 import LeadFormModal from "./components/LeadFormModal";
@@ -374,7 +375,7 @@ const Leads = () => {
                       <td className="px-4 py-3 whitespace-nowrap text-gray-800">{lead.platform?.name || "—"}</td>
                       <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">{lead.customerName}</td>
                       <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{lead.companyName || "—"}</td>
-                      <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{lead.phone}</td>
+                      <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{formatPhoneDisplay(lead.phone)}</td>
                       <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{lead.city || "—"}</td>
                       <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{lead.product?.name || "Other"}</td>
                       <td className="px-4 py-3 text-gray-800 whitespace-nowrap">{lead.quantity}</td>

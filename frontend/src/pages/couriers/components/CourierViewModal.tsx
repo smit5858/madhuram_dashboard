@@ -25,6 +25,7 @@ import saleService from "../../../services/sells.service";
 import { STATUS_LABEL, SHIPMENT_TYPE_LABEL, STATUS_BADGE_CLASS } from "../../../shared/constants/courierStatus";
 import { STOCK_STATUS_LABEL, STOCK_STATUS_BADGE_CLASS } from "../../../shared/constants/productStockStatus";
 import { formatDateTime, formatDisplayDate } from "../../../shared/utils/date";
+import { formatPhoneDisplay } from "../../../shared/utils/phone";
 import CourierShareButton from "./CourierShareButton";
 
 const Badge = ({ className, children }: { className: string; children: ReactNode }) => (
@@ -168,7 +169,7 @@ const CourierViewModal = ({ courier, onClose }: CourierViewModalProps) => {
 
           <div className="flex flex-col gap-4">
             <Section title="Contact & Address">
-              <DetailItem icon={Phone} label="Mobile No." value={courier.mobileNo || courier.phone} />
+              <DetailItem icon={Phone} label="Mobile No." value={formatPhoneDisplay(courier.mobileNo || courier.phone)} />
               <DetailItem icon={MapPin} label="City" value={courier.city} />
               <DetailItem icon={Hash} label="Pincode" value={courier.pincode} />
               <DetailItem icon={MapPin} label="Address" value={courier.address} full />

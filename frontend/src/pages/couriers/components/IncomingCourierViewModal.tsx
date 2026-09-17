@@ -18,6 +18,7 @@ import type { CourierData } from "../../../services/courier.service";
 import courierCompanyService, { buildTrackingLink } from "../../../services/courierCompany.service";
 import { STATUS_LABEL, STATUS_BADGE_CLASS } from "../../../shared/constants/courierStatus";
 import { formatDateTime, formatDisplayDate } from "../../../shared/utils/date";
+import { formatPhoneDisplay } from "../../../shared/utils/phone";
 
 const Badge = ({ className, children }: { className: string; children: ReactNode }) => (
   <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${className}`}>
@@ -123,7 +124,7 @@ const IncomingCourierViewModal = ({ courier, onClose }: IncomingCourierViewModal
 
           <div className="flex flex-col gap-4">
             <Section title="Contact & Address">
-              <DetailItem icon={Phone} label="Mobile No." value={courier.mobileNo || courier.phone} />
+              <DetailItem icon={Phone} label="Mobile No." value={formatPhoneDisplay(courier.mobileNo || courier.phone)} />
               <DetailItem icon={MapPin} label="City" value={courier.city} />
               <DetailItem icon={Hash} label="Pincode" value={courier.pincode} />
               <DetailItem icon={MapPin} label="Address" value={courier.address} full />

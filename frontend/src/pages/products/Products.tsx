@@ -24,6 +24,7 @@ import {
 import { useDebounce } from "@/hook/useDebounce";
 import { type RootState } from "../../store/store";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
+import FormikPhoneInput from "@/shared/components/formik-fields/FormikPhoneInput";
 import productService, {
   type ProductData,
   type ProductDetail,
@@ -292,7 +293,7 @@ const QuickAddDealerModal = ({
           {({ values, setFieldValue, isSubmitting, errors, touched }) => (
             <Form className="space-y-3">
               <Field name="name" label="Dealer Name *" placeholder="e.g. ABC Traders" component={FormikInput} />
-              <Field name="phone" label="Phone" placeholder="Optional" component={FormikInput} />
+              <Field name="phone" label="Phone" placeholder="Optional" component={FormikPhoneInput} />
               <Field name="email" type="email" label="Email" placeholder="Optional" component={FormikInput} />
               <Field name="website" label="Website Link" placeholder="Optional — e.g. example.com" component={FormikInput} />
 

@@ -11,6 +11,7 @@ import ShareStatementMenu from "@/pages/customers/components/ShareStatementMenu"
 import DebitedFormModal from "./components/DebitedFormModal";
 import { useDebounce } from "@/hook/useDebounce";
 import { formatDisplayDate } from "@/shared/utils/date";
+import { formatPhoneDisplay } from "@/shared/utils/phone";
 
 const PAGE_SIZE = 10;
 
@@ -214,7 +215,7 @@ const Debited = () => {
                   <tr key={debtor.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 whitespace-nowrap text-gray-500">{(meta.page - 1) * meta.limit + idx + 1}</td>
                     <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">{debtor.name}</td>
-                    <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{debtor.phone}</td>
+                    <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{formatPhoneDisplay(debtor.phone)}</td>
                     <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{debtor.city || "—"}</td>
                     <td className="px-4 py-3 whitespace-nowrap text-gray-700">₹{debtor.totalPurchase.toFixed(2)}</td>
                     <td className="px-4 py-3 whitespace-nowrap text-gray-700">₹{debtor.totalPaid.toFixed(2)}</td>

@@ -11,6 +11,7 @@ import FormikSelect from "../../../shared/components/formik-fields/FormikSelect"
 import FormikDate from "../../../shared/components/formik-fields/FormikDate";
 import FormikPhoneInput from "../../../shared/components/formik-fields/FormikPhoneInput";
 import FormikSerialPicker from "../../../shared/components/formik-fields/FormikSerialPicker";
+import { normalizePhoneDigits } from "../../../shared/utils/phone";
 import { courierEditSchema, validateSerialNumbers, type CourierEditFormValues } from "../../../validation/courier.validation";
 import { COURIER_COMPANY_OTHER } from "../../../shared/constants/courierCompanies";
 import { SHIPMENT_TYPE_LABEL, type ShipmentType } from "../../../shared/constants/courierStatus";
@@ -170,7 +171,7 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
 
     const initialValues: FormValues = {
         customerName: courier?.customerName || courier?.name || "",
-        mobileNo: courier?.mobileNo || courier?.phone || "",
+        mobileNo: normalizePhoneDigits(courier?.mobileNo || courier?.phone) || "",
         pincode: courier?.pincode || "",
         charge: courier?.charge !== undefined && courier?.charge !== null ? String(courier.charge) : "",
         productName: courier?.productName || "",

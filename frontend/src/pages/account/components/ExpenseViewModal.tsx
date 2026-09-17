@@ -3,6 +3,7 @@ import { Banknote, Calendar, FileText, IndianRupee, Package, Phone, Receipt, Use
 import type { ExpenseEntryData } from "@/services/expense.service";
 import { PAYMENT_METHOD_LABEL } from "@/shared/constants/paymentMethod";
 import { formatDateTime, formatDisplayDate } from "@/shared/utils/date";
+import { formatPhoneDisplay } from "@/shared/utils/phone";
 import ExpenseStatusBadge from "./ExpenseStatusBadge";
 
 const DetailItem = ({
@@ -81,7 +82,7 @@ const ExpenseViewModal = ({ entry, onClose }: ExpenseViewModalProps) => {
           <div className="flex flex-col gap-4">
             <Section title="Details">
               <DetailItem icon={User} label="Name" value={entry.name} />
-              <DetailItem icon={Phone} label="Mobile" value={entry.mobile} />
+              <DetailItem icon={Phone} label="Mobile" value={formatPhoneDisplay(entry.mobile)} />
               <DetailItem icon={Package} label="Product" value={entry.product} />
               <DetailItem icon={Calendar} label="Date" value={formatDisplayDate(entry.entryDate)} />
             </Section>

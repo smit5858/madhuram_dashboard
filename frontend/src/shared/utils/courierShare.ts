@@ -1,5 +1,6 @@
 import type { CourierData } from "../../services/courier.service";
 import { DELIVERY_MODE_LABEL } from "../constants/deliveryMode";
+import { formatPhoneDisplay } from "./phone";
 
 /** Normalizes a raw Indian mobile number into the digits-only, country-code-prefixed form
  *  wa.me expects (e.g. "8264858795" -> "918264858795"). Returns null if the number doesn't
@@ -69,7 +70,7 @@ export const buildCourierShareMessage = (courier: CourierData, siblings?: Courie
     "",
     `📅 Date: ${formatCourierShareDate(courier.entryDate)}`,
     `👤 Customer: ${courier.customerName || courier.name || "N/A"}`,
-    `📞 Mobile: ${courier.mobileNo || courier.phone || "N/A"}`,
+    `📞 Mobile: ${formatPhoneDisplay(courier.mobileNo || courier.phone) || "N/A"}`,
     `🏠 Address: ${courier.address || "N/A"}`,
     `🏙️ City: ${cityLine}`,
     "📍 From: MADHURAM MOTORS",

@@ -3,6 +3,7 @@ import { Banknote, Calendar, FileText, Hash, IndianRupee, Package, Phone, User, 
 import type { IncomeEntryData } from "@/services/income.service";
 import { PAYMENT_METHOD_LABEL } from "@/shared/constants/paymentMethod";
 import { formatDateTime, formatDisplayDate } from "@/shared/utils/date";
+import { formatPhoneDisplay } from "@/shared/utils/phone";
 
 const DetailItem = ({
   icon: Icon,
@@ -77,7 +78,7 @@ const IncomeViewModal = ({ entry, onClose }: IncomeViewModalProps) => {
           <div className="flex flex-col gap-4">
             <Section title="Customer">
               <DetailItem icon={User} label="Customer Name" value={entry.customerName} />
-              <DetailItem icon={Phone} label="Phone" value={entry.customerPhone} />
+              <DetailItem icon={Phone} label="Phone" value={formatPhoneDisplay(entry.customerPhone)} />
             </Section>
 
             <Section title="Product">

@@ -5,11 +5,13 @@ import { XCircle } from "lucide-react";
 import incomeService, { type IncomeEntryData } from "@/services/income.service";
 import bankAccountService from "@/services/bankAccount.service";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
+import FormikPhoneInput from "@/shared/components/formik-fields/FormikPhoneInput";
 import FormikSelect from "@/shared/components/formik-fields/FormikSelect";
 import FormikDate from "@/shared/components/formik-fields/FormikDate";
 import { incomeEntrySchema, type IncomeEntryFormValues } from "@/validation/income.validation";
 import { PAYMENT_METHOD_OPTIONS } from "@/shared/constants/paymentMethod";
 import { getTodayISODate } from "@/shared/utils/date";
+import { normalizePhoneDigits } from "@/shared/utils/phone";
 
 const needsBankAccount = (paymentMethod?: string) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
 
@@ -31,7 +33,7 @@ const IncomeFormModal = ({ entry, onClose }: IncomeFormModalProps) => {
 
   const initialValues: IncomeEntryFormValues = {
     customerName: entry?.customerName || "",
-    customerPhone: entry?.customerPhone || "",
+    customerPhone: normalizePhoneDigits(entry?.customerPhone) || "",
     productName: entry?.productName || "",
     serialNumber: entry?.serialNumber || "",
     amount: entry?.amount !== undefined && entry?.amount !== null ? String(entry.amount) : "",
@@ -100,7 +102,7 @@ const IncomeFormModal = ({ entry, onClose }: IncomeFormModalProps) => {
             <Form className="flex flex-1 flex-col overflow-hidden">
               <div className="flex-1 overflow-y-auto px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Field name="customerName" label="Customer Name" placeholder="Customer name" component={FormikInput} />
-                <Field name="customerPhone" label="Customer Phone" placeholder="10-digit phone" component={FormikInput} />
+                <Field name="customerPhone" label="Customer Phone" placeholder="98765 43210" component={FormikPhoneInput} />
                 <Field name="productName" label="Product Name" placeholder="Product name" component={FormikInput} />
                 <Field name="serialNumber" label="Serial Number" placeholder="Serial number (if any)" component={FormikInput} />
                 <Field name="amount" label="Amount" type="number" placeholder="0.00" component={FormikInput} />

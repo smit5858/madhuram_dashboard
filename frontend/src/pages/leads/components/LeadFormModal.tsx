@@ -10,6 +10,7 @@ import FormikDate from "@/shared/components/formik-fields/FormikDate";
 import FormikSelect from "@/shared/components/formik-fields/FormikSelect";
 import { leadEntrySchema, LEAD_STATUSES, OTHER_PRODUCT_ID, type LeadEntryFormValues } from "@/validation/lead.validation";
 import { getTodayISODate } from "@/shared/utils/date";
+import { normalizePhoneDigits } from "@/shared/utils/phone";
 import ProductAutocompleteField from "./ProductAutocompleteField";
 import CustomerAutocompleteField from "./CustomerAutocompleteField";
 
@@ -59,7 +60,7 @@ const LeadFormModal = ({ lead, onClose }: LeadFormModalProps) => {
     platformId: lead?.platformId ?? "",
     customerName: lead?.customerName || "",
     companyName: lead?.companyName || "",
-    phone: lead?.phone || "",
+    phone: normalizePhoneDigits(lead?.phone) || "",
     address: lead?.address || "",
     city: lead?.city || "",
     productId: lead && !lead.productId ? OTHER_PRODUCT_ID : (lead?.productId ?? ""),

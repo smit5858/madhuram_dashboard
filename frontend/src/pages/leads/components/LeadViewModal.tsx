@@ -20,6 +20,7 @@ import {
 import type { RootState } from "@/store/store";
 import leadService from "@/services/lead.service";
 import { formatDateTime, formatDisplayDate, getTodayISODate } from "@/shared/utils/date";
+import { formatPhoneDisplay } from "@/shared/utils/phone";
 import LeadStatusBadge from "./LeadStatusBadge";
 import LeadApprovalBadge from "./LeadApprovalBadge";
 
@@ -222,7 +223,7 @@ const LeadViewModal = ({ leadId, onClose }: LeadViewModalProps) => {
             <Section title="Customer Information">
               <DetailItem icon={User} label="Customer Name" value={lead.customerName} />
               <DetailItem icon={Building2} label="Company Name" value={lead.companyName} />
-              <DetailItem icon={Phone} label="Phone" value={lead.phone} />
+              <DetailItem icon={Phone} label="Phone" value={formatPhoneDisplay(lead.phone)} />
               <DetailItem icon={MapPin} label="City" value={lead.city} />
               <DetailItem icon={MapPin} label="Address" value={lead.address} full />
             </Section>

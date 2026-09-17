@@ -15,6 +15,7 @@ import { STOCK_STATUS_LABEL, STOCK_STATUS_BADGE_CLASS } from "../../shared/const
 import { courierFilterSchema, type CourierFilterValues } from "../../validation/courier.validation";
 import { useDebounce } from "../../hook/useDebounce";
 import { formatDisplayDate } from "../../shared/utils/date";
+import { formatPhoneDisplay } from "../../shared/utils/phone";
 import { groupOutgoingCouriers, commonCourierValue, type CourierGroup } from "./utils/groupCouriers";
 import CourierEditModal from "./components/CourierEditModal";
 import CourierViewModal from "./components/CourierViewModal";
@@ -133,7 +134,7 @@ const CourierTable = ({
                 </td>
                 {columnsVariant === "outgoing" ? (
                     <>
-                        <td className="px-4 py-3 whitespace-nowrap">{courier.mobileNo || courier.phone || <span className="text-slate-300">—</span>}</td>
+                        <td className="px-4 py-3 whitespace-nowrap">{formatPhoneDisplay(courier.mobileNo || courier.phone) || <span className="text-slate-300">—</span>}</td>
                         <td className="px-4 py-3 whitespace-nowrap">
                             {courier.productName || <span className="text-slate-300">—</span>}
                             {courier.quantity ? ` × ${courier.quantity}` : ""}
@@ -173,7 +174,7 @@ const CourierTable = ({
                                 ? <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 border border-blue-100">{courier.city}</span>
                                 : <span className="text-slate-300">—</span>}
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap">{courier.mobileNo || courier.phone || <span className="text-slate-300">—</span>}</td>
+                        <td className="px-4 py-3 whitespace-nowrap">{formatPhoneDisplay(courier.mobileNo || courier.phone) || <span className="text-slate-300">—</span>}</td>
                         <td className="px-4 py-3 whitespace-nowrap">{courier.productName || <span className="text-slate-300">—</span>}</td>
                         <td className="px-4 py-3 whitespace-nowrap">
                             {courier.charge !== undefined && courier.charge !== null
@@ -298,7 +299,7 @@ const CourierTable = ({
                     </td>
                     {columnsVariant === "outgoing" ? (
                         <>
-                            <td className="px-4 py-3 whitespace-nowrap">{first.mobileNo || first.phone || <span className="text-slate-300">—</span>}</td>
+                            <td className="px-4 py-3 whitespace-nowrap">{formatPhoneDisplay(first.mobileNo || first.phone) || <span className="text-slate-300">—</span>}</td>
                             <td className="px-4 py-3 max-w-[220px]">
                                 <div className="flex flex-wrap gap-1">
                                     {group.items.map((item) => (

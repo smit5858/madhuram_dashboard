@@ -7,7 +7,11 @@ const nameField = z
   .min(1, "Dealer name is required")
   .max(150, "Dealer name must be under 150 characters");
 
-const optionalPhoneField = z.string().max(30, "Phone must be under 30 characters").optional();
+// Digits only, exactly 10 when provided — matching FormikPhoneInput's on-keystroke sanitization,
+// same convention as courier.validation.ts / expense.validation.ts's optionalMobileField.
+const optionalPhoneField = z
+  .union([z.string().regex(/^\d{10}$/, "Phone number must be exactly 10 digits"), z.literal("")])
+  .optional();
 
 const optionalEmailField = z
   .union([z.string().email("Please enter a valid email"), z.literal("")])

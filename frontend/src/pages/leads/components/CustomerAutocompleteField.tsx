@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Phone as PhoneIcon } from "lucide-react";
 import customerService, { type CustomerData } from "@/services/customer.service";
 import { useDebounce } from "@/hook/useDebounce";
+import { normalizePhoneDigits, formatPhoneDisplay } from "@/shared/utils/phone";
 
 interface CustomerAutocompleteFieldProps {
   label?: string;
@@ -22,6 +23,8 @@ const CustomerAutocompleteField = ({ label = "Phone Number", value, onPhoneChang
   const debouncedPhone = useDebounce(value, 350);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const caretDigitsRef = useRef<number | null>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -60,6 +63,17 @@ const CustomerAutocompleteField = ({ label = "Phone Number", value, onPhoneChang
     setIsOpen(false);
   };
 
+  const displayValue = formatPhoneDisplay(value);
+
+  // Restore the caret after a reformat, same approach as FormikPhoneInput.
+  useLayoutEffect(() => {
+    if (caretDigitsRef.current === null || !inputRef.current) return;
+    const digitsBeforeCaret = caretDigitsRef.current;
+    const caretPos = digitsBeforeCaret + (digitsBeforeCaret > 5 ? 1 : 0);
+    inputRef.current.setSelectionRange(caretPos, caretPos);
+    caretDigitsRef.current = null;
+  }, [displayValue]);
+
   const showDropdown = isOpen && debouncedPhone.trim().length >= 2;
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -87,15 +101,19 @@ const CustomerAutocompleteField = ({ label = "Phone Number", value, onPhoneChang
       <div className="form-input-wrapper relative">
         <PhoneIcon className="pointer-events-none absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
         <input
+          ref={inputRef}
           type="tel"
           inputMode="numeric"
           autoComplete="off"
-          maxLength={10}
-          value={value}
+          maxLength={11}
+          value={displayValue}
           placeholder="10-digit number"
           onFocus={() => setIsOpen(true)}
           onChange={(e) => {
-            onPhoneChange(e.target.value.replace(/\D/g, "").slice(0, 10));
+            const raw = e.target.value;
+            const caret = e.target.selectionStart ?? raw.length;
+            caretDigitsRef.current = raw.slice(0, caret).replace(/\D/g, "").length;
+            onPhoneChange(normalizePhoneDigits(raw));
             setIsOpen(true);
           }}
           onKeyDown={handleKeyDown}
@@ -125,7 +143,7 @@ const CustomerAutocompleteField = ({ label = "Phone Number", value, onPhoneChang
               >
                 <div>
                   <p className="font-semibold">{customer.name}</p>
-                  <p className="text-[11px] text-blue-600 font-mono">{customer.phone}</p>
+                  <p className="text-[11px] text-blue-600 font-mono">{formatPhoneDisplay(customer.phone)}</p>
                 </div>
                 {customer.city && (
                   <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">{customer.city}</span>

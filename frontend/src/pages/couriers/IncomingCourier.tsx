@@ -10,6 +10,7 @@ import { useDebounce } from "../../hook/useDebounce";
 import { incomingCourierFilterSchema, type IncomingCourierFilterValues } from "../../validation/courier.validation";
 import { COURIER_STATUSES, STATUS_BADGE_CLASS, STATUS_LABEL } from "../../shared/constants/courierStatus";
 import { formatDisplayDate } from "../../shared/utils/date";
+import { formatPhoneDisplay } from "../../shared/utils/phone";
 import FormikInput from "../../shared/components/formik-fields/FormikInput";
 import IncomingCourierFormModal from "./components/IncomingCourierFormModal";
 import IncomingCourierViewModal from "./components/IncomingCourierViewModal";
@@ -333,7 +334,7 @@ const IncomingCourier = () => {
                                                     {courier.customerName || courier.name || <span className="text-slate-300">—</span>}
                                                 </td>
                                                 <td className="px-4 py-3 whitespace-nowrap">
-                                                    {courier.mobileNo || courier.phone || <span className="text-slate-300">—</span>}
+                                                    {formatPhoneDisplay(courier.mobileNo || courier.phone) || <span className="text-slate-300">—</span>}
                                                 </td>
                                                 <td className="px-4 py-3 whitespace-nowrap">
                                                     {courier.productName || <span className="text-slate-300">—</span>}
