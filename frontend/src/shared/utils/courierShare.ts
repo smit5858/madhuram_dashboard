@@ -87,12 +87,16 @@ export const buildCourierShareMessage = (courier: CourierData, siblings?: Courie
   ].join("\n");
 };
 
-/** Resolves the wa.me link to open for sharing this courier, or null when the customer's
- *  mobile number is missing/invalid (callers should show an error instead of opening WhatsApp). */
+/** Resolves the WhatsApp click-to-chat link to open for sharing this courier, or null when the
+ *  customer's mobile number is missing/invalid (callers should show an error instead of opening
+ *  WhatsApp). Uses api.whatsapp.com/send rather than the wa.me short-link redirect: wa.me's
+ *  redirect hop has a known bug that mangles multi-byte (emoji) characters in the `text` param
+ *  into "�", on both WhatsApp Web and Desktop, while api.whatsapp.com/send (what wa.me itself
+ *  forwards to) renders them correctly — see bankAccountShare.ts, which hit the same bug. */
 export const getCourierShareUrl = (courier: CourierData, siblings?: CourierData[]): string | null => {
   const phone = normalizeIndianMobile(courier.mobileNo || courier.phone);
   if (!phone) return null;
 
   const message = buildCourierShareMessage(courier, siblings);
-  return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+  return `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
 };

@@ -238,10 +238,10 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
             entryDate: values.entryDate || undefined,
             to: values.to || "Madhuram Motor",
             direction: formDirection,
-            // Status / Type is locked to Office Pickup only for NEW records (see the read-only
-            // field below) — on edit, omit it entirely so the backend's `!== undefined` guard
-            // leaves whatever deliveryMode the record already had untouched instead of
-            // clobbering CHANGE/PENDING/FREE back to Office Pickup on every save.
+            // New records always start as Office Pickup — on edit, omit it entirely so the
+            // backend's `!== undefined` guard leaves whatever deliveryMode the record already
+            // had untouched instead of clobbering CHANGE/PENDING/FREE back to Office Pickup on
+            // every save.
             deliveryMode: isEdit ? undefined : "OFFICE_PICKUP",
         };
 
@@ -386,19 +386,6 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
                                 <Field name="quantity" label="Quantity" type="number" placeholder="Units to ship" component={FormikInput} />
                             )}
                             <Field name="to" label="To" placeholder="Madhuram Motor" component={FormikInput} />
-
-                            {/* Always Office Pickup for this flow — locked, not user-editable. Submitted as
-                                "OFFICE_PICKUP" regardless (see handleSubmit), so there's no Formik field for it. */}
-                            <div>
-                                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide">Status / Type</label>
-                                <input
-                                    type="text"
-                                    value="Office Pickup"
-                                    readOnly
-                                    disabled
-                                    className="mt-1 block w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-400 cursor-not-allowed"
-                                />
-                            </div>
 
                             {/* Direction is fixed by which page opened this modal (Outgoing/Incoming) — no picker
                                 needed on the Incoming Courier form since it's always "IN" there. */}
