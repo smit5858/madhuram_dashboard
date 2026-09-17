@@ -497,6 +497,20 @@ exports.updateSale = async (req, res) => {
 // POST /sells/:id/items — adds a new product line to an existing sale, e.g. a Sales member
 // finishing a Lead-originated sale that started with just one placeholder line (see
 // lead.controller.js#ensureSaleForLead). Same ownership guard as updateSale.
+// POST /sells/quick-add-product — backs the "Quick Add Product" modal on the Sells form (both new
+// and edit). Not scoped to a saleId: a brand-new sale doesn't have one yet when this fires, so the
+// created product is just handed back for the form to add as a local line item, same as any other
+// product picked from the catalog.
+exports.quickAddProduct = async (req, res) => {
+  try {
+    const { name } = req.body || {};
+    const product = await orderService.quickAddProduct({ name });
+    return res.status(201).json({ success: true, message: "Product saved for this sale only — not added to the master product catalog", data: product });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
 exports.addSaleItem = async (req, res) => {
   try {
     const { id } = req.params;

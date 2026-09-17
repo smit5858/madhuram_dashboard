@@ -1131,6 +1131,43 @@ const returnItem = async ({ saleItemId, quantity, userId, reason, refundAmount, 
   }
 };
 
+// Creates a one-off, non-master (isMasterProduct: false) HARDWARE_ORDER_BASED Product + Stock row
+// to back a single "Quick Add Product" line on a sale (see QuickAddProductModal.tsx) — reuses the
+// exact same scoped-product mechanism as the pinned "Other" placeholder product. Lives here (and is
+// gated only by /sells permission via authorizeAnyAction in sells.routes.js) rather than behind
+// POST /products' /products "create" permission, since this never touches the master product
+// catalog and is really a sells-flow action, not a Products-module one.
+const quickAddProduct = async ({ name }) => {
+  const trimmedName = name ? String(name).trim() : "";
+  if (!trimmedName) {
+    const err = new Error("Product name is required");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const t = await sequelize.transaction();
+  try {
+    const product = await Product.create(
+      { name: trimmedName, productType: "HARDWARE_ORDER_BASED", isMasterProduct: false },
+      { transaction: t }
+    );
+    await Stock.create(
+      { productId: product.id, quantity: 0, reserved: 0, purchasePrice: null, sellingPrice: null, dealerId: null },
+      { transaction: t }
+    );
+    await t.commit();
+    return { id: product.id, name: product.name, productType: product.productType, isMasterProduct: product.isMasterProduct };
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    if (err.name === "SequelizeUniqueConstraintError") {
+      const dupErr = new Error("A product with this name already exists");
+      dupErr.statusCode = 409;
+      throw dupErr;
+    }
+    throw err;
+  }
+};
+
 // Adds a new product line to an existing, non-cancelled Sale — lets a Sales member finish
 // filling in a Sale after the fact (e.g. a Lead-originated Sale that started with just one
 // placeholder line — see lead.controller.js#ensureSaleForLead). Mirrors the per-item logic in
@@ -1453,6 +1490,7 @@ module.exports = {
   cancelOrder,
   cancelOrderItem,
   returnItem,
+  quickAddProduct,
   addOrderItem,
   updateOrderItem,
   setCourierEntryForSale,

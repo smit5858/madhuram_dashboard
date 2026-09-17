@@ -2,12 +2,16 @@ const express = require("express");
 const router = express.Router();
 const authenticate = require("../middlewares/authenticate");
 const authorize = require("../middlewares/authorize");
+const authorizeAnyAction = require("../middlewares/authorizeAnyAction");
 const saleController = require("../controllers/sells.controller");
 
 router.get("/", authenticate, authorize("/sells", "read"), saleController.getSales);
 router.get("/export", authenticate, authorize("/sells", "read"), saleController.exportSales);
 router.get("/totals", authenticate, authorize("/sells", "read"), saleController.getSellsTotals);
 router.get("/daily-trend", authenticate, authorize("/sells", "read"), saleController.getSalesDailyTrend);
+// Reachable from both the new-sale form (needs "create") and an existing sale's edit form (needs
+// "update") — see quickAddProduct's controller comment.
+router.post("/quick-add-product", authenticate, authorizeAnyAction("/sells", ["create", "update"]), saleController.quickAddProduct);
 router.post("/", authenticate, authorize("/sells", "create"), saleController.createSale);
 router.get("/:id", authenticate, authorize("/sells", "read"), saleController.getSaleById);
 router.put("/:id", authenticate, authorize("/sells", "update"), saleController.updateSale);

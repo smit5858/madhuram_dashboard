@@ -253,6 +253,16 @@ const updatePayment = (
 const deletePayment = (saleId: number, paymentId: number) =>
   httpService.delete<{ success: boolean; message: string; data: SaleData }>(`/sells/${saleId}/payments/${paymentId}`);
 
+// Creates the one-off, non-master Product backing a "Quick Add Product" line (see
+// QuickAddProductModal) — a dedicated /sells endpoint rather than POST /products so it only needs
+// /sells permission (create or update), not a separate Products-module grant, since it's a
+// sells-flow action and never touches the master product catalog.
+const quickAddProduct = (data: { name: string }) =>
+  httpService.post<{ success: boolean; message: string; data: { id: number; name: string; productType: string; isMasterProduct: boolean } }>(
+    `/sells/quick-add-product`,
+    data
+  );
+
 // Adds a new product line to an existing sale — lets a Sales member finish filling in a sale
 // after the fact (e.g. a Lead-originated sale that started with just one placeholder line).
 const addSaleItem = (
@@ -281,6 +291,7 @@ export default {
   recordPayments,
   updatePayment,
   deletePayment,
+  quickAddProduct,
   addSaleItem,
   updateSaleItem,
 };

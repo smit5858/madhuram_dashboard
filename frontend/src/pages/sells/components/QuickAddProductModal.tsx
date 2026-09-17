@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { PackagePlus, XCircle } from "lucide-react";
 import toast from "react-hot-toast";
-import productService from "@/services/product.service";
+import saleService from "@/services/sells.service";
 
 export interface QuickAddProductResult {
   productId: number;
@@ -18,7 +18,8 @@ interface QuickAddProductModalProps {
 
 /** Adds a one-off product line to just the current Sells Entry without polluting the Product
  *  Master catalog. Creates a real Product row (isMasterProduct: false, productType:
- *  HARDWARE_ORDER_BASED) via the existing /products endpoint — this reuses the exact same
+ *  HARDWARE_ORDER_BASED) via the dedicated /sells/quick-add-product endpoint (needs only /sells
+ *  permission, not /products — see sells.service.ts#quickAddProduct) — this reuses the exact same
  *  scoped-product mechanism already used for the pinned "Other" placeholder product, so stock
  *  reservation, Courier creation, and catalog exclusion all work with no special-casing. */
 const QuickAddProductModal = ({ onClose, onAdd }: QuickAddProductModalProps) => {
@@ -49,11 +50,7 @@ const QuickAddProductModal = ({ onClose, onAdd }: QuickAddProductModalProps) => 
 
     setIsSubmitting(true);
     try {
-      const res = await productService.createProduct({
-        name: trimmedName,
-        productType: "HARDWARE_ORDER_BASED",
-        isMasterProduct: false,
-      });
+      const res = await saleService.quickAddProduct({ name: trimmedName });
       const productId = res.data?.data?.id;
       if (!productId) {
         throw new Error("Product creation did not return an id");
