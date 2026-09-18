@@ -12,7 +12,7 @@ import { leadEntrySchema, LEAD_STATUSES, OTHER_PRODUCT_ID, type LeadEntryFormVal
 import { getTodayISODate } from "@/shared/utils/date";
 import { normalizePhoneDigits } from "@/shared/utils/phone";
 import ProductAutocompleteField from "./ProductAutocompleteField";
-import CustomerAutocompleteField from "./CustomerAutocompleteField";
+import CustomerAutocompleteField from "@/shared/components/CustomerAutocompleteField";
 
 interface ApiErrorLike {
   response?: { data?: { message?: string } };

@@ -1,4 +1,5 @@
 import httpService from "./http-service";
+import type { PaginationMeta } from "./courier.service";
 
 export interface CourierCompanyData {
     id?: number;
@@ -19,8 +20,18 @@ export const buildTrackingLink = (template: string | null | undefined, trackId: 
     return template.replace("{trackId}", encodeURIComponent(trackId));
 };
 
-const getCourierCompanies = (params?: { search?: string }) =>
-    httpService.get<{ success: boolean; data: CourierCompanyData[] }>("/couriers-companies", { params });
+/** `meta` is only present in the response when `page`/`limit` are passed — every dropdown
+ *  picker and tracking-link lookup across the Courier module calls this with neither, and keeps
+ *  getting the full unpaginated list unchanged. Only the Courier Companies management table
+ *  passes page/limit. */
+const getCourierCompanies = (
+    params?: { search?: string; page?: number; limit?: number },
+    config?: { signal?: AbortSignal }
+) =>
+    httpService.get<{ success: boolean; data: CourierCompanyData[]; meta?: PaginationMeta }>("/couriers-companies", {
+        params,
+        signal: config?.signal,
+    });
 
 const createCourierCompany = (data: Partial<CourierCompanyData>) =>
     httpService.post<{ success: boolean; message: string; data: CourierCompanyData }>("/couriers-companies", data);

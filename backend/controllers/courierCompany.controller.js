@@ -1,13 +1,34 @@
 const { CourierCompany } = require("../models");
 const { Op } = require("sequelize");
 
-// GET /couriers-companies?search=
+// GET /couriers-companies?search=&page=&limit= — page/limit are optional; when omitted the
+// full (unpaginated) list is returned exactly as before, so the dropdown pickers and
+// tracking-link lookups scattered across the Courier module (which never send them) are
+// unaffected. Passing either one switches to a paginated response with meta.
 exports.getCourierCompanies = async (req, res) => {
   try {
     const { search } = req.query;
     const where = {};
     if (search && search.trim()) {
       where.name = { [Op.like]: `%${search.trim()}%` };
+    }
+
+    if (req.query.page !== undefined || req.query.limit !== undefined) {
+      const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 100);
+
+      const { rows, count } = await CourierCompany.findAndCountAll({
+        where,
+        order: [["name", "ASC"]],
+        limit,
+        offset: (page - 1) * limit,
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: rows,
+        meta: { page, limit, total: count, totalPages: Math.ceil(count / limit) || 1 },
+      });
     }
 
     const companies = await CourierCompany.findAll({ where, order: [["name", "ASC"]] });

@@ -6,7 +6,7 @@ import toast from "react-hot-toast";
 import { Formik, Form, Field, useFormikContext, type FormikProps } from "formik";
 import { Download, ChevronDown, ExternalLink, Eye, PackageCheck, RotateCcw, Search, Truck } from "lucide-react";
 import { type RootState } from "../../store/store";
-import courierService, { type CourierData, type CourierFilters } from "../../services/courier.service";
+import courierService, { type CourierData, type CourierFilters, type PaginationMeta } from "../../services/courier.service";
 import courierCompanyService, { buildTrackingLink } from "../../services/courierCompany.service";
 import { initSocket } from "../../services/socket.service";
 import { STATUS_LABEL, STATUS_BADGE_CLASS, type CourierStatus } from "../../shared/constants/courierStatus";
@@ -25,6 +25,8 @@ import CourierShareButton from "./components/CourierShareButton";
 import IncomingCourier from "./IncomingCourier";
 
 type PagePermission = { canRead: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean };
+
+const PAGE_SIZE = 10;
 
 const CourierStatusBadge = ({ status }: { status?: CourierStatus | string | null }) => {
     const key = (status && status in STATUS_LABEL ? status : "PENDING") as CourierStatus;
@@ -69,6 +71,8 @@ const CourierTable = ({
     onDelete,
     onDeleteGroup,
     columnsVariant = "full",
+    meta,
+    onPageChange,
 }: {
     title: string;
     badgeClassName: string;
@@ -90,6 +94,11 @@ const CourierTable = ({
     /** "outgoing" trims the table to Sr No/Customer/Mobile/Product/Courier Company/Tracking ID/
      *  Action only — the Incoming table keeps the full column set. */
     columnsVariant?: "full" | "outgoing";
+    /** Server-side pagination footer (Previous/Next) — omitted when the caller doesn't paginate
+     *  this table (there's currently no such caller left, but keeps the component usable without
+     *  pagination too). */
+    meta?: PaginationMeta;
+    onPageChange?: (page: number) => void;
 }) => {
     // Only needed to resolve a courier's tracking link (matched by company name) — same lookup
     // and queryKey CourierViewModal already uses, so react-query dedupes it to one request.
@@ -401,7 +410,7 @@ const CourierTable = ({
             <h3 className="text-sm font-bold text-slate-900">
                 {title}
                 <span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-bold align-middle ${badgeClassName}`}>
-                    {groups.length}
+                    {meta ? meta.total : groups.length}
                 </span>
             </h3>
             {showSearch && (
@@ -469,6 +478,32 @@ const CourierTable = ({
                 </table>
             </div>
         )}
+
+        {meta && onPageChange && groups.length > 0 && (
+            <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+                <span>
+                    Page {meta.page} of {meta.totalPages} · {meta.total} total
+                </span>
+                <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        disabled={meta.page <= 1}
+                        onClick={() => onPageChange(Math.max(1, meta.page - 1))}
+                        className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                    >
+                        Previous
+                    </button>
+                    <button
+                        type="button"
+                        disabled={meta.page >= meta.totalPages}
+                        onClick={() => onPageChange(Math.min(meta.totalPages, meta.page + 1))}
+                        className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                    >
+                        Next
+                    </button>
+                </div>
+            </div>
+        )}
     </div>
     );
 };
@@ -528,6 +563,24 @@ const Couriers = () => {
     const filterFormRef = useRef<FormikProps<CourierFilterValues>>(null);
     const [isExportOpen, setIsExportOpen] = useState(false);
 
+    // Pending and Completed are independently paginated (own page/limit against /couriers,
+    // split server-side via the status filter — see applyCourierFilters' NOT_DONE bucket)
+    // rather than one shared page sliced client-side, since a single page of raw rows can't be
+    // divided into "page N of Pending" and "page M of Completed" in any consistent way.
+    const [pendingPage, setPendingPage] = useState(1);
+    const [completedPage, setCompletedPage] = useState(1);
+
+    // Any filter change invalidates both tables' current page — page 2 of the old filter set
+    // has no defined meaning against the new one. Reset during render (same pattern as
+    // CustomerAutocompleteField's prevDebouncedPhone) rather than in an effect, to avoid the
+    // extra render pass a setState-in-effect would cause.
+    const [prevAppliedFilters, setPrevAppliedFilters] = useState(appliedFilters);
+    if (appliedFilters !== prevAppliedFilters) {
+        setPrevAppliedFilters(appliedFilters);
+        setPendingPage(1);
+        setCompletedPage(1);
+    }
+
     const handleClearFilters = () => {
         filterFormRef.current?.resetForm();
         setAppliedFilters({});
@@ -566,17 +619,46 @@ const Couriers = () => {
     // Fetch couriers — backend applies city scope + direction filter automatically. Every
     // sale line item gets an OUT courier row the moment the sale is created, so the Outgoing
     // list is the single source of truth for both "what's pending" and "what's delivered";
-    // Incoming rows are always manually created.
-    const { data: response, isLoading: listLoading, error: listError } = useQuery({
-        queryKey: ["couriers", direction, appliedFilters],
+    // Incoming rows are always manually created. Pending (NOT_DONE) and Completed (DONE) are
+    // fetched as two separate paginated queries — see the pendingPage/completedPage comment
+    // above for why a single combined page can't be split into two independent tables.
+    const enableOutgoingQueries = pagePermission.canRead && direction === "OUT";
+
+    const {
+        data: pendingResponse,
+        isLoading: pendingLoading,
+        isError: pendingIsError,
+        error: pendingError,
+    } = useQuery({
+        queryKey: ["couriers", direction, "NOT_DONE", appliedFilters, pendingPage],
         // Forwarding react-query's AbortSignal means a request superseded by a newer
-        // search/date/delivery-mode change is actually cancelled, not left to resolve and get
-        // ignored — only the response for the latest filters can ever reach the table.
-        queryFn: ({ signal }) => courierService.getCouriers({ direction, ...appliedFilters }, { signal }),
-        // Incoming Couriers has its own dedicated page/query (see IncomingCourier.tsx) — this
-        // fetch is only needed for the Outgoing Pending/Completed tables below.
-        enabled: pagePermission.canRead && direction === "OUT",
+        // search/date/delivery-mode/page change is actually cancelled, not left to resolve and
+        // get ignored — only the response for the latest filters can ever reach the table.
+        queryFn: ({ signal }) =>
+            courierService.getCouriers(
+                { direction, ...appliedFilters, status: "NOT_DONE", page: pendingPage, limit: PAGE_SIZE },
+                { signal }
+            ),
+        enabled: enableOutgoingQueries,
     });
+
+    const {
+        data: completedResponse,
+        isLoading: completedLoading,
+        isError: completedIsError,
+        error: completedError,
+    } = useQuery({
+        queryKey: ["couriers", direction, "DONE", appliedFilters, completedPage],
+        queryFn: ({ signal }) =>
+            courierService.getCouriers(
+                { direction, ...appliedFilters, status: "DONE", page: completedPage, limit: PAGE_SIZE },
+                { signal }
+            ),
+        enabled: enableOutgoingQueries,
+    });
+
+    const listLoading = pendingLoading || completedLoading;
+    const listError = pendingIsError ? pendingError : completedIsError ? completedError : null;
 
     // Sales whose backordered items just got allocated by a stock receipt (live push via
     // socket — see backend inventory.controller.js#notifyBackorderAllocations). Any courier
@@ -723,21 +805,25 @@ const Couriers = () => {
         },
     });
 
-    const couriersList: CourierData[] = useMemo(() => response?.data?.data || [], [response]);
+    const pendingList: CourierData[] = useMemo(() => pendingResponse?.data?.data || [], [pendingResponse]);
+    const completedList: CourierData[] = useMemo(() => completedResponse?.data?.data || [], [completedResponse]);
+    const pendingMeta: PaginationMeta = pendingResponse?.data?.meta || { page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 };
+    const completedMeta: PaginationMeta = completedResponse?.data?.meta || { page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 };
 
     // Incoming keeps its own simple client-side search box (out of scope for this feature —
-    // Outgoing's search/date/delivery-mode filtering happens server-side via appliedFilters,
-    // so couriersList is already the filtered set there).
+    // Outgoing's search/date/delivery-mode filtering happens server-side via appliedFilters).
     const [pendingSearch, setPendingSearch] = useState("");
     const [completedSearch, setCompletedSearch] = useState("");
 
-    // Groups every Courier row into one entry per sale (saleId) — see utils/groupCouriers.ts —
-    // so a multi-product sale shows as a single Pending/Completed entry instead of one per
-    // product line, even after a Ship Available Products split. A group counts as pending while
-    // any of its products still needs work, same rule the ungrouped list used per row.
-    const allCourierGroups = useMemo(() => groupOutgoingCouriers(couriersList), [couriersList]);
-    const pendingGroups = useMemo(() => allCourierGroups.filter((g) => g.pending), [allCourierGroups]);
-    const completedGroups = useMemo(() => allCourierGroups.filter((g) => !g.pending), [allCourierGroups]);
+    // Groups each page's Courier rows into one entry per sale (saleId) — see
+    // utils/groupCouriers.ts — so a multi-product sale shows as a single Pending/Completed entry
+    // instead of one per product line, even after a Ship Available Products split. Note: since
+    // Pending/Completed are now fetched as two independently-filtered pages, a sale whose
+    // products have mixed statuses (some DONE, some not) will show up as two separate group rows
+    // — its unfinished products under Pending, its finished ones under Completed — rather than
+    // one combined row; a single-status sale is unaffected and still shows as one row.
+    const pendingGroups = useMemo(() => groupOutgoingCouriers(pendingList), [pendingList]);
+    const completedGroups = useMemo(() => groupOutgoingCouriers(completedList), [completedList]);
 
     // Incoming Couriers has its own dedicated page (own table, filters, pagination, and Done
     // workflow) — see IncomingCourier.tsx. Everything below this point is Outgoing-only.
@@ -890,7 +976,7 @@ const Couriers = () => {
                 <div className="mt-6 flex min-h-75 flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
                     <p className="text-sm font-medium text-slate-500">You do not have permission to view couriers.</p>
                 </div>
-            ) : couriersList.length === 0 ? (
+            ) : pendingMeta.total === 0 && completedMeta.total === 0 ? (
                 <div className="mt-6 flex min-h-75 flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
                     <div className="rounded-full bg-slate-100 p-3 text-slate-400">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-6 w-6">
@@ -944,6 +1030,8 @@ const Couriers = () => {
                         onDelete={setDeletingCourier}
                         onDeleteGroup={setDeletingGroup}
                         columnsVariant="outgoing"
+                        meta={pendingMeta}
+                        onPageChange={setPendingPage}
                     />
                     <CourierTable
                         title="Completed"
@@ -966,6 +1054,8 @@ const Couriers = () => {
                         onDelete={setDeletingCourier}
                         onDeleteGroup={setDeletingGroup}
                         columnsVariant="outgoing"
+                        meta={completedMeta}
+                        onPageChange={setCompletedPage}
                     />
                 </div>
             )}

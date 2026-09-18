@@ -8,6 +8,9 @@ import { type RootState } from "../../store/store";
 import courierCompanyService, { type CourierCompanyData } from "../../services/courierCompany.service";
 import FormikInput from "../../shared/components/formik-fields/FormikInput";
 import { courierCompanySchema, type CourierCompanyFormValues } from "../../validation/courierCompany.validation";
+import { useDebounce } from "../../hook/useDebounce";
+
+const PAGE_SIZE = 10;
 
 /** Combined Create/Edit modal for a courier company. */
 const CourierCompanyEditModal = ({
@@ -167,14 +170,21 @@ const CourierCompanies = () => {
     }, [permissions]);
 
     const [search, setSearch] = useState("");
+    const debouncedSearch = useDebounce(search, 400);
+    const [page, setPage] = useState(1);
+
+    const activeFilters = useMemo(
+        () => ({ search: debouncedSearch.trim() || undefined, page, limit: PAGE_SIZE }),
+        [debouncedSearch, page]
+    );
 
     const { data: response, isLoading, error } = useQuery({
-        queryKey: ["courier-companies"],
-        queryFn: () => courierCompanyService.getCourierCompanies(),
+        queryKey: ["courier-companies", activeFilters],
+        queryFn: ({ signal }) => courierCompanyService.getCourierCompanies(activeFilters, { signal }),
         enabled: pagePermission.canRead,
     });
     const companies = response?.data?.data || [];
-    const filtered = companies.filter((c) => c.name.toLowerCase().includes(search.trim().toLowerCase()));
+    const meta = response?.data?.meta || { page: 1, limit: PAGE_SIZE, total: companies.length, totalPages: 1 };
 
     const [editingCompany, setEditingCompany] = useState<CourierCompanyData | null>(null);
     const [isCreating, setIsCreating] = useState(false);
@@ -220,7 +230,10 @@ const CourierCompanies = () => {
                 <input
                     type="text"
                     value={search}
-                    onChange={(e) => setSearch(e.target.value)}
+                    onChange={(e) => {
+                        setSearch(e.target.value);
+                        setPage(1);
+                    }}
                     placeholder="Filter by name..."
                     className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-3 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                 />
@@ -236,9 +249,9 @@ const CourierCompanies = () => {
                 <p className="text-sm font-medium text-slate-500">You do not have permission to view courier companies.</p>
             ) : (
                 <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                    {filtered.length === 0 ? (
+                    {companies.length === 0 ? (
                         <p className="px-4 py-6 text-center text-xs text-slate-500">
-                            {companies.length === 0 ? "No courier companies yet." : "Nothing matches this filter."}
+                            {search.trim() ? "Nothing matches this filter." : "No courier companies yet."}
                         </p>
                     ) : (
                         <div className="overflow-x-auto">
@@ -252,7 +265,7 @@ const CourierCompanies = () => {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
-                                    {filtered.map((company) => (
+                                    {companies.map((company) => (
                                         <tr key={company.id} className="hover:bg-slate-50/60 transition-colors">
                                             <td className="px-4 py-3 font-semibold text-slate-900 whitespace-nowrap">{company.name}</td>
                                             <td className="px-4 py-3 font-mono text-xs max-w-[280px] truncate" title={company.trackingLinkTemplate || ""}>
@@ -293,6 +306,32 @@ const CourierCompanies = () => {
                                     ))}
                                 </tbody>
                             </table>
+                        </div>
+                    )}
+
+                    {companies.length > 0 && (
+                        <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+                            <span>
+                                Page {meta.page} of {meta.totalPages} · {meta.total} total courier companies
+                            </span>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    disabled={meta.page <= 1}
+                                    onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+                                    className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                                >
+                                    Previous
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled={meta.page >= meta.totalPages}
+                                    onClick={() => setPage((prev) => Math.min(meta.totalPages, prev + 1))}
+                                    className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                                >
+                                    Next
+                                </button>
+                            </div>
                         </div>
                     )}
                 </div>

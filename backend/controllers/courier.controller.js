@@ -52,12 +52,23 @@ const applyCourierFilters = async (scopeWhere, query) => {
   }
 
   if (query.status && query.status !== "ALL") {
-    if (!COURIER_STATUSES.includes(query.status)) {
-      const err = new Error(`status must be one of: ${COURIER_STATUSES.join(", ")}, or ALL`);
-      err.statusCode = 400;
-      throw err;
+    // NOT_DONE is a synthetic bucket (not a real Courier status) used by the Outgoing Pending
+    // table to independently paginate every unfinished shipment — mirrors the `pending` flag
+    // (status !== "DONE") getCouriers/updateCourier already attach to each row, so a shipment
+    // sitting in WAITING_FOR_STOCK/IN_PROGRESS/OUT_FOR_DELIVERY still counts as pending, not
+    // just literal PENDING. Left as a separate sentinel rather than overloading "PENDING" so
+    // Incoming Courier's exact-status filter (status=PENDING meaning only that one status) is
+    // unaffected.
+    if (query.status === "NOT_DONE") {
+      where.status = { [Op.ne]: "DONE" };
+    } else {
+      if (!COURIER_STATUSES.includes(query.status)) {
+        const err = new Error(`status must be one of: ${COURIER_STATUSES.join(", ")}, NOT_DONE, or ALL`);
+        err.statusCode = 400;
+        throw err;
+      }
+      where.status = query.status;
     }
-    where.status = query.status;
   }
 
   if (query.deliveryMode) {

@@ -435,7 +435,6 @@ const ensureChequePaymentMethodBackfilled = async () => {
     await sequelize.query("UPDATE pending_bill_payments SET paymentMethod = 'Other' WHERE paymentMethod = 'Cheque'");
   }
 };
-
 // Courier.deliveryMode was narrowed from ("OFFICE_PICKUP", "CHANGE", "PENDING", "FREE",
 // nullable) down to just ("OFFICE_PICKUP", "COURIER", required, defaulting to "COURIER") — a
 // courier company handling delivery vs. the customer collecting in person is the only

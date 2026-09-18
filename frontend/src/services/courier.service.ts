@@ -86,7 +86,8 @@ export interface CourierFilters {
     startDate?: string;
     endDate?: string;
     deliveryMode?: string;
-    /** "PENDING" | "DONE" | "ALL" (or any CourierStatus) — omit/ALL for no status filter. */
+    /** Any CourierStatus for an exact match, "NOT_DONE" for the synthetic "still pending" bucket
+     *  (status !== DONE — used by the Outgoing Pending table), or "ALL"/omit for no status filter. */
     status?: string;
     page?: number;
     limit?: number;

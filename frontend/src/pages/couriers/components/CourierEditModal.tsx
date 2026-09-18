@@ -9,8 +9,8 @@ import saleService from "../../../services/sells.service";
 import FormikInput from "../../../shared/components/formik-fields/FormikInput";
 import FormikSelect from "../../../shared/components/formik-fields/FormikSelect";
 import FormikDate from "../../../shared/components/formik-fields/FormikDate";
-import FormikPhoneInput from "../../../shared/components/formik-fields/FormikPhoneInput";
 import FormikSerialPicker from "../../../shared/components/formik-fields/FormikSerialPicker";
+import CustomerAutocompleteField from "../../../shared/components/CustomerAutocompleteField";
 import { normalizePhoneDigits } from "../../../shared/utils/phone";
 import { courierEditSchema, validateSerialNumbers, type CourierEditFormValues } from "../../../validation/courier.validation";
 import { COURIER_COMPANY_OTHER } from "../../../shared/constants/courierCompanies";
@@ -310,13 +310,28 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
                 )}
 
                 <Formik initialValues={initialValues} validate={validate} enableReinitialize onSubmit={handleSubmit}>
-                    {({ values }) => (
+                    {({ values, errors, touched, setFieldValue }) => (
                         <Form className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
                             <div className="sm:col-span-2">
                                 <Field name="customerName" label="Customer Name *" placeholder="Customer Name" component={FormikInput} />
                             </div>
 
-                            <Field name="mobileNo" label="Mobile" placeholder="9876543210" component={FormikPhoneInput} />
+                            {/* Same customer search-as-you-type used by Sells/Leads (GET /customers?search=)
+                                — selecting a suggestion fills name, mobile, city, pincode and address from
+                                the matched Customer; a number with no match can still be typed in manually. */}
+                            <CustomerAutocompleteField
+                                label="Mobile"
+                                value={values.mobileNo || ""}
+                                onPhoneChange={(phone) => setFieldValue("mobileNo", phone)}
+                                onSelectCustomer={(customer) => {
+                                    setFieldValue("mobileNo", customer.phone);
+                                    setFieldValue("customerName", customer.name);
+                                    if (customer.city) setCity(customer.city);
+                                    if (customer.pincode) setFieldValue("pincode", customer.pincode);
+                                    if (customer.address) setFieldValue("address", customer.address);
+                                }}
+                                error={touched.mobileNo ? errors.mobileNo : undefined}
+                            />
                             {/* Product Name is per-product for a sale-linked shipment (see the Products
                                 section below) — shown here only for manual (non-sale) entries. */}
                             {!isSaleLinked && (

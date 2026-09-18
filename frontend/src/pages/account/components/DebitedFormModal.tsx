@@ -4,7 +4,7 @@ import { Field, Form, Formik } from "formik";
 import toast from "react-hot-toast";
 import { XCircle } from "lucide-react";
 import customerLedgerService, { type DebtorRow } from "@/services/customerLedger.service";
-import CustomerAutocompleteField from "@/pages/leads/components/CustomerAutocompleteField";
+import CustomerAutocompleteField from "@/shared/components/CustomerAutocompleteField";
 import type { CustomerData } from "@/services/customer.service";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
 import FormikDate from "@/shared/components/formik-fields/FormikDate";

@@ -13,10 +13,11 @@ interface CustomerAutocompleteFieldProps {
   error?: string;
 }
 
-// Same "search-as-you-type against the real API" pattern as ProductAutocompleteField (reuses
-// GET /customers?search= — the Sells entry form's customer lookup — rather than a dedicated
-// endpoint), plus arrow-key navigation over the suggestion list since a phone-number field is
-// typically driven by keyboard rather than the mouse.
+// Search-as-you-type against the real API (reuses GET /customers?search= — the Sells entry
+// form's customer lookup — rather than a dedicated endpoint), plus arrow-key navigation over
+// the suggestion list since a phone-number field is typically driven by keyboard rather than
+// the mouse. Shared across Leads and Couriers, wherever a phone field should resolve to an
+// existing Customer.
 const CustomerAutocompleteField = ({ label = "Phone Number", value, onPhoneChange, onSelectCustomer, error }: CustomerAutocompleteFieldProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
