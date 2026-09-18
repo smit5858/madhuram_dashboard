@@ -80,34 +80,44 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
     });
     const sale = saleDetailResponse?.data?.data;
 
-    // Every Courier row created for this sale — needed to resolve each product's own row id so
-    // its own serial selection can be saved back independently (see handleSubmit).
+    // Every Courier row created for this sale — the authoritative "what's actually part of this
+    // shipment" list (same source CourierViewModal's "Products in this Order" table uses).
+    // Products are driven off this, not off every SaleItem in the sale, because a SaleItem
+    // doesn't always get a Courier row (e.g. SOFTWARE lines — see order.service.js#createOrder)
+    // — building the list from sale.items instead let un-saveable rows render as if editable,
+    // so what showed on screen and what Save actually persisted could silently disagree.
     const { data: siblingsResponse } = useQuery({
         queryKey: ["courier-edit-siblings", courier?.saleId],
         queryFn: () => courierService.getCouriers({ saleId: courier!.saleId! }),
         enabled: isSaleLinked,
     });
-    const courierRowBySaleItemId = new Map((siblingsResponse?.data?.data || []).map((c) => [c.saleItemId, c]));
+    // CANCELLED rows are history (set when the linked sale/order-item is cancelled — see
+    // courier.model.js) — nothing left on them to edit or ship.
+    const siblingCouriers = (siblingsResponse?.data?.data || []).filter((c) => c.status !== "CANCELLED");
 
-    // One entry per product in the sale, each carrying its own quantity, its own serial
-    // requirement, and its own currently-assigned serials — Product A's serials must never leak
-    // into Product B's picker, so each row is resolved independently from that item's own
+    // One entry per Courier row in this shipment, enriched with that row's own SaleItem for
+    // product identity/serialization/current serials — Product A's serials must never leak into
+    // Product B's picker, so each row is resolved independently from that item's own
     // SerialUnits, never from a shared pool.
-    const productRows = (sale?.items || []).map((item) => {
-        const reserved = (item.SerialUnits || []).filter((u) => u.status === "RESERVED").map((u) => u.serialNumber);
-        const sold = (item.SerialUnits || []).filter((u) => u.status === "SOLD").map((u) => u.serialNumber);
-        const currentSerials = reserved.length > 0 ? reserved : sold;
-        return {
-            saleItemId: item.id as number,
-            courierId: courierRowBySaleItemId.get(item.id)?.id,
-            productId: item.productId,
-            name: item.Product?.name || item.productName || "Product",
-            quantity: item.quantity,
-            isSerialized: item.Product?.productType === "SERIALIZED",
-            requiredSerialCount: currentSerials.length,
-            currentSerials,
-        };
-    });
+    const saleItemsById = new Map((sale?.items || []).map((item) => [item.id, item]));
+    const productRows = siblingCouriers
+        .filter((c) => c.saleItemId != null)
+        .map((c) => {
+            const item = saleItemsById.get(c.saleItemId as number);
+            const reserved = (item?.SerialUnits || []).filter((u) => u.status === "RESERVED").map((u) => u.serialNumber);
+            const sold = (item?.SerialUnits || []).filter((u) => u.status === "SOLD").map((u) => u.serialNumber);
+            const currentSerials = reserved.length > 0 ? reserved : sold;
+            return {
+                saleItemId: c.saleItemId as number,
+                courierId: c.id as number,
+                productId: item?.productId,
+                name: item?.Product?.name || item?.productName || c.productName || "Product",
+                quantity: c.quantity ?? item?.quantity,
+                isSerialized: item?.Product?.productType === "SERIALIZED",
+                requiredSerialCount: currentSerials.length,
+                currentSerials,
+            };
+        });
 
     // The Ship Complete Order vs Ship Available Products choice only means anything when this
     // sale actually has a product still waiting on stock — with every line already allocated

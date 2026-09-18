@@ -55,10 +55,19 @@ const FormikSerialPicker = ({
         return merged;
     }, [available, currentlyAssigned]);
 
-    // Auto-select once the choices are known, unless the field already has a value.
+    // Auto-select once the choices are known, unless the field already has a value. Latches on
+    // either branch (not just the one that picks values) — otherwise, on the common edit-existing
+    // case where the field is pre-populated before this ever runs, `selected.length > 0` keeps
+    // bailing without setting the ref, so the effect re-evaluates on every `allChoices` reference
+    // change (e.g. `currentlyAssigned` being a fresh array from the parent's render) instead of
+    // running once and leaving the user's picks alone.
     const preselected = useRef(false);
     useEffect(() => {
-        if (preselected.current || allChoices.length === 0 || selected.length > 0) return;
+        if (preselected.current || allChoices.length === 0) return;
+        if (selected.length > 0) {
+            preselected.current = true;
+            return;
+        }
         preselected.current = true;
 
         const base = currentlyAssigned.filter((s) => allChoices.includes(s)).slice(0, requiredCount);
