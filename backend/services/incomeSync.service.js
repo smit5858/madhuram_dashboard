@@ -193,6 +193,118 @@ const removeIncomeForLedgerEntry = async (ledgerEntryId, { transaction }) => {
   return entryDate;
 };
 
+/**
+ * A manually-created Outgoing Courier only ever needs an Income row while it actually
+ * represents money coming in: Outgoing direction, not a free pickup, a positive charge, and not
+ * sale-linked — a sale-linked Courier row (order.service.js#createOrder) already has its charge
+ * folded into the Sale's own single Income entry (see createIncomeForSale/computeOrderTotal in
+ * order.service.js), so giving it a second Income row here would double-count the same charge.
+ */
+const shouldHaveCourierIncome = (courier) =>
+  courier.direction === "OUT" && !courier.saleId && !courier.freePickup && (parseFloat(courier.charge) || 0) > 0;
+
+/**
+ * Packs the Courier details that AccountEntry has no dedicated column for (company, city,
+ * direction, quantity, tracking, notes) into the Income entry's free-text description — same
+ * approach courier.controller.js#completeIncomingCourier already uses for the mirrored Expense
+ * entry it creates for an Incoming courier.
+ */
+const buildCourierIncomeDescription = (courier) => {
+  const parts = [`Outgoing courier charge — ${courier.customerName || courier.name || "Unknown customer"}`];
+  if (courier.quantity) parts.push(`Qty: ${courier.quantity}`);
+  if (courier.courierName) parts.push(`Courier Company: ${courier.courierName}`);
+  if (courier.city) parts.push(`City: ${courier.city}`);
+  parts.push(`Direction: ${courier.direction}`);
+  if (courier.trackId) parts.push(`Track ID: ${courier.trackId}`);
+  if (courier.note) parts.push(`Notes: ${courier.note}`);
+  return parts.join(" | ");
+};
+
+/**
+ * Creates the Income entry for a manually-created Outgoing Courier (see
+ * courier.controller.js#createCourier), inside the SAME transaction as the Courier's own
+ * creation — mirrors createIncomeForSale's atomic-write reasoning above. Returns null (no entry
+ * created) when the courier has nothing to record as income yet (see shouldHaveCourierIncome).
+ */
+const createIncomeForCourier = async (courier, { transaction, userId }) => {
+  if (!shouldHaveCourierIncome(courier)) return null;
+
+  const entryDate = courier.entryDate || dayjs().format("YYYY-MM-DD");
+
+  await AccountEntry.create(
+    {
+      entryType: "INCOME",
+      category: "Courier",
+      customerName: courier.customerName || courier.name || "Unknown customer",
+      customerPhone: courier.mobileNo || courier.phone || null,
+      productName: courier.productName || null,
+      amount: parseFloat(courier.charge) || 0,
+      entryDate,
+      referenceType: "courier",
+      referenceId: courier.id,
+      courierId: courier.id,
+      description: buildCourierIncomeDescription(courier),
+      // Same Admin-approval workflow as every other auto-created accounting entry (Sale's own
+      // Income row, the Incoming-courier Expense row) — see income.controller.js#approveIncome.
+      status: "PENDING",
+      createdBy: userId,
+    },
+    { transaction }
+  );
+
+  return entryDate;
+};
+
+/**
+ * Keeps the linked Income entry in sync with an edit to its source Courier record (see
+ * courier.controller.js#updateCourier) — same reasoning as syncIncomeForSaleUpdate. Removes the
+ * entry if the courier no longer qualifies (e.g. switched to Incoming, made a free pickup, or
+ * charge cleared to 0), creates one if it now qualifies but never had one, otherwise updates the
+ * existing row in place. Returns the entryDate to recalculate, or null if nothing changed.
+ */
+const syncIncomeForCourierUpdate = async (courier, { transaction }) => {
+  const existing = await AccountEntry.findOne({
+    where: { referenceType: "courier", referenceId: courier.id, entryType: "INCOME" },
+    transaction,
+  });
+
+  if (!shouldHaveCourierIncome(courier)) {
+    if (!existing) return null;
+    const { entryDate } = existing;
+    await existing.destroy({ transaction });
+    return entryDate;
+  }
+
+  if (existing) {
+    existing.customerName = courier.customerName || courier.name || "Unknown customer";
+    existing.customerPhone = courier.mobileNo || courier.phone || null;
+    existing.productName = courier.productName || null;
+    existing.amount = parseFloat(courier.charge) || 0;
+    existing.entryDate = courier.entryDate || existing.entryDate;
+    existing.description = buildCourierIncomeDescription(courier);
+    await existing.save({ transaction });
+    return existing.entryDate;
+  }
+
+  return createIncomeForCourier(courier, { transaction, userId: courier.userId });
+};
+
+/**
+ * Removes the linked Income entry when its source Courier record is deleted (see
+ * courier.controller.js#deleteCourier) — mirrors removeIncomeForSale. Returns the removed
+ * entry's date (for recalculation) or null if there was nothing linked.
+ */
+const removeIncomeForCourier = async (courierId, { transaction }) => {
+  const existing = await AccountEntry.findOne({
+    where: { referenceType: "courier", referenceId: courierId, entryType: "INCOME" },
+    transaction,
+  });
+  if (!existing) return null;
+  const { entryDate } = existing;
+  await existing.destroy({ transaction });
+  return entryDate;
+};
+
 module.exports = {
   buildSaleProductSummary,
   createIncomeForSale,
@@ -201,4 +313,7 @@ module.exports = {
   createIncomeForLedgerPayment,
   syncIncomeForLedgerEntryUpdate,
   removeIncomeForLedgerEntry,
+  createIncomeForCourier,
+  syncIncomeForCourierUpdate,
+  removeIncomeForCourier,
 };

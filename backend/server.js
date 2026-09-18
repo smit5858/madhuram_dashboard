@@ -436,6 +436,32 @@ const ensureChequePaymentMethodBackfilled = async () => {
   }
 };
 
+// Courier.deliveryMode was narrowed from ("OFFICE_PICKUP", "CHANGE", "PENDING", "FREE",
+// nullable) down to just ("OFFICE_PICKUP", "COURIER", required, defaulting to "COURIER") — a
+// courier company handling delivery vs. the customer collecting in person is the only
+// distinction that matters. Same backfill-before-sync({alter:true}) reasoning as
+// ensureCodPaymentMethodBackfilled above: any row still storing a retired value (or NULL) would
+// otherwise point at something the narrowed column no longer accepts. Idempotent: a no-op once
+// every row already holds "OFFICE_PICKUP" or "COURIER".
+const ensureCourierDeliveryModeBackfilled = async () => {
+  const queryInterface = sequelize.getQueryInterface();
+  const tables = await queryInterface.showAllTables();
+  const tableNames = tables.map((table) => (typeof table === "string" ? table : table.tableName));
+  if (!tableNames.includes("couriers")) return;
+
+  // Widen the column to include "COURIER" (still nullable) before backfilling — MySQL rejects
+  // writing a value the column's current ENUM definition doesn't contain yet, so the retired
+  // values can't be backfilled straight to the new narrowed set in one step. Once every row
+  // holds "OFFICE_PICKUP" or "COURIER", sync({alter:true}) below can safely narrow the column
+  // the rest of the way to its final NOT NULL / DEFAULT 'COURIER' shape.
+  await sequelize.query(
+    "ALTER TABLE couriers MODIFY COLUMN deliveryMode ENUM('OFFICE_PICKUP','CHANGE','PENDING','FREE','COURIER') NULL"
+  );
+  await sequelize.query(
+    "UPDATE couriers SET deliveryMode = 'COURIER' WHERE deliveryMode IS NULL OR deliveryMode NOT IN ('OFFICE_PICKUP', 'COURIER')"
+  );
+};
+
 // The Sale ↔ BankAccount relationship moved from a single bankAccountId column to a
 // sale_bank_accounts table of (bank account, amount) payment allocations (the Bank Account
 // field now supports splitting the collected amount across multiple accounts). Runs after sync
@@ -585,6 +611,9 @@ sequelize
   })
   .then(() => {
     return ensureSaleBankAccountsAllowDuplicates();
+  })
+  .then(() => {
+    return ensureCourierDeliveryModeBackfilled();
   })
   .then(() => {
     return sequelize.sync({ alter: true });

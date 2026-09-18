@@ -82,10 +82,13 @@ const Courier = sequelize.define(
       defaultValue: "PENDING",
     },
     // Independent classification of how this outgoing shipment is being handled — unrelated
-    // to the `status` pipeline above. Nullable/unset until the user picks one on create/edit.
+    // to the `status` pipeline above. Defaults to "COURIER" (a courier company handles
+    // delivery); "OFFICE_PICKUP" is the only other option (customer collects in person). Always
+    // user-editable on create/edit.
     deliveryMode: {
-      type: DataTypes.ENUM("OFFICE_PICKUP", "CHANGE", "PENDING", "FREE"),
-      allowNull: true,
+      type: DataTypes.ENUM("OFFICE_PICKUP", "COURIER"),
+      allowNull: false,
+      defaultValue: "COURIER",
     },
     pincode: {
       type: DataTypes.STRING,

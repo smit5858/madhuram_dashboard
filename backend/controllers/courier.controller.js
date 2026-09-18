@@ -9,10 +9,11 @@ const { canViewAllRecords } = require("../helper/permissionScope");
 const { hasDirectionPermission, requireCourierRecordAccess } = require("../helper/courierDirectionAuth");
 const { recalculateDay } = require("../services/dailyBalance.service");
 const { recalculateCourierChargeForDates } = require("../services/courierCharge.service");
+const { createIncomeForCourier, syncIncomeForCourierUpdate, removeIncomeForCourier } = require("../services/incomeSync.service");
 
 const COURIER_STATUSES = ["PENDING", "WAITING_FOR_STOCK", "IN_PROGRESS", "OUT_FOR_DELIVERY", "DONE"];
 const STATUS_RANK = { PENDING: 0, WAITING_FOR_STOCK: 1, IN_PROGRESS: 2, OUT_FOR_DELIVERY: 3, DONE: 4 };
-const DELIVERY_MODES = ["OFFICE_PICKUP", "CHANGE", "PENDING", "FREE"];
+const DELIVERY_MODES = ["OFFICE_PICKUP", "COURIER"];
 
 // Included on list/detail reads so the frontend can show per-product availability
 // (allocated/fulfilled/backordered) and derive shipment/product status without a second call.
@@ -348,6 +349,7 @@ exports.getCourierById = async (req, res) => {
 // POST /couriers — manual (non-sale) entries only; sale-linked rows are always created by
 // orderService.createOrder, never through this endpoint.
 exports.createCourier = async (req, res) => {
+  const t = await sequelize.transaction();
   try {
     const user = req.user;
     const {
@@ -359,50 +361,65 @@ exports.createCourier = async (req, res) => {
     } = req.body || {};
 
     if (direction !== undefined && direction !== "IN" && direction !== "OUT") {
+      await t.rollback();
       return res.status(400).json({ success: false, message: "direction must be either \"IN\" or \"OUT\"" });
     }
 
     if (!(await hasDirectionPermission(user, direction || "OUT", "create"))) {
+      await t.rollback();
       return res.status(403).json({ success: false, message: "Insufficient permissions" });
     }
 
     if (deliveryMode && !DELIVERY_MODES.includes(deliveryMode)) {
+      await t.rollback();
       return res.status(400).json({ success: false, message: `deliveryMode must be one of: ${DELIVERY_MODES.join(", ")}` });
     }
 
-    const courier = await Courier.create({
-      name: name || customerName || null,
-      email: email || null,
-      phone: phone || mobileNo || null,
-      customerName: customerName || name || null,
-      address: address || null,
-      city: city || null,
-      pincode: pincode || null,
-      mobileNo: mobileNo || phone || null,
-      productName: productName || null,
-      charge: charge !== undefined ? charge : null,
-      freePickup: freePickup !== undefined ? freePickup : false,
-      courierName: courierName || null,
-      trackId: trackId || null,
-      kg: kg !== undefined ? kg : null,
-      // Initial status is always Pending — never trust a client-supplied status here.
-      status: "PENDING",
-      pending: true,
-      note: note || null,
-      reason: reason || null,
-      completedDate: null,
-      entryDate: entryDate || null,
-      quantity: quantity !== undefined && quantity !== "" ? quantity : null,
-      direction: direction || "OUT",
-      deliveryMode: deliveryMode || null,
-      to: to || "Madhuram Motor",
-      // Owner is always the creator — there's no manual "assign owner" path any more.
-      userId: user.id,
-    });
+    const courier = await Courier.create(
+      {
+        name: name || customerName || null,
+        email: email || null,
+        phone: phone || mobileNo || null,
+        customerName: customerName || name || null,
+        address: address || null,
+        city: city || null,
+        pincode: pincode || null,
+        mobileNo: mobileNo || phone || null,
+        productName: productName || null,
+        charge: charge !== undefined ? charge : null,
+        freePickup: freePickup !== undefined ? freePickup : false,
+        courierName: courierName || null,
+        trackId: trackId || null,
+        kg: kg !== undefined ? kg : null,
+        // Initial status is always Pending — never trust a client-supplied status here.
+        status: "PENDING",
+        pending: true,
+        note: note || null,
+        reason: reason || null,
+        completedDate: null,
+        entryDate: entryDate || null,
+        quantity: quantity !== undefined && quantity !== "" ? quantity : null,
+        direction: direction || "OUT",
+        // Defaults to "Courier" (a courier company handles delivery) — user-editable, and
+        // "Office Pickup" is the only other option (customer collects in person).
+        deliveryMode: deliveryMode || "COURIER",
+        to: to || "Madhuram Motor",
+        // Owner is always the creator — there's no manual "assign owner" path any more.
+        userId: user.id,
+      },
+      { transaction: t }
+    );
+
+    // A manually-created Outgoing courier charge is Income — see
+    // incomeSync.service.js#createIncomeForCourier (no-ops for Incoming/free/zero-charge rows).
+    const incomeEntryDate = await createIncomeForCourier(courier, { transaction: t, userId: user.id });
+
+    await t.commit();
 
     // Keep the monthly "Courier Charge" total (see Header.tsx) in sync — it's a live sum of
     // Outgoing, non-free, non-cancelled charges, not a hand-typed figure.
     await recalculateCourierChargeForDates([courier.entryDate]);
+    if (incomeEntryDate) await recalculateDay(incomeEntryDate);
 
     return res.status(201).json({
       success: true,
@@ -410,6 +427,7 @@ exports.createCourier = async (req, res) => {
       data: courier,
     });
   } catch (err) {
+    if (!t.finished) await t.rollback();
     return res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -492,7 +510,7 @@ exports.updateCourier = async (req, res) => {
     if (entryDate !== undefined) courier.entryDate = entryDate;
     if (quantity !== undefined) courier.quantity = quantity !== "" ? quantity : null;
     if (direction !== undefined) courier.direction = direction;
-    if (deliveryMode !== undefined) courier.deliveryMode = deliveryMode || null;
+    if (deliveryMode !== undefined) courier.deliveryMode = deliveryMode || "COURIER";
     if (to !== undefined) courier.to = to || "Madhuram Motor";
 
     // City is editable by any user, regardless of role or entry source.
@@ -545,7 +563,13 @@ exports.updateCourier = async (req, res) => {
     // new entryDate's month to be safe.
     await recalculateCourierChargeForDates([originalEntryDate, courier.entryDate], { transaction: t });
 
+    // Keep the linked Account -> Income entry (if any) in sync with this edit — see
+    // incomeSync.service.js#syncIncomeForCourierUpdate.
+    const incomeEntryDate = await syncIncomeForCourierUpdate(courier, { transaction: t });
+
     await t.commit();
+
+    if (incomeEntryDate) await recalculateDay(incomeEntryDate);
 
     // Notify the salesperson who created the linked sale when it's marked Done.
     if (previousStatus !== "DONE" && courier.status === "DONE" && courier.saleId) {
@@ -1015,32 +1039,46 @@ exports.completeIncomingCourier = async (req, res) => {
 
 // DELETE /couriers/:id
 exports.deleteCourier = async (req, res) => {
+  const t = await sequelize.transaction();
   try {
     const { id } = req.params;
     const user = req.user;
 
-    const courier = await Courier.findByPk(id);
+    const courier = await Courier.findByPk(id, { transaction: t, lock: true });
     if (!courier) {
+      await t.rollback();
       return res.status(404).json({ success: false, message: "Courier not found" });
     }
 
     // Backend enforces scope
     const allowed = await verifyScope(courier, user);
     if (!allowed) {
+      await t.rollback();
       return res.status(403).json({ success: false, message: "Access denied: courier is outside your allowed scope" });
     }
 
-    if (!(await requireCourierRecordAccess(req, res, courier, "delete"))) return;
+    if (!(await requireCourierRecordAccess(req, res, courier, "delete"))) {
+      await t.rollback();
+      return;
+    }
 
     const { entryDate } = courier;
-    await courier.destroy();
-    await recalculateCourierChargeForDates([entryDate]);
+    // Remove the linked Income entry (if any) before the courier itself is gone — see
+    // incomeSync.service.js#removeIncomeForCourier.
+    const removedIncomeDate = await removeIncomeForCourier(courier.id, { transaction: t });
+    await courier.destroy({ transaction: t });
+    await recalculateCourierChargeForDates([entryDate], { transaction: t });
+
+    await t.commit();
+
+    if (removedIncomeDate) await recalculateDay(removedIncomeDate);
 
     return res.status(200).json({
       success: true,
       message: "Courier deleted successfully",
     });
   } catch (err) {
+    if (!t.finished) await t.rollback();
     return res.status(500).json({ success: false, message: err.message });
   }
 };

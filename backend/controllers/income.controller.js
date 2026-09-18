@@ -35,31 +35,42 @@ const attachSaleNotes = async (rows) => {
 };
 
 /**
- * Attaches the linked Sale's Outgoing Courier status (Courier.status, e.g. "Pending", "Out for
- * Delivery", "Done") to each sale-linked INCOME row as a read-only `courierStatus` field, for
+ * Attaches the linked Outgoing Courier's status (Courier.status, e.g. "Pending", "Out for
+ * Delivery", "Done") to each courier-linked INCOME row as a read-only `courierStatus` field, for
  * the Income list's "Courier" column. Same loose referenceType/referenceId lookup pattern as
- * attachSaleNotes above. A sale can have more than one Courier row (e.g. a split "Ship Available
- * Products" shipment) — the earliest-created OUT-direction one is shown, since that's the
- * original shipment for the order.
+ * attachSaleNotes above. Two kinds of rows carry a courier link:
+ *  - referenceType "sale": auto-created by a Sale (see incomeSync.service.js#createIncomeForSale)
+ *    — a sale can have more than one Courier row (e.g. a split "Ship Available Products"
+ *    shipment), so the earliest-created OUT-direction one is shown, since that's the original
+ *    shipment for the order.
+ *  - referenceType "courier": auto-created by a manually-added Outgoing Courier (see
+ *    incomeSync.service.js#createIncomeForCourier) — referenceId IS the Courier row's own id,
+ *    resolved directly rather than via saleId.
  */
 const attachCourierStatus = async (rows) => {
   const list = Array.isArray(rows) ? rows : [rows];
   const saleIds = [...new Set(list.filter((r) => r.referenceType === "sale" && r.referenceId).map((r) => r.referenceId))];
-  if (saleIds.length === 0) return;
+  const courierIds = [...new Set(list.filter((r) => r.referenceType === "courier" && r.referenceId).map((r) => r.referenceId))];
+  if (saleIds.length === 0 && courierIds.length === 0) return;
 
-  const couriers = await Courier.findAll({
-    where: { saleId: saleIds, direction: "OUT" },
-    attributes: ["saleId", "status"],
-    order: [["id", "ASC"]],
-  });
+  const [saleLinkedCouriers, directCouriers] = await Promise.all([
+    saleIds.length
+      ? Courier.findAll({ where: { saleId: saleIds, direction: "OUT" }, attributes: ["saleId", "status"], order: [["id", "ASC"]] })
+      : [],
+    courierIds.length ? Courier.findAll({ where: { id: courierIds }, attributes: ["id", "status"] }) : [],
+  ]);
+
   const statusBySale = new Map();
-  for (const c of couriers) {
+  for (const c of saleLinkedCouriers) {
     if (!statusBySale.has(c.saleId)) statusBySale.set(c.saleId, c.status);
   }
+  const statusByCourierId = new Map(directCouriers.map((c) => [c.id, c.status]));
 
   for (const r of list) {
     if (r.referenceType === "sale" && r.referenceId) {
       r.dataValues.courierStatus = statusBySale.get(r.referenceId) || null;
+    } else if (r.referenceType === "courier" && r.referenceId) {
+      r.dataValues.courierStatus = statusByCourierId.get(r.referenceId) || null;
     }
   }
 };

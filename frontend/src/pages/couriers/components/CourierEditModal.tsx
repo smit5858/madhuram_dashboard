@@ -182,7 +182,7 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
         trackId: courier?.trackId || "",
         note: courier?.note || "",
         entryDate: courier?.entryDate || getTodayISODate(),
-        deliveryMode: courier?.deliveryMode || "OFFICE_PICKUP",
+        deliveryMode: courier?.deliveryMode || "COURIER",
         to: courier?.to || "Madhuram Motor",
         serialsByItem: Object.fromEntries(
             productRows.filter((r) => r.isSerialized && r.requiredSerialCount > 0).map((r) => [r.saleItemId, r.currentSerials])
@@ -243,7 +243,7 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
             // Delivery Mode is user-editable (see the field above) — always send whatever the
             // form currently holds, so switching it (e.g. to Office Pickup) on an existing or
             // sale-generated record actually persists instead of being silently dropped.
-            deliveryMode: (values.deliveryMode || "OFFICE_PICKUP") as DeliveryMode,
+            deliveryMode: (values.deliveryMode || "COURIER") as DeliveryMode,
         };
 
         if (isSaleLinked && productRows.length > 0) {

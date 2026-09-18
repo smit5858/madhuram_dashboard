@@ -11,9 +11,7 @@ const LOGO_PATH = path.join(__dirname, "../assets/logo.jpg");
 
 const DELIVERY_MODE_LABEL = {
   OFFICE_PICKUP: "Office Pickup",
-  CHANGE: "Change",
-  PENDING: "Pending",
-  FREE: "Free",
+  COURIER: "Courier",
 };
 
 const STOCK_STATUS_LABEL = {
