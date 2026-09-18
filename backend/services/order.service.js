@@ -650,6 +650,10 @@ const createOrder = async ({
               productStockStatus: allocated >= requested ? "IN_STOCK" : "OUT_OF_STOCK",
               courierName: courierName || null,
               trackId: null,
+              // Without this, entryDate stays NULL — a date-range filter (Op.gte/Op.lte) never
+              // matches a NULL column, so this row would silently never appear under any date
+              // filter no matter what date is picked.
+              entryDate: dayjs().format("YYYY-MM-DD"),
               direction: "OUT",
               userId,
               saleId: sale.id,
@@ -1264,6 +1268,7 @@ const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialN
           productStockStatus: ready ? "IN_STOCK" : "OUT_OF_STOCK",
           courierName: sale.courierName || null,
           trackId: null,
+          entryDate: dayjs().format("YYYY-MM-DD"),
           direction: "OUT",
           userId,
           saleId: sale.id,
@@ -1452,6 +1457,7 @@ const setCourierEntryForSale = async ({ saleId, createCourierEntry, userId }, { 
           productStockStatus: ready ? "IN_STOCK" : "OUT_OF_STOCK",
           courierName: sale.courierName || null,
           trackId: null,
+          entryDate: dayjs().format("YYYY-MM-DD"),
           direction: "OUT",
           userId,
           saleId: sale.id,

@@ -15,6 +15,7 @@ import { normalizePhoneDigits } from "../../../shared/utils/phone";
 import { courierEditSchema, validateSerialNumbers, type CourierEditFormValues } from "../../../validation/courier.validation";
 import { COURIER_COMPANY_OTHER } from "../../../shared/constants/courierCompanies";
 import { SHIPMENT_TYPE_LABEL, type ShipmentType } from "../../../shared/constants/courierStatus";
+import { DELIVERY_MODE_OPTIONS, type DeliveryMode } from "../../../shared/constants/deliveryMode";
 import { getTodayISODate } from "../../../shared/utils/date";
 
 const SHIPMENT_TYPE_OPTIONS = (Object.keys(SHIPMENT_TYPE_LABEL) as ShipmentType[]).map((value) => ({
@@ -27,7 +28,6 @@ interface CourierEditModalProps {
     courier: CourierData | null;
     /** Default direction for a newly created record — matches whichever page (Outgoing/Incoming) the user opened the modal from. */
     direction: "IN" | "OUT";
-    role: string | null;
     onClose: () => void;
 }
 
@@ -35,16 +35,16 @@ interface CourierEditModalProps {
  *  entry date, serial numbers when applicable, shipment type for sale-linked orders). Scalar
  *  fields go through the shared Formik field components; the free-pickup toggle and "Other"
  *  company name stay as sibling state (not naturally Formik-shaped) and are merged in at submit. */
-const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModalProps) => {
+const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps) => {
     const queryClient = useQueryClient();
     const isEdit = !!courier?.id;
 
     const [freePickup, setFreePickup] = useState(courier?.freePickup ?? false);
-    // City is Admin-editable, locked to the non-Admin user's allowedCity — kept out of
-    // Formik so the readOnly lock (which FormikInput doesn't expose) still works.
+    // City is always editable, regardless of role or entry source (manual or sale-generated) —
+    // kept out of Formik purely for parity with the shared validate() pattern below.
     const [city, setCity] = useState(courier?.city || "");
-    // Direction is locked to OUT for sale-linked entries (always outbound); free to pick for
-    // manual entries, defaulting to whichever page (Outgoing/Incoming) the modal was opened from.
+    // Direction is always editable, regardless of entry source — defaults to whichever page
+    // (Outgoing/Incoming) the modal was opened from, or the record's own direction when editing.
     const [formDirection, setFormDirection] = useState<"IN" | "OUT">(courier?.direction || direction);
 
     // Courier company list is Admin-managed (see the Courier Companies module) — fetched live
@@ -182,6 +182,7 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
         trackId: courier?.trackId || "",
         note: courier?.note || "",
         entryDate: courier?.entryDate || getTodayISODate(),
+        deliveryMode: courier?.deliveryMode || "OFFICE_PICKUP",
         to: courier?.to || "Madhuram Motor",
         serialsByItem: Object.fromEntries(
             productRows.filter((r) => r.isSerialized && r.requiredSerialCount > 0).map((r) => [r.saleItemId, r.currentSerials])
@@ -223,7 +224,7 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
             name: values.customerName.trim(),
             mobileNo: values.mobileNo || undefined,
             phone: values.mobileNo || undefined,
-            city: role === "Admin" ? city || undefined : undefined,
+            city: city || undefined,
             pincode: values.pincode || null,
             charge: values.charge ? parseFloat(values.charge) : null,
             address: values.address || null,
@@ -239,11 +240,10 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
             entryDate: values.entryDate || undefined,
             to: values.to || "Madhuram Motor",
             direction: formDirection,
-            // New records always start as Office Pickup — on edit, omit it entirely so the
-            // backend's `!== undefined` guard leaves whatever deliveryMode the record already
-            // had untouched instead of clobbering CHANGE/PENDING/FREE back to Office Pickup on
-            // every save.
-            deliveryMode: isEdit ? undefined : "OFFICE_PICKUP",
+            // Delivery Mode is user-editable (see the field above) — always send whatever the
+            // form currently holds, so switching it (e.g. to Office Pickup) on an existing or
+            // sale-generated record actually persists instead of being silently dropped.
+            deliveryMode: (values.deliveryMode || "OFFICE_PICKUP") as DeliveryMode,
         };
 
         if (isSaleLinked && productRows.length > 0) {
@@ -328,12 +328,8 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
                                 <input
                                     type="text" value={city} onChange={(e) => setCity(e.target.value)}
                                     placeholder="e.g. Rajkot"
-                                    readOnly={role !== "Admin"}
-                                    className={`mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-[#3d6fe0] focus:outline-none ${role !== "Admin" ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-slate-50 text-slate-900 focus:bg-white"}`}
+                                    className="mt-1 block w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                                 />
-                                {role !== "Admin" && (
-                                    <p className="mt-0.5 text-[10px] text-slate-400">City is locked to your allowed scope.</p>
-                                )}
                             </div>
                             <Field name="pincode" label="Pincode" placeholder="e.g. 360001" component={FormikInput} />
 
@@ -388,24 +384,33 @@ const CourierEditModal = ({ courier, direction, role, onClose }: CourierEditModa
                             )}
                             <Field name="to" label="To" placeholder="Madhuram Motor" component={FormikInput} />
 
-                            {/* Direction is fixed by which page opened this modal (Outgoing/Incoming) — no picker
-                                needed on the Incoming Courier form since it's always "IN" there. */}
+                            {/* Direction is always editable, regardless of entry source (manual or sale-generated)
+                                — no picker needed on the Incoming Courier form since it's always "IN" there. */}
                             {direction === "OUT" && (
                                 <div>
                                     <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide">Direction</label>
                                     <select
                                         value={formDirection}
                                         onChange={(e) => setFormDirection(e.target.value as "IN" | "OUT")}
-                                        disabled={!!courier?.saleId}
-                                        className={`mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-[#3d6fe0] focus:outline-none ${courier?.saleId ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-slate-50 text-slate-900 focus:bg-white"}`}
+                                        className="mt-1 block w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                                     >
                                         <option value="OUT">Outgoing — we ship to the customer</option>
                                         <option value="IN">Incoming — a customer/vendor ships to us</option>
                                     </select>
-                                    {courier?.saleId && (
-                                        <p className="mt-0.5 text-[10px] text-slate-400">Linked to a sale — always outgoing.</p>
-                                    )}
                                 </div>
+                            )}
+
+                            {/* Delivery Mode — how this outgoing shipment is being handled (independent of the
+                                pipeline Status above). Editable at any time, regardless of entry source, so a
+                                sale-generated shipment can still be switched to Office Pickup if the customer
+                                ends up collecting it in person instead of having it shipped. */}
+                            {direction === "OUT" && (
+                                <Field
+                                    name="deliveryMode"
+                                    label="Delivery Mode"
+                                    component={FormikSelect}
+                                    options={DELIVERY_MODE_OPTIONS}
+                                />
                             )}
 
                             {/* Every product in this sale, each with its own quantity and (when serialized)

@@ -370,22 +370,13 @@ exports.createCourier = async (req, res) => {
       return res.status(400).json({ success: false, message: `deliveryMode must be one of: ${DELIVERY_MODES.join(", ")}` });
     }
 
-    // For non-Admin, enforce city from their allowedCity
-    let targetCity = city;
-    if (user.roleName !== "Admin") {
-      const userRecord = await User.findByPk(user.id, { attributes: ["allowedCity"] });
-      if (userRecord && userRecord.allowedCity) {
-        targetCity = userRecord.allowedCity; // non-admin cannot create outside their city
-      }
-    }
-
     const courier = await Courier.create({
       name: name || customerName || null,
       email: email || null,
       phone: phone || mobileNo || null,
       customerName: customerName || name || null,
       address: address || null,
-      city: targetCity || null,
+      city: city || null,
       pincode: pincode || null,
       mobileNo: mobileNo || phone || null,
       productName: productName || null,
@@ -504,10 +495,8 @@ exports.updateCourier = async (req, res) => {
     if (deliveryMode !== undefined) courier.deliveryMode = deliveryMode || null;
     if (to !== undefined) courier.to = to || "Madhuram Motor";
 
-    // City: Admin can update city; non-Admin city is locked to their allowedCity
-    if (user.roleName === "Admin") {
-      if (city !== undefined) courier.city = city;
-    }
+    // City is editable by any user, regardless of role or entry source.
+    if (city !== undefined) courier.city = city;
 
     // Status pipeline: Pending -> Waiting for Stock -> In Progress -> Out for Delivery -> Done.
     // Waiting for Stock is only ever entered/left automatically (see inventory.service.js's

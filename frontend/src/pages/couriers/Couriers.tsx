@@ -503,7 +503,7 @@ const FilterSync = ({
 
 const Couriers = () => {
     const queryClient = useQueryClient();
-    const { role, permissions } = useSelector((state: RootState) => state.auth);
+    const { permissions } = useSelector((state: RootState) => state.auth);
 
     /**
      * Read permissions from the globally stored state — NO API call here.
@@ -975,7 +975,6 @@ const Couriers = () => {
                 <CourierEditModal
                     courier={editingCourier}
                     direction={direction}
-                    role={role}
                     onClose={closeEditModal}
                 />
             )}
