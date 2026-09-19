@@ -379,9 +379,10 @@ const Sells = () => {
   const [originalItemsById, setOriginalItemsById] = useState<Record<number, { quantity: number; sellingPrice: number; notes?: string }>>({});
 
   // The pinned "Other" product field option — a real, non-catalog Product row (isMasterProduct:
-  // false, productType SOFTWARE) seeded once on the backend (see server.js#ensureOtherProductSeeded)
-  // so it reuses the existing no-stock/no-courier SOFTWARE handling with no special-cased backend
-  // logic. Placed first in the picker regardless of alphabetical order.
+  // false, productType SOFTWARE) seeded once on the backend (see server.js#ensureOtherProductSeeded).
+  // Like a Quick Add Product it's non-inventory: the backend skips stock/backorder for it and it
+  // gets a normal Courier record (see inventory.service.js#isNonInventoryProduct). Placed first in
+  // the picker regardless of alphabetical order.
   const otherProduct = useMemo(
     () => productsList.find((p) => p.name === "Other" && p.isMasterProduct === false) || null,
     [productsList]
@@ -399,28 +400,6 @@ const Sells = () => {
     if (!otherProduct) return masterProducts;
     return [otherProduct, ...masterProducts.filter((p) => p.id !== otherProduct.id)];
   }, [productsList, otherProduct]);
-
-  // "Create Courier Entry" is locked off whenever every chosen line is the "Other" placeholder —
-  // there's nothing physical in the sale to ship, so it can't accidentally stay selected. A mixed
-  // cart (Other + a real product) leaves the checkbox alone since the real line(s) may still need
-  // shipping — see the effect below, which forces it off on entering the locked state and restores
-  // whatever the user had before on leaving it.
-  const hasChosenItem = items.some((i) => !!i.productId);
-  const hasRealProductItem = items.some((i) => i.productId && (!otherProduct || i.productId !== otherProduct.id));
-  const isCourierEntryLocked = !!otherProduct && hasChosenItem && !hasRealProductItem;
-  const wasCourierEntryLockedRef = useRef(false);
-  const courierEntryBeforeLockRef = useRef(true);
-  useEffect(() => {
-    if (isCourierEntryLocked && !wasCourierEntryLockedRef.current) {
-      courierEntryBeforeLockRef.current = createCourierEntry;
-      wasCourierEntryLockedRef.current = true;
-      setCreateCourierEntry(false);
-    } else if (!isCourierEntryLocked && wasCourierEntryLockedRef.current) {
-      wasCourierEntryLockedRef.current = false;
-      setCreateCourierEntry(courierEntryBeforeLockRef.current);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCourierEntryLocked]);
 
   // Debounced Customer Phone Lookup & Autocomplete for Sells Entry
   const debouncedCustomerPhone = useDebounce(customerNumber, 350);
@@ -744,10 +723,6 @@ const Sells = () => {
     setItems([]);
     setOriginalItemsById({});
     setSelectedSale(null);
-    // Stale across sale open/close otherwise — the next sale (or a fresh Add) must start
-    // unlocked, not carrying over whatever the previous sale's Other-lock state was.
-    wasCourierEntryLockedRef.current = false;
-    courierEntryBeforeLockRef.current = true;
   };
 
   const openCreateModal = () => {
@@ -2514,24 +2489,17 @@ const Sells = () => {
                     id="createCourierEntry"
                     type="checkbox"
                     checked={createCourierEntry}
-                    disabled={isCourierEntryLocked}
                     onChange={(e) => setCreateCourierEntry(e.target.checked)}
-                    className="h-4 w-4 rounded border-slate-300 text-[#3d6fe0] focus:ring-[#3d6fe0] disabled:cursor-not-allowed disabled:opacity-50"
+                    className="h-4 w-4 rounded border-slate-300 text-[#3d6fe0] focus:ring-[#3d6fe0]"
                   />
                   <label htmlFor="createCourierEntry" className="text-xs font-semibold text-slate-700">
                     Create Courier Entry
                   </label>
                 </div>
-                {isCourierEntryLocked ? (
+                {selectedSale && (
                   <p className="mt-0.5 text-[10px] text-slate-400">
-                    Not available for "Other" — there's nothing physical to ship for this sale.
+                    Changing this creates or cancels the shipment tracking entries for this sale's items.
                   </p>
-                ) : (
-                  selectedSale && (
-                    <p className="mt-0.5 text-[10px] text-slate-400">
-                      Changing this creates or cancels the shipment tracking entries for this sale's items.
-                    </p>
-                  )
                 )}
               </div>
 

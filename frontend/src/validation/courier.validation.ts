@@ -38,6 +38,8 @@ export const courierEditSchema = z.object({
   courierCompany: z.string().max(100, "Courier company must be under 100 characters").optional(),
   kg: optionalWeightField,
   quantity: optionalQuantityField,
+  // Optional free-text serial — never required.
+  serialNumber: z.string().max(500, "Serial number must be under 500 characters").optional(),
   trackId: z.string().max(60, "Track ID must be under 60 characters").optional(),
   note: z.string().max(1000, "Note must be under 1000 characters").optional(),
   entryDate: z.string().optional(),

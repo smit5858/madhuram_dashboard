@@ -199,6 +199,14 @@ const Courier = sequelize.define(
       defaultValue: null,
     },
 
+    // Optional free-text serial number(s) for a line that isn't serial-tracked in inventory — a
+    // Quick Add / Other product, or a manual entry. Never required. Serial-tracked (SERIALIZED)
+    // lines keep using SerialUnit rows via the serial picker instead, not this field.
+    serialNumber: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+
     // Who this shipment is being sent to/handled by. Defaults to "Madhuram Motor" for the
     // common case; editable when an order is sent by/to another party.
     to: {

@@ -107,6 +107,7 @@ const applyCourierFilters = async (scopeWhere, query) => {
       { mobileNo: { [Op.like]: like } },
       { phone: { [Op.like]: like } },
       { productName: { [Op.like]: like } },
+      { serialNumber: { [Op.like]: like } },
     ];
     if (saleItemIds.length) {
       orConditions.push({ saleItemId: { [Op.in]: saleItemIds } });
@@ -393,7 +394,7 @@ exports.getCourierSerials = async (req, res) => {
     const items = saleItemIds.length
       ? await SaleItem.findAll({
           where: { id: saleItemIds },
-          include: [{ model: Product, attributes: ["id", "name", "productType"] }],
+          include: [{ model: Product, attributes: ["id", "name", "productType", "isMasterProduct"] }],
         })
       : [];
     const itemsById = new Map(items.map((i) => [i.id, i]));
@@ -435,6 +436,10 @@ exports.getCourierSerials = async (req, res) => {
           productId: item.productId,
           productName: item.Product?.name || c.productName || null,
           isSerialized,
+          // Other / Quick Add line — not inventory, so it has no serial units to pick from; its
+          // optional free-text serial number lives on the Courier row itself instead.
+          isNonInventory: inventoryService.isNonInventoryProduct(item.Product),
+          serialNumber: c.serialNumber || null,
           quantity: item.quantity,
           allocatedQuantity: item.allocatedQuantity,
           fulfilledQuantity: item.fulfilledQuantity,
@@ -468,7 +473,7 @@ exports.createCourier = async (req, res) => {
       customerName, address, city, mobileNo, pincode,
       productName, charge, freePickup,
       courierName, trackId, kg, note, reason, entryDate, quantity,
-      direction, deliveryMode, to,
+      direction, deliveryMode, to, serialNumber,
     } = req.body || {};
 
     if (direction !== undefined && direction !== "IN" && direction !== "OUT") {
@@ -510,6 +515,8 @@ exports.createCourier = async (req, res) => {
         completedDate: null,
         entryDate: entryDate || null,
         quantity: quantity !== undefined && quantity !== "" ? quantity : null,
+        // Optional — never required; blank/whitespace is stored as null.
+        serialNumber: serialNumber ? String(serialNumber).trim() || null : null,
         direction: direction || "OUT",
         // Defaults to "Courier" (a courier company handles delivery) — user-editable, and
         // "Office Pickup" is the only other option (customer collects in person).
@@ -554,7 +561,7 @@ exports.updateCourier = async (req, res) => {
       customerName, address, city, mobileNo, pincode,
       productName, charge, freePickup,
       courierName, trackId, kg, note, reason, entryDate, quantity,
-      status, serialNumbers, direction, deliveryMode, to,
+      status, serialNumbers, serialNumber, direction, deliveryMode, to,
     } = req.body || {};
 
     if (direction !== undefined && direction !== "IN" && direction !== "OUT") {
@@ -619,6 +626,8 @@ exports.updateCourier = async (req, res) => {
     if (note !== undefined) courier.note = note;
     if (reason !== undefined) courier.reason = reason;
     if (entryDate !== undefined) courier.entryDate = entryDate;
+    // Optional free-text serial — an explicit empty value clears it.
+    if (serialNumber !== undefined) courier.serialNumber = serialNumber ? String(serialNumber).trim() || null : null;
     // A sale-linked row's quantity is owned by its SaleItem (which the reserved/sold serial
     // units are tied to) — editing it here would desync Product -> Quantity -> Serial Numbers.
     if (quantity !== undefined && !courier.saleItemId) courier.quantity = quantity !== "" ? quantity : null;

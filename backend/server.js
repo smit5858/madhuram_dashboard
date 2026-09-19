@@ -564,9 +564,9 @@ const ensureSaleDateBackfilled = async () => {
 
 // Seeds the single pinned "Other" product the Sales form's Product field always offers at the
 // top of the list — a non-catalog placeholder for a sale line that isn't a real stocked/software
-// product. Reuses the existing SOFTWARE product-type machinery (no Stock row, never backordered,
-// never gets a Courier record — see order.service.js/inventory.service.js) so selecting it needs
-// no special-cased stock/courier handling anywhere else. isMasterProduct:false keeps it out of
+// product. It has no Stock row and, being non-catalog (isMasterProduct:false), skips stock/backorder
+// entirely and gets a normal Courier record like any other line — see
+// inventory.service.js#isNonInventoryProduct and order.service.js#shipsViaCourier. That flag also keeps it out of
 // the Products page catalog (see product.controller.js#getProducts' masterOnly filter) the same
 // way a Sells "quick-add" product is hidden. Idempotent: a no-op once it already exists.
 const ensureOtherProductSeeded = async () => {

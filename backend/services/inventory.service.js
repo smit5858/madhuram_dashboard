@@ -74,6 +74,12 @@ const getSerialAvailability = async (productId, { transaction } = {}) => {
   };
 };
 
+// Non-catalog products (isMasterProduct: false) — the Sells form's pinned "Other" placeholder and
+// any Quick Add Product — are never stocked, so they bypass every stock/backorder/restock step:
+// nothing is checked, reserved, deducted, released or restocked, and no Stock row is created for
+// them. They're always fully "allocated" and go straight to the normal Courier flow.
+const isNonInventoryProduct = (product) => !!product && product.isMasterProduct === false;
+
 const computeItemFulfillmentStatus = (item) => {
   if (item.fulfillmentStatus === "CANCELLED") return "CANCELLED";
   if (item.fulfilledQuantity >= item.quantity) return "FULFILLED";
@@ -149,6 +155,12 @@ const reserveStock = async ({ productId, saleItemId, quantity, userId, serialNum
   return withTransaction(transaction, async (t) => {
     const product = await Product.findByPk(productId, { transaction: t });
     assertProduct(product);
+
+    // Non-inventory (Other / Quick Add): no stock check at all — always fully allocated, never
+    // backordered, no Stock row read or written.
+    if (isNonInventoryProduct(product)) {
+      return { allocated: quantity, backordered: 0, serialUnitIds: [], available: null };
+    }
 
     // SOFTWARE: no Stock/SerialUnit row ever exists — nothing physical to run out of, so every
     // request is always fully allocated immediately, no backorder possible.
@@ -272,8 +284,9 @@ const releaseReservation = async ({ productId, saleItemId, quantity, userId, rea
     const product = await Product.findByPk(productId, { transaction: t });
     assertProduct(product);
 
-    // SOFTWARE never reserves against a Stock row (see reserveStock) — nothing to release.
-    if (product.productType === "SOFTWARE") return;
+    // SOFTWARE and non-inventory (Other / Quick Add) lines never reserve against a Stock row (see
+    // reserveStock) — nothing to release.
+    if (product.productType === "SOFTWARE" || isNonInventoryProduct(product)) return;
 
     if (STOCK_TRACKED_TYPES.includes(product.productType)) {
       const stock = await Stock.findOne({ where: { productId }, transaction: t, lock: true });
@@ -337,8 +350,9 @@ const writeOffReservation = async ({ productId, saleItemId, quantity, userId, re
     const product = await Product.findByPk(productId, { transaction: t });
     assertProduct(product);
 
-    // SOFTWARE never reserves against a Stock row (see reserveStock) — nothing to write off.
-    if (product.productType === "SOFTWARE") return;
+    // SOFTWARE and non-inventory (Other / Quick Add) lines never reserve against a Stock row (see
+    // reserveStock) — nothing to write off.
+    if (product.productType === "SOFTWARE" || isNonInventoryProduct(product)) return;
 
     if (STOCK_TRACKED_TYPES.includes(product.productType)) {
       const stock = await Stock.findOne({ where: { productId }, transaction: t, lock: true });
@@ -406,9 +420,10 @@ const fulfillStock = async ({ productId, saleItemId, quantity, userId, serialNum
     let available;
     let serialUnitIds = [];
 
-    if (product.productType === "SOFTWARE") {
-      // No Stock/SerialUnit row to touch — "fulfilling" a software line is purely the shared
-      // SaleItem bookkeeping below (fulfilledQuantity/allocatedQuantity/fulfillmentStatus).
+    if (product.productType === "SOFTWARE" || isNonInventoryProduct(product)) {
+      // No Stock/SerialUnit row to touch — "fulfilling" a software or non-inventory (Other /
+      // Quick Add) line is purely the shared SaleItem bookkeeping below
+      // (fulfilledQuantity/allocatedQuantity/fulfillmentStatus).
       available = null;
     } else if (STOCK_TRACKED_TYPES.includes(product.productType)) {
       const stock = await Stock.findOne({ where: { productId }, transaction: t, lock: true });
@@ -1092,4 +1107,5 @@ module.exports = {
   updateSerialStatus,
   recomputeSaleFulfillmentStatus,
   computeItemFulfillmentStatus,
+  isNonInventoryProduct,
 };

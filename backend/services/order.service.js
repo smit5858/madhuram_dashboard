@@ -43,6 +43,13 @@ const needsBankSplit = (paymentMethod) => paymentMethod === "BankTransfer" || pa
 // (see recomputeSalePaymentMethod below) — it can never be assigned to a single Payment row.
 const VALID_PAYMENT_METHODS = ["Cash", "UPI", "Card", "BankTransfer", "Other"];
 
+// Whether a sale line gets a Courier (shipment-tracking) record. A real SOFTWARE product is
+// fulfilled via installation/service and never ships; but the non-catalog "Other" placeholder
+// (also SOFTWARE-typed, isMasterProduct: false) and Quick Add products are physical items arranged
+// per sale — they skip stock/backorder entirely (see inventory.service.js#isNonInventoryProduct)
+// and get a normal Courier record like any in-stock product.
+const shipsViaCourier = (product) => product.productType !== "SOFTWARE" || inventoryService.isNonInventoryProduct(product);
+
 // Total amount actually owed on a sale — selling amount plus courier/shipping charge. This is
 // the figure payments are measured against everywhere (pendingAmount, paymentStatus, "how much
 // is left to collect"), not sellingAmount alone.
@@ -634,7 +641,7 @@ const createOrder = async ({
       // doesn't need shipping), or unconditionally for SOFTWARE lines — software is fulfilled via
       // installation/service, never shipped, so it must never produce a Courier. Either way the
       // line is fulfilled directly below instead of waiting on shipment-group readiness.
-      const courier = createCourierEntry && product.productType !== "SOFTWARE"
+      const courier = createCourierEntry && shipsViaCourier(product)
         ? await Courier.create(
             {
               customerName: customerName.trim(),
@@ -678,7 +685,7 @@ const createOrder = async ({
     // otherwise courier-bearing mixed sale) has no shipment to coordinate around — fulfill its
     // allocated quantity directly instead of waiting on group readiness. Anything still
     // backordered stays that way and gets picked up by the normal backorder sweep when stock
-    // arrives (SOFTWARE can never be backordered, so this only matters for physical products).
+    // arrives (SOFTWARE and non-inventory Other/Quick Add lines are never backordered).
     for (const { saleItem, courier } of createdLines) {
       if (!courier && saleItem.allocatedQuantity > 0) {
         await inventoryService.fulfillStock(
@@ -861,9 +868,9 @@ const recordPayment = ({ saleId, amount, method, bankAccountId, transactionRef, 
 const applyReturn = async ({ item, quantity, userId, reason, defective, serialNumbers }, { transaction: t }) => {
   const product = await Product.findByPk(item.productId, { transaction: t });
 
-  if (product.productType === "SOFTWARE") {
-    // No physical/serial unit was ever consumed for a software line — nothing to restock or
-    // write off. Just fall through to the shared returnedQuantity bookkeeping below.
+  if (product.productType === "SOFTWARE" || inventoryService.isNonInventoryProduct(product)) {
+    // No physical/serial unit was ever consumed for a software or non-inventory (Other / Quick
+    // Add) line — nothing to restock or write off. Just fall through to the shared returnedQuantity bookkeeping below.
   } else if (inventoryService.STOCK_TRACKED_TYPES.includes(product.productType)) {
     if (!defective) {
       const stock = await Stock.findOne({ where: { productId: item.productId }, transaction: t, lock: true });
@@ -1135,8 +1142,9 @@ const returnItem = async ({ saleItemId, quantity, userId, reason, refundAmount, 
   }
 };
 
-// Creates a one-off, non-master (isMasterProduct: false) HARDWARE_ORDER_BASED Product + Stock row
-// to back a single "Quick Add Product" line on a sale (see QuickAddProductModal.tsx) — reuses the
+// Creates a one-off, non-master (isMasterProduct: false) HARDWARE_ORDER_BASED Product (with no
+// Stock row — it's non-inventory, see inventory.service.js#isNonInventoryProduct) to back a single
+// "Quick Add Product" line on a sale (see QuickAddProductModal.tsx) — reuses the
 // exact same scoped-product mechanism as the pinned "Other" placeholder product. Lives here (and is
 // gated only by /sells "update" permission in sells.routes.js) rather than behind POST /products'
 // "create" permission, since this never touches the master product catalog and is really a
@@ -1156,10 +1164,7 @@ const quickAddProduct = async ({ name }) => {
       { name: trimmedName, productType: "HARDWARE_ORDER_BASED", isMasterProduct: false },
       { transaction: t }
     );
-    await Stock.create(
-      { productId: product.id, quantity: 0, reserved: 0, purchasePrice: null, sellingPrice: null, dealerId: null },
-      { transaction: t }
-    );
+    // No Stock row: a Quick Add product isn't inventory — see inventory.service.js#isNonInventoryProduct.
     await t.commit();
     return { id: product.id, name: product.name, productType: product.productType, isMasterProduct: product.isMasterProduct };
   } catch (err) {
@@ -1250,7 +1255,7 @@ const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialN
     });
 
     let courier = null;
-    if (existingActiveCourier && product.productType !== "SOFTWARE") {
+    if (existingActiveCourier && shipsViaCourier(product)) {
       const shipmentGroupId = existingActiveCourier.shipmentGroupId || `SALE-${sale.id}`;
       const ready = saleItem.backorderedQuantity === 0;
       courier = await Courier.create(
@@ -1436,7 +1441,7 @@ const setCourierEntryForSale = async ({ saleId, createCourierEntry, userId }, { 
       const product = await Product.findByPk(item.productId, { transaction: t });
       // SOFTWARE lines are fulfilled directly at creation/add time (see createOrder/addOrderItem)
       // and must never get a Courier, even retroactively when this flag is toggled back on.
-      if (product && product.productType === "SOFTWARE") continue;
+      if (product && !shipsViaCourier(product)) continue;
       // No outstanding backorder means this line's stock need was already fully resolved at
       // creation (either reserved-and-waiting or already fulfilled directly, since no courier
       // existed to defer fulfillment) — either way there's nothing left to wait on here.

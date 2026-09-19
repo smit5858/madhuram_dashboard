@@ -38,6 +38,9 @@ export interface CourierData {
     entryDate?: string;
     /** Requested quantity for this order line — see linked SaleItem for how much is allocated/fulfilled. */
     quantity?: number | string | null;
+    /** Optional free-text serial number(s) — for a manual entry or a non-inventory (Quick Add /
+     *  Other) line. Serial-tracked lines use the serial picker (`serialNumbers`) instead. */
+    serialNumber?: string | null;
     /** OUT = we ship to the customer (outbound). IN = customer/vendor ships to us (inbound). */
     direction?: "IN" | "OUT";
     /** Independent classification of how this shipment is being handled — unset until chosen. */
@@ -156,6 +159,9 @@ export interface CourierSerialLine {
     productId: number;
     productName: string | null;
     isSerialized: boolean;
+    /** Quick Add / Other line — no inventory, so `serialNumber` (optional free text) applies. */
+    isNonInventory: boolean;
+    serialNumber: string | null;
     quantity: number;
     allocatedQuantity: number;
     fulfilledQuantity: number;

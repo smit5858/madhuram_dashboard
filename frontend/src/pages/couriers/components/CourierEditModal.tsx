@@ -105,6 +105,8 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
             name: line.productName || "Product",
             quantity: line.quantity,
             isSerialized: line.isSerialized,
+            isNonInventory: line.isNonInventory,
+            serialNumber: line.serialNumber || "",
             requiredSerialCount: line.requiredCount,
             currentSerials,
             // Assigned units first (stable order), then the other AVAILABLE units of this product.
@@ -209,7 +211,11 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
         // Keyed by saleItemId — each sale-linked product's serial selection lives independently
         // here so Product A's picker can never touch Product B's selection.
         serialsByItem: Record<number, string[]>;
+        // Optional free-text serial for each non-inventory (Quick Add / Other) line, keyed by
+        // saleItemId — these have no serial units to pick from, so it's a plain text field.
+        freeSerialsByItem: Record<number, string>;
     };
+    type ScalarFormKey = Exclude<keyof FormValues, "serialsByItem" | "freeSerialsByItem">;
 
     const initialValues: FormValues = {
         customerName: courier?.customerName || courier?.name || "",
@@ -221,6 +227,7 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
         courierCompany: initialCompanyIsOther ? COURIER_COMPANY_OTHER : courier?.courierName || "",
         kg: courier?.kg !== undefined && courier?.kg !== null ? String(courier.kg) : "",
         quantity: courier?.quantity !== undefined && courier?.quantity !== null ? String(courier.quantity) : "",
+        serialNumber: courier?.serialNumber || "",
         trackId: courier?.trackId || "",
         note: courier?.note || "",
         entryDate: courier?.entryDate || getTodayISODate(),
@@ -229,16 +236,17 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
         serialsByItem: Object.fromEntries(
             productRows.filter((r) => r.isSerialized && r.requiredSerialCount > 0).map((r) => [r.saleItemId, r.currentSerials])
         ),
+        freeSerialsByItem: Object.fromEntries(productRows.filter((r) => r.isNonInventory).map((r) => [r.saleItemId, r.serialNumber])),
     };
 
     const validate = (values: FormValues) => {
         const result = courierEditSchema.safeParse({ ...values, city });
-        const errors: Partial<Record<Exclude<keyof FormValues, "serialsByItem">, string>> & {
+        const errors: Partial<Record<ScalarFormKey, string>> & {
             serialsByItem?: Record<number, string>;
         } = {};
         if (!result.success) {
             for (const issue of result.error.issues) {
-                const field = issue.path[0] as Exclude<keyof FormValues, "serialsByItem">;
+                const field = issue.path[0] as ScalarFormKey;
                 if (!errors[field]) errors[field] = issue.message;
             }
         }
@@ -289,7 +297,7 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
             // Product Name/Quantity are per-product for a sale-linked shipment (see the Products
             // section below) — sending one shared value here would overwrite every product's own
             // name/quantity with the same text, so they're only included for manual entries.
-            ...(isSaleLinked ? {} : { productName: values.productName || null, quantity: values.quantity ? parseInt(values.quantity, 10) : null }),
+            ...(isSaleLinked ? {} : { productName: values.productName || null, quantity: values.quantity ? parseInt(values.quantity, 10) : null, serialNumber: values.serialNumber?.trim() || null }),
             freePickup,
             courierName: resolvedCourierName || undefined,
             trackId: values.trackId || null,
@@ -311,6 +319,10 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
                     const payload: Partial<CourierData> & { serialNumbers?: string[] } = { ...data };
                     if (row.isSerialized && row.requiredSerialCount > 0) {
                         payload.serialNumbers = values.serialsByItem?.[row.saleItemId] || [];
+                    }
+                    // Optional free-text serial for a Quick Add / Other line — blank is fine.
+                    if (row.isNonInventory) {
+                        payload.serialNumber = values.freeSerialsByItem?.[row.saleItemId]?.trim() || null;
                     }
                     return { courierId: row.courierId as number, productId: row.productId, productName: row.name, payload };
                 });
@@ -455,6 +467,12 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
                             {!isSaleLinked && (
                                 <Field name="quantity" label="Quantity" type="number" placeholder="Units to ship" component={FormikInput} />
                             )}
+                            {/* Optional — a manual entry isn't tied to a serial-tracked product, so this is
+                                plain free text and may be left empty. Sale-linked shipments show a per-product
+                                Serial Number in the Products section below instead. */}
+                            {!isSaleLinked && (
+                                <Field name="serialNumber" label="Serial Number (optional)" placeholder="Leave empty if none" component={FormikInput} />
+                            )}
                             <Field name="to" label="To" placeholder="Madhuram Motor" component={FormikInput} />
 
                             {/* Direction is always editable, regardless of entry source (manual or sale-generated)
@@ -509,7 +527,16 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
                                                         <span className="text-sm font-semibold text-slate-800">{row.name}</span>
                                                         <span className="text-xs font-medium text-slate-500">Qty: {row.quantity ?? "—"}</span>
                                                     </div>
-                                                    {!row.isSerialized ? (
+                                                    {row.isNonInventory ? (
+                                                        <div className="mt-2">
+                                                            <Field
+                                                                name={`freeSerialsByItem.${row.saleItemId}`}
+                                                                label="Serial Number (optional)"
+                                                                placeholder="Leave empty if none"
+                                                                component={FormikInput}
+                                                            />
+                                                        </div>
+                                                    ) : !row.isSerialized ? (
                                                         <p className="mt-2 text-xs text-slate-400">Serial Number: Not Required</p>
                                                     ) : row.requiredSerialCount === 0 ? (
                                                         <p className="mt-2 text-xs text-slate-400">

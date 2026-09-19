@@ -115,6 +115,7 @@ const CourierViewModal = ({ courier, onClose }: CourierViewModalProps) => {
   const serialInfoForSaleItem = (saleItemId?: number | null): string[] | null => {
     const line = saleItemId ? serialLines.find((l) => l.saleItemId === saleItemId) : undefined;
     if (!line) return null;
+    if (line.isNonInventory) return line.serialNumber ? [line.serialNumber] : [];
     return line.isSerialized ? line.assigned.map((u) => u.serialNumber) : [];
   };
 
@@ -202,7 +203,10 @@ const CourierViewModal = ({ courier, onClose }: CourierViewModalProps) => {
               <DetailItem icon={Layers} label="Quantity" value={courier.quantity} />
               {(() => {
                 const serials = serialInfoForSaleItem(courier.saleItemId);
-                if (serials === null) return null;
+                // A manual (non-sale) entry has no serial-line data, but may carry its own optional serial.
+                if (serials === null) {
+                  return courier.serialNumber ? <DetailItem icon={Hash} label="Serial Number" value={courier.serialNumber} full /> : null;
+                }
                 return (
                   <DetailItem
                     icon={Hash}
