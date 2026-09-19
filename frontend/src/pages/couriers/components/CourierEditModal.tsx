@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Field, Form, Formik } from "formik";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
@@ -43,6 +43,9 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
     // City is always editable, regardless of role or entry source (manual or sale-generated) —
     // kept out of Formik purely for parity with the shared validate() pattern below.
     const [city, setCity] = useState(courier?.city || "");
+    // What the last customer selection autofilled — lets a later selection tell "still the previous
+    // customer's value" (safe to replace/clear) from something the user typed (left alone).
+    const autofilledRef = useRef({ city: "", pincode: "", address: "" });
     // Direction is always editable, regardless of entry source — defaults to whichever page
     // (Outgoing/Incoming) the modal was opened from, or the record's own direction when editing.
     const [formDirection, setFormDirection] = useState<"IN" | "OUT">(courier?.direction || direction);
@@ -396,9 +399,19 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
                                 onSelectCustomer={(customer) => {
                                     setFieldValue("mobileNo", customer.phone);
                                     setFieldValue("customerName", customer.name);
-                                    if (customer.city) setCity(customer.city);
-                                    if (customer.pincode) setFieldValue("pincode", customer.pincode);
-                                    if (customer.address) setFieldValue("address", customer.address);
+                                    // A saved value always overwrites; a customer without one only clears a
+                                    // field still holding the previous customer's autofill, never a value
+                                    // the user typed (or the courier's own saved address on edit).
+                                    const next = {
+                                        city: customer.city || "",
+                                        pincode: customer.pincode || "",
+                                        address: customer.address || "",
+                                    };
+                                    const prev = autofilledRef.current;
+                                    if (next.city || city === prev.city) setCity(next.city);
+                                    if (next.pincode || values.pincode === prev.pincode) setFieldValue("pincode", next.pincode);
+                                    if (next.address || values.address === prev.address) setFieldValue("address", next.address);
+                                    autofilledRef.current = next;
                                 }}
                                 error={touched.mobileNo ? errors.mobileNo : undefined}
                             />
