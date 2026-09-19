@@ -147,6 +147,29 @@ const exportCouriers = (format: "pdf" | "excel", filters?: CourierFilters & { di
 const getCourierById = (id: number) =>
     httpService.get<{ success: boolean; data: CourierData }>(`/couriers/${id}`);
 
+/** One product line of a courier shipment with its serial-number state. `assigned` are the units
+ *  currently held for this line (exactly `requiredCount` of them); `available` are the other
+ *  AVAILABLE units of the same product that may be swapped in. */
+export interface CourierSerialLine {
+    courierId: number;
+    saleItemId: number;
+    productId: number;
+    productName: string | null;
+    isSerialized: boolean;
+    quantity: number;
+    allocatedQuantity: number;
+    fulfilledQuantity: number;
+    backorderedQuantity: number;
+    requiredCount: number;
+    assigned: { id: number; serialNumber: string; status: "RESERVED" | "SOLD" }[];
+    available: { id: number; serialNumber: string }[];
+}
+
+/** Serial-number data for a courier's whole shipment — served from the Courier module, so it
+ *  needs only Courier access (not Sells/Products). */
+const getCourierSerials = (id: number) =>
+    httpService.get<{ success: boolean; data: CourierSerialLine[] }>(`/couriers/${id}/serials`);
+
 const createCourier = (data: Partial<CourierData>) =>
     httpService.post<{ success: boolean; message: string; data: CourierData }>("/couriers", data);
 
@@ -200,6 +223,7 @@ export default {
     getCourierTotals,
     getCourierDailyTrend,
     getCourierById,
+    getCourierSerials,
     createCourier,
     updateCourier,
     updateCourierBySale,

@@ -499,6 +499,12 @@ const fulfillStock = async ({ productId, saleItemId, quantity, userId, serialNum
   });
 };
 
+// Units a sale line should hold right now: everything allocated (reserved) or fulfilled (sold),
+// less what was already returned. The single definition shared by reassignSerials and the courier
+// serials API so the picker's required count and the save-time check can never disagree.
+const expectedSerialCount = (item) =>
+  Math.max(0, (item.allocatedQuantity || 0) + (item.fulfilledQuantity || 0) - (item.returnedQuantity || 0));
+
 // Re-picks the serial numbers currently assigned to a courier's line item — either before
 // fulfillment (units still RESERVED) or after (units already SOLD, e.g. correcting which
 // physical unit actually went out). Releases the units currently held for this saleItemId and
@@ -511,6 +517,14 @@ const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId },
   return withTransaction(transaction, async (t) => {
     if (!Array.isArray(serialNumbers) || serialNumbers.length === 0) {
       const err = new Error("serialNumbers must be a non-empty array");
+      err.statusCode = 400;
+      throw err;
+    }
+    // Trim and reject duplicates up front — the same physical unit picked twice would otherwise
+    // pass the count check below but only match one row, silently dropping a unit from the line.
+    serialNumbers = serialNumbers.map((s) => String(s).trim());
+    if (serialNumbers.some((s) => !s) || new Set(serialNumbers).size !== serialNumbers.length) {
+      const err = new Error("serialNumbers must be unique, non-empty values");
       err.statusCode = 400;
       throw err;
     }
@@ -536,14 +550,26 @@ const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId },
       });
       targetStatus = "SOLD";
     }
-    if (currentUnits.length === 0) {
+
+    // The line's quantity — not however many units happen to be linked right now — decides how
+    // many serials it must hold. A line can fall short of that (e.g. a unit lost to an earlier
+    // bad edit, or a sale saved with fewer serials than its quantity); the picker then asks for
+    // the full count and the missing ones are claimed here rather than being stuck at the
+    // shortfall forever.
+    const expected = expectedSerialCount(item);
+    const required = expected > 0 ? expected : currentUnits.length;
+    if (required === 0) {
       const err = new Error("No serial numbers are currently assigned to this line");
       err.statusCode = 400;
       throw err;
     }
-    if (serialNumbers.length !== currentUnits.length) {
+    if (currentUnits.length === 0) {
+      // Nothing linked at all — new units take on whatever state the line itself is in.
+      targetStatus = item.allocatedQuantity > 0 ? "RESERVED" : "SOLD";
+    }
+    if (serialNumbers.length !== required) {
       const err = new Error(
-        `Number of selected serial numbers (${serialNumbers.length}) must match the assigned quantity (${currentUnits.length})`
+        `Number of selected serial numbers (${serialNumbers.length}) must match the quantity (${required})`
       );
       err.statusCode = 400;
       throw err;
@@ -572,7 +598,10 @@ const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId },
 
     // A candidate is fine if it's AVAILABLE, or if it's already ours (part of currentUnits,
     // re-selected as-is) — anything else (reserved/sold for a different line) is a conflict.
-    const unavailable = candidates.filter((u) => u.status !== "AVAILABLE" && u.saleItemId !== saleItemId);
+    // "Ours" is judged by membership in currentUnits, not by saleItemId alone: a RETURNED/DAMAGED
+    // unit keeps its saleItemId for audit lineage but is no longer part of this line.
+    const currentIds = new Set(currentUnits.map((u) => u.id));
+    const unavailable = candidates.filter((u) => u.status !== "AVAILABLE" && !currentIds.has(u.id));
     if (unavailable.length > 0) {
       const err = new Error(
         `Serial number(s) already reserved/sold, pick a different unit: ${unavailable.map((u) => u.serialNumber).join(", ")}`
@@ -581,13 +610,22 @@ const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId },
       throw err;
     }
 
+    // Only touch the units that actually change hands: release the ones dropped from the
+    // selection, claim the ones newly added. Units kept as-is must be left alone — releasing
+    // every current unit and then "re-assigning" the kept ones doesn't work, because the
+    // candidate instances were loaded before the release and already hold the target
+    // status/saleItemId in memory, so Sequelize sees no change and skips the save, leaving the
+    // kept units released (AVAILABLE) in the DB and the line short of its serials.
+    const keep = new Set(serialNumbers);
     for (const unit of currentUnits) {
+      if (keep.has(unit.serialNumber)) continue;
       unit.status = "AVAILABLE";
       unit.saleItemId = null;
       if (targetStatus === "SOLD") unit.soldAt = null;
       await unit.save({ transaction: t });
     }
     for (const unit of candidates) {
+      if (currentIds.has(unit.id)) continue;
       unit.status = targetStatus;
       unit.saleItemId = saleItemId;
       if (targetStatus === "SOLD") unit.soldAt = new Date();
@@ -1045,6 +1083,7 @@ module.exports = {
   writeOffReservation,
   fulfillStock,
   reassignSerials,
+  expectedSerialCount,
   isShipmentGroupReady,
   tryFulfillReadyGroup,
   receiveStock,

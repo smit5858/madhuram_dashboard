@@ -1,4 +1,4 @@
-const { Courier, User, Sale, SaleItem, SerialUnit, AccountEntry } = require("../models");
+const { Courier, User, Sale, SaleItem, Product, SerialUnit, AccountEntry } = require("../models");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const sequelize = require("../config/db");
@@ -357,6 +357,106 @@ exports.getCourierById = async (req, res) => {
   }
 };
 
+// GET /couriers/:id/serials — the serial-number picker/viewer data for this courier's whole
+// shipment (every non-cancelled Courier row sharing its saleId, or just this row if it isn't
+// sale-linked). Served from the Courier module itself, gated by the same courier scope and
+// direction permission as getCourierById, so a Courier Employee never needs Sells/Products
+// access just to see or pick serials. Per line:
+//  - assigned:  units currently held for that SaleItem (RESERVED, else SOLD — same precedence
+//               reassignSerials uses); requiredCount is how many the line must hold (its
+//               quantity) — assigned can be shorter, in which case the picker asks for the rest.
+//  - available: AVAILABLE units of that product only (never RESERVED/SOLD/RETURNED/DAMAGED/LOST,
+//               so a unit held by another sale/line can't be offered). Assigned units are not
+//               repeated here; the picker merges the two.
+exports.getCourierSerials = async (req, res) => {
+  try {
+    const courier = await Courier.findByPk(req.params.id);
+    if (!courier) {
+      return res.status(404).json({ success: false, message: "Courier not found" });
+    }
+
+    const allowed = await verifyScope(courier, req.user);
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: "Access denied: courier is outside your allowed scope" });
+    }
+    if (!(await requireCourierRecordAccess(req, res, courier, "read"))) return;
+
+    const rows = courier.saleId
+      ? await Courier.findAll({
+          where: { saleId: courier.saleId, status: { [Op.ne]: "CANCELLED" } },
+          order: [["id", "ASC"]],
+        })
+      : [courier];
+    const lineRows = rows.filter((c) => c.saleItemId);
+    const saleItemIds = [...new Set(lineRows.map((c) => c.saleItemId))];
+
+    const items = saleItemIds.length
+      ? await SaleItem.findAll({
+          where: { id: saleItemIds },
+          include: [{ model: Product, attributes: ["id", "name", "productType"] }],
+        })
+      : [];
+    const itemsById = new Map(items.map((i) => [i.id, i]));
+
+    const held = saleItemIds.length
+      ? await SerialUnit.findAll({
+          where: { saleItemId: saleItemIds, status: { [Op.in]: ["RESERVED", "SOLD"] } },
+          attributes: ["id", "serialNumber", "status", "saleItemId", "productId"],
+          order: [["id", "ASC"]],
+        })
+      : [];
+
+    const serializedProductIds = [
+      ...new Set(items.filter((i) => i.Product?.productType === "SERIALIZED").map((i) => i.productId)),
+    ];
+    const availableUnits = serializedProductIds.length
+      ? await SerialUnit.findAll({
+          where: { productId: serializedProductIds, status: "AVAILABLE" },
+          attributes: ["id", "serialNumber", "productId"],
+          order: [["id", "ASC"]],
+        })
+      : [];
+
+    const data = lineRows
+      .map((c) => {
+        const item = itemsById.get(c.saleItemId);
+        if (!item) return null;
+        const isSerialized = item.Product?.productType === "SERIALIZED";
+        const heldForItem = held.filter((u) => u.saleItemId === item.id && u.productId === item.productId);
+        const reserved = heldForItem.filter((u) => u.status === "RESERVED");
+        const assigned = (reserved.length > 0 ? reserved : heldForItem.filter((u) => u.status === "SOLD")).map((u) => ({
+          id: u.id,
+          serialNumber: u.serialNumber,
+          status: u.status,
+        }));
+        return {
+          courierId: c.id,
+          saleItemId: item.id,
+          productId: item.productId,
+          productName: item.Product?.name || c.productName || null,
+          isSerialized,
+          quantity: item.quantity,
+          allocatedQuantity: item.allocatedQuantity,
+          fulfilledQuantity: item.fulfilledQuantity,
+          backorderedQuantity: item.backorderedQuantity,
+          // The line's quantity (see inventoryService.expectedSerialCount), not assigned.length —
+          // a line that's short of serials must ask for the full count so the missing ones get
+          // picked, instead of treating the shortfall as the requirement.
+          requiredCount: isSerialized ? inventoryService.expectedSerialCount(item) || assigned.length : 0,
+          assigned: isSerialized ? assigned : [],
+          available: isSerialized
+            ? availableUnits.filter((u) => u.productId === item.productId).map((u) => ({ id: u.id, serialNumber: u.serialNumber }))
+            : [],
+        };
+      })
+      .filter(Boolean);
+
+    return res.status(200).json({ success: true, data });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ success: false, message: err.message });
+  }
+};
+
 // POST /couriers — manual (non-sale) entries only; sale-linked rows are always created by
 // orderService.createOrder, never through this endpoint.
 exports.createCourier = async (req, res) => {
@@ -519,7 +619,9 @@ exports.updateCourier = async (req, res) => {
     if (note !== undefined) courier.note = note;
     if (reason !== undefined) courier.reason = reason;
     if (entryDate !== undefined) courier.entryDate = entryDate;
-    if (quantity !== undefined) courier.quantity = quantity !== "" ? quantity : null;
+    // A sale-linked row's quantity is owned by its SaleItem (which the reserved/sold serial
+    // units are tied to) — editing it here would desync Product -> Quantity -> Serial Numbers.
+    if (quantity !== undefined && !courier.saleItemId) courier.quantity = quantity !== "" ? quantity : null;
     if (direction !== undefined) courier.direction = direction;
     if (deliveryMode !== undefined) courier.deliveryMode = deliveryMode || "COURIER";
     if (to !== undefined) courier.to = to || "Madhuram Motor";
@@ -557,7 +659,9 @@ exports.updateCourier = async (req, res) => {
 
     // Re-picks whichever serial numbers are currently assigned to this line — reserved (not yet
     // fulfilled) or already sold (see inventoryService.reassignSerials for the swap logic).
-    if (Array.isArray(serialNumbers) && serialNumbers.length > 0 && courier.saleItemId) {
+    // An empty array is rejected by reassignSerials rather than skipped — silently ignoring it
+    // would let a serialized line save with its serials cleared out from under the picker.
+    if (Array.isArray(serialNumbers) && courier.saleItemId) {
       const saleItem = await SaleItem.findByPk(courier.saleItemId, { transaction: t, lock: true });
       if (saleItem) {
         await inventoryService.reassignSerials(

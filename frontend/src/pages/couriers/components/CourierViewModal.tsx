@@ -86,28 +86,36 @@ const CourierViewModal = ({ courier, onClose }: CourierViewModalProps) => {
   });
   const siblings = siblingsResponse?.data?.data || [];
 
-  // Same sale-detail fetch CourierEditModal uses to resolve each line's currently-assigned
-  // serial numbers (reserved takes priority over sold — a line is never in both states at
-  // once) — reused here read-only so the view shows "Serial Number: Not Required" for
-  // non-serialized lines and the actual assigned serials for serialized ones.
+  // Each line's currently-assigned serial numbers come from the Courier API (same source the edit
+  // modal uses), not the Sells detail — so a Courier Employee without Sells access still sees the
+  // real serials instead of "Not Required". Read-only here: "Not Required" for non-serialized
+  // lines, the actual assigned serials for serialized ones.
+  const { data: serialLinesResponse } = useQuery({
+    queryKey: ["courier-view-serials", courier.id],
+    queryFn: () => courierService.getCourierSerials(courier.id!),
+    enabled: !!courier.saleId && !!courier.id,
+    staleTime: 0,
+    gcTime: 0,
+  });
+  const serialLines = serialLinesResponse?.data?.data || [];
+
+  // The sale's own notes still come from the Sells detail; it's optional, so a user without Sells
+  // access simply doesn't get them (a failed fetch leaves this undefined).
   const { data: saleDetailResponse } = useQuery({
     queryKey: ["courier-edit-sale-detail", courier.saleId],
     queryFn: () => saleService.getSaleById(courier.saleId!),
     enabled: !!courier.saleId,
+    retry: false,
   });
-  const saleItems = saleDetailResponse?.data?.data?.items || [];
   const saleNotes = saleDetailResponse?.data?.data?.notes;
-  /** null = no sale-item data to show a Serial Number field for at all (not a sale-linked
-   *  line, or the detail fetch hasn't resolved yet). Otherwise an empty array means
-   *  "not a serialized product" (renders as "Not Required"), non-empty means the serials
-   *  currently reserved/sold against this line. */
+  /** null = no serial data to show a Serial Number field for at all (not a sale-linked line,
+   *  or the fetch hasn't resolved yet). Otherwise an empty array means "not a serialized
+   *  product" (renders as "Not Required"), non-empty means the serials currently
+   *  reserved/sold against this line. */
   const serialInfoForSaleItem = (saleItemId?: number | null): string[] | null => {
-    const item = saleItemId ? saleItems.find((i) => i.id === saleItemId) : undefined;
-    if (!item) return null;
-    if (item.Product?.productType !== "SERIALIZED") return [];
-    const reserved = (item.SerialUnits || []).filter((u) => u.status === "RESERVED").map((u) => u.serialNumber);
-    const sold = (item.SerialUnits || []).filter((u) => u.status === "SOLD").map((u) => u.serialNumber);
-    return reserved.length > 0 ? reserved : sold;
+    const line = saleItemId ? serialLines.find((l) => l.saleItemId === saleItemId) : undefined;
+    if (!line) return null;
+    return line.isSerialized ? line.assigned.map((u) => u.serialNumber) : [];
   };
 
   const { data: companiesResponse } = useQuery({

@@ -80,44 +80,38 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
     });
     const sale = saleDetailResponse?.data?.data;
 
-    // Every Courier row created for this sale — the authoritative "what's actually part of this
-    // shipment" list (same source CourierViewModal's "Products in this Order" table uses).
-    // Products are driven off this, not off every SaleItem in the sale, because a SaleItem
-    // doesn't always get a Courier row (e.g. SOFTWARE lines — see order.service.js#createOrder)
-    // — building the list from sale.items instead let un-saveable rows render as if editable,
-    // so what showed on screen and what Save actually persisted could silently disagree.
-    const { data: siblingsResponse } = useQuery({
-        queryKey: ["courier-edit-siblings", courier?.saleId],
-        queryFn: () => courierService.getCouriers({ saleId: courier!.saleId! }),
-        enabled: isSaleLinked,
+    // Every product line of this shipment with its serial-number state, straight from the Courier
+    // API (GET /couriers/:id/serials) — the authoritative "what's actually part of this shipment"
+    // list (non-cancelled Courier rows only: a SaleItem doesn't always get one, e.g. SOFTWARE
+    // lines, so building from sale.items would render un-saveable rows), and the only serial source
+    // that works for a Courier Employee who has no Sells/Products access. Product A's serials can
+    // never leak into Product B's picker: each line carries its own assigned/available lists.
+    // Refetched on every open (no cache reuse, no focus refetch) so it always mirrors the DB, and
+    // never mid-edit, which would reset the in-progress selection.
+    const { data: serialLinesResponse, isLoading: serialLinesLoading, error: serialLinesError } = useQuery({
+        queryKey: ["courier-serials", courier?.id],
+        queryFn: () => courierService.getCourierSerials(courier!.id!),
+        enabled: isSaleLinked && !!courier?.id,
+        staleTime: 0,
+        gcTime: 0,
+        refetchOnWindowFocus: false,
     });
-    // CANCELLED rows are history (set when the linked sale/order-item is cancelled — see
-    // courier.model.js) — nothing left on them to edit or ship.
-    const siblingCouriers = (siblingsResponse?.data?.data || []).filter((c) => c.status !== "CANCELLED");
-
-    // One entry per Courier row in this shipment, enriched with that row's own SaleItem for
-    // product identity/serialization/current serials — Product A's serials must never leak into
-    // Product B's picker, so each row is resolved independently from that item's own
-    // SerialUnits, never from a shared pool.
-    const saleItemsById = new Map((sale?.items || []).map((item) => [item.id, item]));
-    const productRows = siblingCouriers
-        .filter((c) => c.saleItemId != null)
-        .map((c) => {
-            const item = saleItemsById.get(c.saleItemId as number);
-            const reserved = (item?.SerialUnits || []).filter((u) => u.status === "RESERVED").map((u) => u.serialNumber);
-            const sold = (item?.SerialUnits || []).filter((u) => u.status === "SOLD").map((u) => u.serialNumber);
-            const currentSerials = reserved.length > 0 ? reserved : sold;
-            return {
-                saleItemId: c.saleItemId as number,
-                courierId: c.id as number,
-                productId: item?.productId,
-                name: item?.Product?.name || item?.productName || c.productName || "Product",
-                quantity: c.quantity ?? item?.quantity,
-                isSerialized: item?.Product?.productType === "SERIALIZED",
-                requiredSerialCount: currentSerials.length,
-                currentSerials,
-            };
-        });
+    const productRows = (serialLinesResponse?.data?.data || []).map((line) => {
+        const currentSerials = line.assigned.map((u) => u.serialNumber);
+        return {
+            saleItemId: line.saleItemId,
+            courierId: line.courierId,
+            productId: line.productId,
+            name: line.productName || "Product",
+            quantity: line.quantity,
+            isSerialized: line.isSerialized,
+            requiredSerialCount: line.requiredCount,
+            currentSerials,
+            // Assigned units first (stable order), then the other AVAILABLE units of this product.
+            serialOptions: [...currentSerials, ...line.available.map((u) => u.serialNumber)],
+            backorderedQuantity: line.backorderedQuantity,
+        };
+    });
 
     // The Ship Complete Order vs Ship Available Products choice only means anything when this
     // sale actually has a product still waiting on stock — with every line already allocated
@@ -146,14 +140,52 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
     // order.service.js#createOrder), each carrying the shared shipment fields plus that
     // product's own serial selection, so every product's serials update independently in one
     // Save without disturbing its siblings.
+    //
+    // Each PUT is its own backend transaction, so this isn't atomic across the shipment — if two
+    // rows somehow raced for the same serial (the excludeSerials guard above should prevent this
+    // in normal use) the loser's PUT fails with a 409 while its siblings already committed.
+    // Requests run one after another (not in parallel): each one row-locks serial units of the
+    // same product, and concurrent PUTs locking overlapping units in different orders can
+    // deadlock. Settling each one individually (not bailing on the first error) surfaces exactly
+    // which product failed instead of a generic error.
     const groupSaveMutation = useMutation({
-        mutationFn: (updates: { courierId: number; payload: Partial<CourierData> & { serialNumbers?: string[] } }[]) =>
-            Promise.all(updates.map((u) => courierService.updateCourier(u.courierId, u.payload))),
-        onSuccess: () => {
-            toast.success("Courier shipment updated successfully");
+        mutationFn: async (updates: { courierId: number; productId?: number; productName: string; payload: Partial<CourierData> & { serialNumbers?: string[] } }[]) => {
+            const results: PromiseSettledResult<unknown>[] = [];
+            for (const u of updates) {
+                try {
+                    results.push({ status: "fulfilled", value: await courierService.updateCourier(u.courierId, u.payload) });
+                } catch (reason) {
+                    results.push({ status: "rejected", reason });
+                }
+            }
+            const failures = results
+                .map((r, i) => ({ r, u: updates[i] }))
+                .filter(({ r }) => r.status === "rejected") as { r: PromiseRejectedResult; u: (typeof updates)[number] }[];
+            return { results, failures };
+        },
+        onSuccess: ({ failures, results }) => {
             queryClient.invalidateQueries({ queryKey: ["couriers"] });
             queryClient.invalidateQueries({ queryKey: ["courier-charge"] });
-            onClose();
+            // The serial-lines query (gcTime 0) is discarded when this modal closes, so reopening
+            // always reads the saved state from the DB. It's deliberately not invalidated here:
+            // on a partial failure the modal stays open, and a refetch would re-initialize the
+            // form and wipe the pick the employee still needs to correct and retry.
+            if (failures.length === 0) {
+                toast.success("Courier shipment updated successfully");
+                onClose();
+                return;
+            }
+            const names = failures.map(({ u }) => u.productName).join(", ");
+            const firstErr = failures[0].r.reason as { response?: { data?: { message?: string } }; message?: string };
+            const detail = firstErr?.response?.data?.message || firstErr?.message || "unknown error";
+            toast.error(
+                results.length > failures.length
+                    ? `Saved ${results.length - failures.length} of ${results.length} products. Failed: ${names} (${detail})`
+                    : `Failed to update: ${names} (${detail})`
+            );
+            // Keep the modal open on partial/total failure so the employee can re-pick the
+            // conflicting product's serial and retry — the rows that already saved are no-ops
+            // on resubmit since reassignSerials short-circuits when the selection is unchanged.
         },
         onError: (err: any) => {
             toast.error(err.response?.data?.message || err.message || "Failed to update courier shipment");
@@ -216,6 +248,22 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
             const err = validateSerialNumbers(values.serialsByItem?.[row.saleItemId] || [], row.requiredSerialCount);
             if (err) serialErrors[row.saleItemId] = err;
         }
+        // Belt-and-braces cross-row check: two sibling rows for the same product (e.g. a sale
+        // with two separate lines of the same serialized item) must never claim the same unit —
+        // the picker already excludes a sibling's live pick from its own choices (see
+        // FormikSerialPicker's excludeSerials), but this catches it too in case values change
+        // out from under that (e.g. a row unmounting/remounting while a pick is in flight).
+        for (const row of productRows) {
+            if (!row.isSerialized || row.requiredSerialCount === 0 || serialErrors[row.saleItemId]) continue;
+            const mySerials = values.serialsByItem?.[row.saleItemId] || [];
+            const claimedBySiblings = productRows
+                .filter((r) => r.saleItemId !== row.saleItemId && r.productId === row.productId)
+                .flatMap((r) => values.serialsByItem?.[r.saleItemId] || []);
+            const conflict = mySerials.find((s) => claimedBySiblings.includes(s));
+            if (conflict) {
+                serialErrors[row.saleItemId] = `${conflict} is already selected for another product row`;
+            }
+        }
         if (Object.keys(serialErrors).length > 0) errors.serialsByItem = serialErrors;
         return errors;
     };
@@ -264,7 +312,7 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
                     if (row.isSerialized && row.requiredSerialCount > 0) {
                         payload.serialNumbers = values.serialsByItem?.[row.saleItemId] || [];
                     }
-                    return { courierId: row.courierId as number, payload };
+                    return { courierId: row.courierId as number, productId: row.productId, productName: row.name, payload };
                 });
             groupSaveMutation.mutate(updates);
             return;
@@ -447,8 +495,12 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
                                     <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-700">
                                         Products{productRows.length > 0 ? ` (${productRows.length})` : ""}
                                     </p>
-                                    {productRows.length === 0 ? (
+                                    {serialLinesLoading ? (
                                         <p className="text-xs text-slate-400">Loading products…</p>
+                                    ) : serialLinesError ? (
+                                        <p className="text-xs text-red-500">Couldn't load this shipment's products and serial numbers. Close and reopen to retry.</p>
+                                    ) : productRows.length === 0 ? (
+                                        <p className="text-xs text-slate-400">No products found for this shipment.</p>
                                     ) : (
                                         <div className="flex flex-col gap-3">
                                             {productRows.map((row) => (
@@ -460,16 +512,31 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
                                                     {!row.isSerialized ? (
                                                         <p className="mt-2 text-xs text-slate-400">Serial Number: Not Required</p>
                                                     ) : row.requiredSerialCount === 0 ? (
-                                                        <p className="mt-2 text-xs text-slate-400">No serial numbers assigned to this product yet.</p>
+                                                        <p className="mt-2 text-xs text-slate-400">
+                                                            {row.backorderedQuantity > 0
+                                                                ? "Out of stock — serial numbers can be picked once units are received."
+                                                                : "No serial numbers assigned to this product yet."}
+                                                        </p>
                                                     ) : (
+                                                        <>
+                                                        {row.currentSerials.length < row.requiredSerialCount && (
+                                                            <p className="mt-2 text-xs text-amber-600">
+                                                                Only {row.currentSerials.length} of {row.requiredSerialCount} serial numbers are on record for this product — select the remaining {row.requiredSerialCount - row.currentSerials.length}.
+                                                            </p>
+                                                        )}
                                                         <Field
                                                             name={`serialsByItem.${row.saleItemId}`}
                                                             label={row.requiredSerialCount > 1 ? "Serial Numbers" : "Serial Number"}
-                                                            productId={row.productId}
                                                             requiredCount={row.requiredSerialCount}
-                                                            currentlyAssigned={row.currentSerials}
+                                                            options={row.serialOptions}
+                                                            // Sibling rows for the same product (duplicate lines on one sale)
+                                                            // must never be able to pick the same unit — see FormikSerialPicker.
+                                                            excludeSerials={productRows
+                                                                .filter((r) => r.saleItemId !== row.saleItemId && r.productId === row.productId)
+                                                                .flatMap((r) => values.serialsByItem?.[r.saleItemId] || [])}
                                                             component={FormikSerialPicker}
                                                         />
+                                                        </>
                                                     )}
                                                 </div>
                                             ))}
@@ -488,7 +555,7 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
                                 </button>
                                 <button
                                     type="submit"
-                                    disabled={saveMutation.isPending || groupSaveMutation.isPending}
+                                    disabled={saveMutation.isPending || groupSaveMutation.isPending || (isSaleLinked && serialLinesLoading)}
                                     className="rounded-lg bg-[#3d6fe0] px-4 py-2 text-sm font-semibold text-white hover:bg-[#3162d2]"
                                 >
                                     {saveMutation.isPending || groupSaveMutation.isPending

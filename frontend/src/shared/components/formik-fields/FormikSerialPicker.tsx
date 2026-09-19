@@ -1,8 +1,11 @@
 import _ from 'lodash';
-import React, { useEffect, useMemo, useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import inventoryService from '../../../services/inventory.service';
+import React, { useMemo, useState } from 'react';
+import { Check, Search, X } from 'lucide-react';
 import './custom.css';
+
+/** Cap on rows rendered in the choice list at once — a searchable, scrollable list of a few
+ *  hundred buttons is fine, but rendering thousands isn't; the search box narrows the rest. */
+const MAX_RENDERED_CHOICES = 200;
 
 interface FormikSerialPickerProps {
     field: { name: string; value?: string[] };
@@ -12,26 +15,32 @@ interface FormikSerialPickerProps {
         setFieldValue: (field: string, value: any) => void;
     };
     label?: string;
-    productId?: number;
-    /** Exact number of serials that must be selected — the shipment's quantity. */
+    /** Exact number of serials that must be selected — the line's assigned quantity. */
     requiredCount: number;
-    /** Serial numbers already assigned to this shipment — shown alongside AVAILABLE ones and
-     *  preferred when auto-selecting, so re-opening the form doesn't change the pick. */
-    currentlyAssigned?: string[];
+    /** Every serial this line may hold: the units currently assigned to it plus the AVAILABLE
+     *  units of the same product, as supplied by the courier serials API. */
+    options: string[];
+    /** Serials currently picked by *other* product rows in the same shipment (same productId,
+     *  different saleItemId) — excluded from this picker's choices so two sibling rows can never
+     *  show the same unit as "selected" at once (only one PUT would actually win it server-side). */
+    excludeSerials?: string[];
     controlClassName?: string;
 }
 
-/** Multi-select serial-number picker for a Formik field. Auto-selects the best available
- *  serials on first load (FIFO — the same oldest-received-first ordering the backend already
- *  applies), while remaining fully editable: click a chip to swap it out for another available
- *  unit. Field value is a string[] of selected serial numbers. */
+/** Multi-select serial-number picker for a Formik field (value is a string[]), built to stay
+ *  usable at any quantity: a "selected / required" counter, a compact scrollable list of what's
+ *  selected, and a searchable, scrollable list of choices.
+ *
+ *  Swapping never requires unselecting first — with a quantity of 1, picking another serial
+ *  replaces the current one; with more, click a selected serial to mark it for replacement and
+ *  then click the serial to swap in. Duplicates and going over `requiredCount` are impossible. */
 const FormikSerialPicker = ({
     field,
     form,
     label,
-    productId,
     requiredCount,
-    currentlyAssigned = [],
+    options,
+    excludeSerials = [],
     controlClassName = '',
 }: FormikSerialPickerProps): React.ReactNode => {
     const { touched, errors, setFieldValue } = form;
@@ -40,86 +49,179 @@ const FormikSerialPicker = ({
     const hasError = Boolean(touchedField && error);
     const selected: string[] = field.value || [];
 
-    const { data: response, isFetching } = useQuery({
-        queryKey: ["available-serials", productId],
-        queryFn: () => inventoryService.getSerials({ productId, status: "AVAILABLE" }),
-        enabled: !!productId,
-    });
-    const available = useMemo(() => (response?.data?.data || []).map((u) => u.serialNumber), [response]);
+    const [search, setSearch] = useState('');
+    // The selected serial currently marked "to be replaced" (only used when requiredCount > 1).
+    const [swapTarget, setSwapTarget] = useState<string | null>(null);
+    const [hint, setHint] = useState('');
 
-    const allChoices = useMemo(() => {
-        const merged = [...available];
-        for (const s of currentlyAssigned) {
-            if (!merged.includes(s)) merged.push(s);
-        }
-        return merged;
-    }, [available, currentlyAssigned]);
+    const choices = useMemo(() => {
+        const excluded = new Set(excludeSerials);
+        return Array.from(new Set(options)).filter((s) => !excluded.has(s));
+    }, [options, excludeSerials]);
 
-    // Auto-select once the choices are known, unless the field already has a value. Latches on
-    // either branch (not just the one that picks values) — otherwise, on the common edit-existing
-    // case where the field is pre-populated before this ever runs, `selected.length > 0` keeps
-    // bailing without setting the ref, so the effect re-evaluates on every `allChoices` reference
-    // change (e.g. `currentlyAssigned` being a fresh array from the parent's render) instead of
-    // running once and leaving the user's picks alone.
-    const preselected = useRef(false);
-    useEffect(() => {
-        if (preselected.current || allChoices.length === 0) return;
-        if (selected.length > 0) {
-            preselected.current = true;
-            return;
-        }
-        preselected.current = true;
+    const query = search.trim().toLowerCase();
+    const filtered = useMemo(
+        () => (query ? choices.filter((s) => s.toLowerCase().includes(query)) : choices),
+        [choices, query]
+    );
+    const visible = filtered.slice(0, MAX_RENDERED_CHOICES);
 
-        const base = currentlyAssigned.filter((s) => allChoices.includes(s)).slice(0, requiredCount);
-        const remaining = requiredCount - base.length;
-        const extra = available.filter((s) => !base.includes(s)).slice(0, Math.max(0, remaining));
-        setFieldValue(field.name, [...base, ...extra]);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [allChoices]);
-
-    const toggle = (serial: string) => {
-        if (selected.includes(serial)) {
-            setFieldValue(field.name, selected.filter((s) => s !== serial));
-            return;
-        }
-        if (selected.length >= requiredCount) {
-            // Already full (the common case is requiredCount === 1) — picking a new serial
-            // replaces the oldest selection instead of requiring a manual unselect first.
-            setFieldValue(field.name, [...selected.slice(1), serial]);
-            return;
-        }
-        setFieldValue(field.name, [...selected, serial]);
+    const update = (next: string[]) => {
+        setHint('');
+        setFieldValue(field.name, next);
     };
+
+    const pick = (serial: string) => {
+        if (selected.includes(serial)) {
+            if (swapTarget === serial) setSwapTarget(null);
+            update(selected.filter((s) => s !== serial));
+            return;
+        }
+        if (swapTarget && selected.includes(swapTarget)) {
+            update(selected.map((s) => (s === swapTarget ? serial : s)));
+            setSwapTarget(null);
+            return;
+        }
+        if (selected.length < requiredCount) {
+            update([...selected, serial]);
+            return;
+        }
+        if (requiredCount === 1) {
+            // Full with a single slot — replace directly, no manual unselect needed.
+            update([serial]);
+            return;
+        }
+        setHint('All serial numbers are selected — click a selected serial to replace it, or remove one first.');
+    };
+
+    const remove = (serial: string) => {
+        if (swapTarget === serial) setSwapTarget(null);
+        update(selected.filter((s) => s !== serial));
+    };
+
+    const fillRemaining = () => {
+        const chosen = new Set(selected);
+        const extra = choices.filter((s) => !chosen.has(s)).slice(0, Math.max(0, requiredCount - selected.length));
+        update([...selected, ...extra]);
+    };
+
+    const complete = selected.length === requiredCount;
 
     return (
         <div className={`form-field sm:col-span-2 ${controlClassName}`}>
             {label && <label className="form-input-label">{label}</label>}
             <div className="mt-1 rounded-lg border border-slate-200 bg-slate-50 p-2">
-                {isFetching && <p className="text-xs text-slate-400">Loading available serial numbers…</p>}
-                {!isFetching && allChoices.length === 0 && (
-                    <p className="text-xs text-slate-400">No available serial numbers for this product.</p>
-                )}
-                <div className="flex flex-wrap gap-1.5">
-                    {allChoices.map((serial) => {
-                        const isSelected = selected.includes(serial);
-                        return (
-                            <button
-                                type="button"
-                                key={serial}
-                                onClick={() => toggle(serial)}
-                                className={`inline-flex items-center rounded px-2 py-1 text-[11px] font-mono font-bold border transition ${isSelected
-                                    ? "bg-[#3d6fe0] border-[#3d6fe0] text-white"
-                                    : "bg-white border-slate-200 text-slate-600 hover:border-[#3d6fe0]"
-                                    }`}
-                            >
-                                {serial}
-                            </button>
-                        );
-                    })}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className={`text-xs font-semibold ${complete ? 'text-emerald-600' : 'text-amber-600'}`}>
+                        Serial Numbers Selected: {selected.length} / {requiredCount}
+                    </p>
+                    {requiredCount > 1 && (
+                        <div className="flex gap-2 text-[11px] font-semibold">
+                            {selected.length < requiredCount && (
+                                <button type="button" onClick={fillRemaining} className="text-[#3d6fe0] hover:underline">
+                                    Auto-fill remaining
+                                </button>
+                            )}
+                            {selected.length > 0 && (
+                                <button type="button" onClick={() => { setSwapTarget(null); update([]); }} className="text-slate-500 hover:underline">
+                                    Clear all
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
-                <p className="mt-1.5 text-[10px] text-slate-400">
-                    {selected.length} of {requiredCount} selected
-                </p>
+
+                <div className="mt-1.5 max-h-32 overflow-y-auto rounded border border-slate-200 bg-white p-1.5">
+                    {selected.length === 0 ? (
+                        <p className="text-xs text-slate-400">Nothing selected yet.</p>
+                    ) : (
+                        <div className="flex flex-wrap gap-1.5">
+                            {selected.map((serial) => {
+                                const marked = swapTarget === serial;
+                                return (
+                                    <span
+                                        key={serial}
+                                        className={`inline-flex items-center overflow-hidden rounded border text-[11px] font-mono font-bold ${marked
+                                            ? 'border-amber-400 bg-amber-50 text-amber-700 ring-2 ring-amber-200'
+                                            : 'border-[#3d6fe0] bg-[#3d6fe0] text-white'
+                                            }`}
+                                    >
+                                        <button
+                                            type="button"
+                                            disabled={requiredCount === 1}
+                                            onClick={() => setSwapTarget(marked ? null : serial)}
+                                            title={requiredCount === 1 ? undefined : marked ? 'Replacing — pick a serial below' : 'Click to replace this serial'}
+                                            className="px-2 py-1 disabled:cursor-default"
+                                        >
+                                            {serial}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => remove(serial)}
+                                            aria-label={`Remove ${serial}`}
+                                            className="border-l border-white/30 px-1 py-1 hover:bg-black/10"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </button>
+                                    </span>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+
+                {swapTarget && (
+                    <p className="mt-1 text-[11px] text-amber-600">
+                        Replacing <span className="font-mono font-bold">{swapTarget}</span> — pick the serial to use instead.
+                    </p>
+                )}
+
+                <div className="relative mt-2">
+                    <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                    <input
+                        type="text"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder={`Search ${choices.length} serial number${choices.length === 1 ? '' : 's'}…`}
+                        className="block w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-7 pr-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:outline-none"
+                    />
+                </div>
+
+                <div className="mt-1.5 max-h-52 overflow-y-auto rounded border border-slate-200 bg-white p-1.5">
+                    {choices.length === 0 ? (
+                        <p className="text-xs text-slate-400">No available serial numbers for this product.</p>
+                    ) : filtered.length === 0 ? (
+                        <p className="text-xs text-slate-400">No serial numbers match "{search.trim()}".</p>
+                    ) : (
+                        <div className="grid grid-cols-2 gap-1 sm:grid-cols-3">
+                            {visible.map((serial) => {
+                                const isSelected = selected.includes(serial);
+                                return (
+                                    <button
+                                        type="button"
+                                        key={serial}
+                                        aria-pressed={isSelected}
+                                        onClick={() => pick(serial)}
+                                        className={`flex items-center justify-between gap-1 rounded border px-2 py-1 text-left text-[11px] font-mono font-bold transition ${isSelected
+                                            ? 'border-[#3d6fe0] bg-blue-50 text-[#3d6fe0]'
+                                            : 'border-slate-200 bg-white text-slate-600 hover:border-[#3d6fe0]'
+                                            }`}
+                                    >
+                                        <span className="truncate">{serial}</span>
+                                        {isSelected && <Check className="h-3 w-3 shrink-0" />}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    )}
+                    {filtered.length > visible.length && (
+                        <p className="mt-1.5 text-center text-[10px] text-slate-400">
+                            Showing {visible.length} of {filtered.length} — type in the search box to narrow down.
+                        </p>
+                    )}
+                </div>
+
+                {hint && <p className="mt-1 text-[11px] text-amber-600">{hint}</p>}
             </div>
             {hasError && (
                 <div className="formik-input-error">

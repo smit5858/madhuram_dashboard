@@ -22,6 +22,8 @@ router.put("/charge", authenticate, authorize("/couriers", "update"), courierCha
 // independent of canUpdate, same pattern as income.controller.js's update-balance route.
 router.put("/charge/reset", authenticate, courierChargeController.resetCurrentCourierCharge);
 router.get("/:id", authenticate, courierController.getCourierById);
+// Serial-number data for the Courier view/edit modals — courier-scoped, so no Sells/Products access needed.
+router.get("/:id/serials", authenticate, courierController.getCourierSerials);
 router.post("/", authenticate, courierController.createCourier);
 router.put("/:id", authenticate, courierController.updateCourier);
 // Sale-wide status update for a multi-product shipment (see Couriers.tsx's grouped entry Truck
