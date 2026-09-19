@@ -36,8 +36,11 @@ const AccountEntry = sequelize.define(
     },
     customerName: { type: DataTypes.STRING, allowNull: true },
     customerPhone: { type: DataTypes.STRING, allowNull: true },
-    productName: { type: DataTypes.STRING, allowNull: true },
-    serialNumber: { type: DataTypes.STRING, allowNull: true },
+    // TEXT, not STRING/VARCHAR(255) — a multi-item Sale's joined "<name> x<qty>, ..." summary (see
+    // incomeSync.service.js#buildSaleProductSummary) can easily exceed 255 characters and would
+    // otherwise be silently truncated, dropping trailing products from the Income display.
+    productName: { type: DataTypes.TEXT, allowNull: true },
+    serialNumber: { type: DataTypes.TEXT, allowNull: true },
     // "COD" was retired in favor of "Cash" (see server.js#ensureCodPaymentMethodBackfilled).
     // "Multiple" is a derived value copied from a Sale whose collected amount was split across
     // more than one payment method — never chosen manually.

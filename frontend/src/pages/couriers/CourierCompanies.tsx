@@ -268,7 +268,7 @@ const CourierCompanies = () => {
                                     {companies.map((company) => (
                                         <tr key={company.id} className="hover:bg-slate-50/60 transition-colors">
                                             <td className="px-4 py-3 font-semibold text-slate-900 whitespace-nowrap">{company.name}</td>
-                                            <td className="px-4 py-3 font-mono text-xs max-w-[280px] truncate" title={company.trackingLinkTemplate || ""}>
+                                            <td className="px-4 py-3 font-mono text-xs max-w-70 truncate" title={company.trackingLinkTemplate || ""}>
                                                 {company.trackingLinkTemplate || <span className="text-slate-300 font-sans">—</span>}
                                             </td>
                                             <td className="px-4 py-3 whitespace-nowrap">

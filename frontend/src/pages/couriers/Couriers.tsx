@@ -175,7 +175,7 @@ const CourierTable = ({
                     </>
                 ) : (
                     <>
-                        <td className="px-4 py-3 max-w-[150px] truncate" title={courier.address || ""}>
+                        <td className="px-4 py-3 max-w-37.5 truncate" title={courier.address || ""}>
                             {courier.address || <span className="text-slate-300">—</span>}
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap">
@@ -214,7 +214,7 @@ const CourierTable = ({
                                 )}
                             </div>
                         </td>
-                        <td className="px-4 py-3 max-w-[120px] truncate text-xs" title={courier.note || ""}>
+                        <td className="px-4 py-3 max-w-30 truncate text-xs" title={courier.note || ""}>
                             {courier.note || <span className="text-slate-300">—</span>}
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap text-xs">
@@ -309,7 +309,7 @@ const CourierTable = ({
                     {columnsVariant === "outgoing" ? (
                         <>
                             <td className="px-4 py-3 whitespace-nowrap">{formatPhoneDisplay(first.mobileNo || first.phone) || <span className="text-slate-300">—</span>}</td>
-                            <td className="px-4 py-3 max-w-[220px]">
+                            <td className="px-4 py-3 max-w-55 truncate" title={group.items.map((item) => item.productName).join(", ")}>
                                 <div className="flex flex-wrap gap-1">
                                     {group.items.map((item) => (
                                         <span key={item.id} className="inline-flex items-center rounded-sm px-2 py-0.5 text-[11px] font-medium ">
@@ -951,11 +951,6 @@ const Couriers = () => {
                             </div>
                         </Form>
                     </Formik>
-                    {!hasActiveFilters && (
-                        <p className="mt-2 text-[11px] text-slate-400">
-                            No filters applied — Export will use the current month's records.
-                        </p>
-                    )}
                 </div>
             )}
 

@@ -1,4 +1,4 @@
-const { AccountEntry, DailyAccountBalance, User, BankAccount, Sale, Courier } = require("../models");
+const { AccountEntry, DailyAccountBalance, User, BankAccount, Sale, Courier, SaleItem, Product, SerialUnit } = require("../models");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const sequelize = require("../config/db");
@@ -76,6 +76,58 @@ const attachCourierStatus = async (rows) => {
 };
 
 /**
+ * Overrides each sale-linked INCOME row's productName/serialNumber with a fresh summary built
+ * live from the Sale's CURRENT SaleItems/SerialUnits, instead of trusting the frozen snapshot
+ * AccountEntry.productName/serialNumber written once at Sale-creation time (see
+ * incomeSync.service.js#buildSaleProductSummary). That snapshot never gets refreshed when items
+ * are added/edited on the Sale after the fact (sells.controller.js#addSaleItem/updateSaleItem
+ * don't touch it) and, being a STRING column historically capped at 255 chars, could also
+ * truncate a long multi-product list — both of which show up as "missing products" on the Income
+ * table/view. Computing it live here, the same way attachSaleNotes/attachCourierStatus above
+ * already do for other sale-derived fields, fixes both old and newly-created entries with no
+ * backfill needed.
+ */
+const attachSaleProducts = async (rows) => {
+  const list = Array.isArray(rows) ? rows : [rows];
+  const saleIds = [...new Set(list.filter((r) => r.referenceType === "sale" && r.referenceId).map((r) => r.referenceId))];
+  if (saleIds.length === 0) return;
+
+  const items = await SaleItem.findAll({
+    where: { saleId: saleIds },
+    include: [{ model: Product, attributes: ["id", "name"] }],
+    order: [["id", "ASC"]],
+  });
+
+  const itemsBySale = new Map();
+  for (const item of items) {
+    if (!itemsBySale.has(item.saleId)) itemsBySale.set(item.saleId, []);
+    itemsBySale.get(item.saleId).push(item);
+  }
+
+  const saleItemIds = items.map((i) => i.id);
+  const units = saleItemIds.length
+    ? await SerialUnit.findAll({
+        where: { saleItemId: { [Op.in]: saleItemIds }, status: { [Op.in]: ["RESERVED", "SOLD"] } },
+        attributes: ["saleItemId", "serialNumber"],
+      })
+    : [];
+  const unitsByItem = new Map();
+  for (const u of units) {
+    if (!unitsByItem.has(u.saleItemId)) unitsByItem.set(u.saleItemId, []);
+    unitsByItem.get(u.saleItemId).push(u.serialNumber);
+  }
+
+  for (const r of list) {
+    if (r.referenceType !== "sale" || !r.referenceId) continue;
+    const saleItems = itemsBySale.get(r.referenceId);
+    if (!saleItems) continue; // sale has no items (or was hard-deleted) — keep the stored fallback
+    r.dataValues.productName = saleItems.map((i) => `${i.Product?.name || "Item"} x${i.quantity}`).join(", ") || null;
+    const serials = saleItems.flatMap((i) => unitsByItem.get(i.id) || []);
+    r.dataValues.serialNumber = serials.join(", ") || null;
+  }
+};
+
+/**
  * Shared filter builder for the Income list + totals endpoints, so they can never diverge.
  * entryType is always locked to INCOME here — Expense keeps its own read/write path in
  * expense.controller.js untouched.
@@ -119,6 +171,7 @@ exports.getIncomeEntries = async (req, res) => {
 
     await attachSaleNotes(rows);
     await attachCourierStatus(rows);
+    await attachSaleProducts(rows);
 
     return res.status(200).json({
       success: true,
@@ -207,6 +260,7 @@ exports.getIncomeById = async (req, res) => {
     });
     if (!entry) return res.status(404).json({ success: false, message: "Income record not found" });
     await attachSaleNotes(entry);
+    await attachSaleProducts(entry);
     return res.status(200).json({ success: true, data: entry });
   } catch (err) {
     return errorResponse(res, err);
