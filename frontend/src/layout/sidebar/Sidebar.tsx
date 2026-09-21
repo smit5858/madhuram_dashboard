@@ -30,6 +30,9 @@ import {
     UserSquare2,
     Share2,
     ClipboardList,
+    ListChecks,
+    FolderKanban,
+    Clock,
     type LucideIcon,
 } from "lucide-react";
 
@@ -59,6 +62,9 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
     "/setting/route-setting": ShieldCheck,
     "/setting/role-management": UserCog,
     "/settings/platforms": Share2,
+    "/tasks": ListChecks,
+    "/projects": FolderKanban,
+    "/timesheets": Clock,
 };
 
 const getIconForRoute = (path: string, search?: string, className = "h-5 w-5") => {

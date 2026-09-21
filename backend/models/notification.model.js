@@ -11,7 +11,7 @@ const Notification = sequelize.define(
     },
     // Which module should receive this notification
     recipientModule: {
-      type: DataTypes.ENUM("couriers", "account", "admin", "all", "leads"),
+      type: DataTypes.ENUM("couriers", "account", "admin", "all", "leads", "tasks"),
       allowNull: false,
     },
     // Set for a personal notification targeted at one specific user (e.g. the
@@ -60,7 +60,12 @@ const Notification = sequelize.define(
         // review needed) and on Admin's approve/reject decision (back to the creator).
         "LEAD_APPROVAL_REQUIRED",
         "LEAD_APPROVED",
-        "LEAD_REJECTED"
+        "LEAD_REJECTED",
+        // Task Management System (task.controller.js) — fires when a user is added as a task
+        // assignee, and when a task's status changes (sent to the creator + remaining active
+        // assignees, excluding whoever made the change).
+        "TASK_ASSIGNED",
+        "TASK_STATUS_CHANGED"
       ),
       allowNull: false,
     },

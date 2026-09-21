@@ -18,6 +18,10 @@ export const Routing = {
     RoleManagement: `/setting/role-management`,
     Leads: `/leads`,
     PlatformManagement: `/settings/platforms`,
+    Projects: `/projects`,
+    ProjectDetail: `/projects/:id`,
+    Tasks: `/tasks`,
+    Timesheets: `/timesheets`,
     Forbidden: `/forbidden`
 };
 
@@ -40,5 +44,9 @@ export const RouteTitles: Record<string, string> = {
     [Routing.RoleManagement]: "Role Management",
     [Routing.Leads]: "Leads",
     [Routing.PlatformManagement]: "Platform Management",
+    [Routing.Projects]: "Projects",
+    [Routing.ProjectDetail]: "Project Details",
+    [Routing.Tasks]: "Tasks",
+    [Routing.Timesheets]: "Timesheet",
     [Routing.Forbidden]: "Forbidden",
 };

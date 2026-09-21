@@ -52,6 +52,15 @@ export const ALL_SIDEBAR_ITEMS: SidebarItem[] = [
     },
     { path: "/customers", name: "Customers" },
     { path: "/leads",     name: "Leads"     },
+    {
+        path: "/tasks",
+        name: "Tasks",
+        children: [
+            { path: "/tasks", name: "Tasks" },
+            { path: "/projects", name: "Projects" },
+            { path: "/timesheets", name: "Timesheet" },
+        ],
+    },
     { path: "/users",     name: "Users"     },
     {
         path: "/account",

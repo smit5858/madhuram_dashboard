@@ -23,6 +23,10 @@ const RouteSetting = lazy(() => import('../pages/settings/RouteSetting'));
 const RoleManagement = lazy(() => import('../pages/settings/RoleManagement'));
 const Leads = lazy(() => import('../pages/leads/Leads'));
 const PlatformManagement = lazy(() => import('../pages/settings/PlatformManagement'));
+const Projects = lazy(() => import('../pages/projects/Projects'));
+const ProjectDetail = lazy(() => import('../pages/projects/ProjectDetail'));
+const Tasks = lazy(() => import('../pages/tasks/Tasks'));
+const Timesheets = lazy(() => import('../pages/timesheets/Timesheets'));
 const Forbidden = lazy(() => import('../pages/error/Forbidden'));
 const LoadingFallback = lazy(() => import('../pages/loadingfallback/LoadingFallback'));
 
@@ -272,6 +276,62 @@ const routesConfig = [
               <Suspense fallback={<LoadingFallback />}>
                 <MainLayout>
                   <PlatformManagement />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.Projects,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/projects">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <Projects />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.ProjectDetail,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/projects">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <ProjectDetail />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.Tasks,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/tasks">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <Tasks />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.Timesheets,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/timesheets">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <Timesheets />
                 </MainLayout>
               </Suspense>
             </PermissionGuard>

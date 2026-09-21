@@ -25,6 +25,14 @@ const PendingBill = require("./pendingBill.model");
 const PendingBillPayment = require("./pendingBillPayment.model");
 const Platform = require("./platform.model");
 const Lead = require("./lead.model");
+const Project = require("./project.model");
+const ProjectMember = require("./projectMember.model");
+const Task = require("./task.model");
+const TaskAssignee = require("./taskAssignee.model");
+const TaskStatusHistory = require("./taskStatusHistory.model");
+const ActivityLog = require("./activityLog.model");
+const TaskNote = require("./taskNote.model");
+const TimesheetEntry = require("./timesheetEntry.model");
 
 // Role associations
 Role.hasMany(User, { foreignKey: "roleId" });
@@ -209,6 +217,64 @@ Lead.belongsTo(Product, { foreignKey: "productId", as: "product" });
 Lead.hasOne(Sale, { foreignKey: "leadId", as: "sale" });
 Sale.belongsTo(Lead, { foreignKey: "leadId", as: "lead" });
 
+// Task Management System — Project ↔ User (creator) + ProjectMember (who's on the project,
+// soft-removable — see projectMember.model.js) + Task (the project's tasks, when
+// taskType=PROJECT_TASK — see task.model.js#projectId).
+User.hasMany(Project, { foreignKey: "createdBy" });
+Project.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
+
+Project.hasMany(ProjectMember, { foreignKey: "projectId", as: "members" });
+ProjectMember.belongsTo(Project, { foreignKey: "projectId" });
+User.hasMany(ProjectMember, { foreignKey: "userId" });
+ProjectMember.belongsTo(User, { foreignKey: "userId", as: "user" });
+ProjectMember.belongsTo(User, { foreignKey: "addedBy", as: "addedByUser" });
+ProjectMember.belongsTo(User, { foreignKey: "removedBy", as: "removedByUser" });
+
+Project.hasMany(Task, { foreignKey: "projectId", as: "tasks" });
+Task.belongsTo(Project, { foreignKey: "projectId", as: "project" });
+
+// Task ↔ User: creator + the user who marked it Completed (cleared again on reopen — see
+// task.controller.js#updateTaskStatus).
+User.hasMany(Task, { foreignKey: "createdBy" });
+Task.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
+Task.belongsTo(User, { foreignKey: "completedBy", as: "completer" });
+
+// Task ↔ TaskAssignee (one-to-many, soft-removable — see taskAssignee.model.js).
+Task.hasMany(TaskAssignee, { foreignKey: "taskId", as: "assignees" });
+TaskAssignee.belongsTo(Task, { foreignKey: "taskId" });
+User.hasMany(TaskAssignee, { foreignKey: "userId" });
+TaskAssignee.belongsTo(User, { foreignKey: "userId", as: "user" });
+TaskAssignee.belongsTo(User, { foreignKey: "assignedBy", as: "assignedByUser" });
+TaskAssignee.belongsTo(User, { foreignKey: "removedBy", as: "removedByUser" });
+
+// Task ↔ TaskStatusHistory (append-only status transition log — see taskStatusHistory.model.js).
+Task.hasMany(TaskStatusHistory, { foreignKey: "taskId", as: "statusHistory" });
+TaskStatusHistory.belongsTo(Task, { foreignKey: "taskId" });
+TaskStatusHistory.belongsTo(User, { foreignKey: "changedBy", as: "changedByUser" });
+
+// Task ↔ TaskNote (one-to-many, see taskNote.model.js).
+Task.hasMany(TaskNote, { foreignKey: "taskId", as: "notes" });
+TaskNote.belongsTo(Task, { foreignKey: "taskId" });
+TaskNote.belongsTo(User, { foreignKey: "createdBy", as: "author" });
+
+// TimesheetEntry ↔ User (the employee who logged it), Task, Project — see
+// timesheetEntry.model.js. The task/project links are nullable (detached rather than deleted
+// when the task/project is removed).
+User.hasMany(TimesheetEntry, { foreignKey: "userId" });
+TimesheetEntry.belongsTo(User, { foreignKey: "userId", as: "user" });
+TimesheetEntry.belongsTo(User, { foreignKey: "updatedBy", as: "editor" });
+Task.hasMany(TimesheetEntry, { foreignKey: "taskId", as: "timesheetEntries" });
+TimesheetEntry.belongsTo(Task, { foreignKey: "taskId", as: "task" });
+Project.hasMany(TimesheetEntry, { foreignKey: "projectId", as: "timesheetEntries" });
+TimesheetEntry.belongsTo(Project, { foreignKey: "projectId", as: "project" });
+
+// ActivityLog is polymorphic (entityType/entityId — see activityLog.model.js) so it has no
+// direct FK association to Task/Project; it's queried by entityType+entityId instead. Only
+// the actor relation is a real FK.
+User.hasMany(ActivityLog, { foreignKey: "actorId" });
+ActivityLog.belongsTo(User, { foreignKey: "actorId", as: "actor" });
+ActivityLog.belongsTo(User, { foreignKey: "subjectUserId", as: "subject" });
+
 module.exports = {
   User,
   Role,
@@ -237,4 +303,12 @@ module.exports = {
   PendingBillPayment,
   Platform,
   Lead,
+  Project,
+  ProjectMember,
+  Task,
+  TaskAssignee,
+  TaskStatusHistory,
+  ActivityLog,
+  TaskNote,
+  TimesheetEntry,
 };

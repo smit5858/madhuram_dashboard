@@ -42,6 +42,9 @@ const routeSettings = require("./routes/routeSetting.routes");
 const roles = require("./routes/role.routes");
 const leads = require("./routes/lead.routes");
 const platforms = require("./routes/platform.routes");
+const projects = require("./routes/project.routes");
+const tasks = require("./routes/task.routes");
+const timesheets = require("./routes/timesheet.routes");
 
 app.get("/", (req, res) => res.send("API running"));
 app.use("/auth", auth);
@@ -66,6 +69,9 @@ app.use("/route-settings", routeSettings);
 app.use("/roles", roles);
 app.use("/leads", leads);
 app.use("/platforms", platforms);
+app.use("/projects", projects);
+app.use("/tasks", tasks);
+app.use("/timesheets", timesheets);
 
 
 const PORT = process.env.PORT || 3000;
@@ -136,6 +142,9 @@ const ensureAllRoutesAndPermissions = async () => {
       { name: "Role Management", path: "/setting/role-management", module: "Setting" },
       { name: "Leads", path: "/leads" },
       { name: "Platforms", path: "/settings/platforms", module: "Setting" },
+      { name: "Projects", path: "/projects", module: "Tasks" },
+      { name: "Tasks", path: "/tasks", module: "Tasks" },
+      { name: "Timesheet", path: "/timesheets", module: "Tasks" },
     ];
 
     for (const rDef of SYSTEM_ROUTES) {
@@ -293,6 +302,103 @@ const grantInitialLeadsAccess = async () => {
     }
   } catch (e) {
     console.warn("Could not grant initial Leads access:", e.message);
+  }
+};
+
+// Tasks ships with default access for every non-Admin role — any employee should be able to
+// create/view Employee→Employee tasks on day one, unlike Leads/Pending Bill which are
+// restricted to a specific role. canDelete is left false (there is no task-delete endpoint —
+// history is never hard-deleted, only cancelled via status), viewAllRecords is left false (each
+// user sees their own/assigned/project tasks by default — see
+// task.controller.js#buildTaskScopeWhere). Projects only gets canRead by default since project
+// access itself is membership-driven — an Admin must add a user as a project member before they
+// see anything there (see project.controller.js#buildProjectScopeWhere); canCreate for Projects
+// is intentionally NOT granted (only Admin can create projects, enforced in the controller
+// regardless of this flag). findOrCreate keeps this additive/idempotent, same as
+// grantInitialLeadsAccess above.
+const grantInitialTasksAccess = async () => {
+  try {
+    const { Op } = require("sequelize");
+    const { User } = require("./models");
+
+    const tasksRoute = await Route.findOne({ where: { path: "/tasks" } });
+    const projectsRoute = await Route.findOne({ where: { path: "/projects" } });
+    if (!tasksRoute && !projectsRoute) return;
+
+    const nonAdminRoles = await Role.findAll({ where: { name: { [Op.ne]: "Admin" } } });
+    for (const role of nonAdminRoles) {
+      const roleUsers = await User.findAll({ where: { roleId: role.id } });
+      for (const user of roleUsers) {
+        if (tasksRoute) {
+          await UserPermission.findOrCreate({
+            where: { userId: user.id, routeId: tasksRoute.id },
+            defaults: {
+              userId: user.id,
+              routeId: tasksRoute.id,
+              canRead: true,
+              canCreate: true,
+              canUpdate: true,
+              canDelete: false,
+              viewAllRecords: false,
+            },
+          });
+        }
+        if (projectsRoute) {
+          await UserPermission.findOrCreate({
+            where: { userId: user.id, routeId: projectsRoute.id },
+            defaults: {
+              userId: user.id,
+              routeId: projectsRoute.id,
+              canRead: true,
+              canCreate: false,
+              canUpdate: false,
+              canDelete: false,
+              viewAllRecords: false,
+            },
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Could not grant initial Tasks/Projects access:", e.message);
+  }
+};
+
+// Timesheet ships with default access for every non-Admin role — any employee should be able to
+// log and review their own hours on day one. canUpdate/canDelete are NOT granted: editing or
+// deleting a timesheet entry is Admin-only (enforced in timesheet.controller.js regardless of
+// these flags); viewAllRecords stays false so
+// each user sees only their own timesheet — an Admin can grant "view all" per user afterwards via
+// Settings → Route Setting (Admin itself always sees everyone's). findOrCreate keeps this
+// additive/idempotent, same as grantInitialTasksAccess above.
+const grantInitialTimesheetAccess = async () => {
+  try {
+    const { Op } = require("sequelize");
+    const { User } = require("./models");
+
+    const route = await Route.findOne({ where: { path: "/timesheets" } });
+    if (!route) return;
+
+    const nonAdminRoles = await Role.findAll({ where: { name: { [Op.ne]: "Admin" } } });
+    for (const role of nonAdminRoles) {
+      const roleUsers = await User.findAll({ where: { roleId: role.id } });
+      for (const user of roleUsers) {
+        await UserPermission.findOrCreate({
+          where: { userId: user.id, routeId: route.id },
+          defaults: {
+            userId: user.id,
+            routeId: route.id,
+            canRead: true,
+            canCreate: true,
+            canUpdate: false,
+            canDelete: false,
+            viewAllRecords: false,
+          },
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("Could not grant initial Timesheet access:", e.message);
   }
 };
 
@@ -626,6 +732,8 @@ sequelize
     await backfillIncomingCourierPermissions();
     await grantInitialPendingBillAccess();
     await grantInitialLeadsAccess();
+    await grantInitialTasksAccess();
+    await grantInitialTimesheetAccess();
     await ensureOtherProductSeeded();
 
     // Initialize Socket.io after DB is ready

@@ -37,6 +37,8 @@ const LIVE_NOTIFICATION_EVENTS = [
   "lead_created",
   "lead_approved",
   "lead_rejected",
+  "task_assigned",
+  "task_status_changed",
 ] as const;
 
 // Notification types that navigate somewhere when clicked — the Admin-facing Expense approval
@@ -57,6 +59,8 @@ const NOTIFICATION_TYPE_ROUTE: Record<string, string> = {
   LEAD_APPROVAL_REQUIRED: "/leads",
   LEAD_APPROVED: "/leads",
   LEAD_REJECTED: "/leads",
+  TASK_ASSIGNED: "/tasks",
+  TASK_STATUS_CHANGED: "/tasks",
 };
 
 const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
