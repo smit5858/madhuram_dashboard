@@ -436,11 +436,12 @@ exports.updateSale = async (req, res) => {
       sale.bankAccountId = bankPaymentRows[0]?.bankAccountId || null;
     }
 
-    // Keep the customer's ledger debit in sync with this sale's own amount — otherwise editing
-    // sellingAmount here leaves the original CustomerLedgerEntry stale and the two screens
-    // (Sells vs. Debited/CustomerLedger) silently disagree on how much the customer owes.
-    if (sellingAmount !== undefined) {
-      await customerLedgerService.updateSaleDebit(sale.id, sale.customerId, sale.sellingAmount, {
+    // Keep the customer's ledger debit in sync with this sale's own order total (selling amount +
+    // courier charge) — otherwise editing either here leaves the original CustomerLedgerEntry
+    // stale and the two screens (Sells vs. Debited/CustomerLedger) silently disagree on how much
+    // the customer owes.
+    if (sellingAmount !== undefined || courierCharge !== undefined) {
+      await customerLedgerService.updateSaleDebit(sale.id, sale.customerId, orderService.computeOrderTotal(sale.sellingAmount, sale.courierCharge), {
         transaction: t,
         userId: user.id,
       });

@@ -131,12 +131,13 @@ const recordSaleDebit = async ({ customerId, saleId, amount, transactionDate, us
   );
 };
 
-// Adjusts the existing SALE entry for a sale to a new amount (used when a sale's sellingAmount
-// is edited after creation) instead of leaving it stale — see sells.controller.js#updateSale.
+// Adjusts the existing SALE entry for a sale to a new amount (used when a sale's order total —
+// sellingAmount + courierCharge — is edited after creation) instead of leaving it stale — see
+// sells.controller.js#updateSale.
 // Falls back to creating one if none exists yet (e.g. a customer was only just linked on this
 // edit), and removes it outright if the new amount is zero/negative.
-const updateSaleDebit = async (saleId, customerId, newSellingAmount, { transaction, userId } = {}) => {
-  const parsedAmount = parseFloat(newSellingAmount) || 0;
+const updateSaleDebit = async (saleId, customerId, newOrderTotal, { transaction, userId } = {}) => {
+  const parsedAmount = parseFloat(newOrderTotal) || 0;
   const entry = await CustomerLedgerEntry.findOne({ where: { saleId, type: "SALE" }, transaction, lock: !!transaction });
 
   if (!entry) {

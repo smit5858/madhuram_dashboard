@@ -705,12 +705,13 @@ const createOrder = async ({
     await inventoryService.recomputeSaleFulfillmentStatus(sale.id, { transaction: t });
     await sale.reload({ transaction: t });
 
-    // Customer account ledger: a SALE debit for the full selling amount, plus a PAYMENT credit
+    // Customer account ledger: a SALE debit for the full order total (selling amount + courier
+    // charge — the customer owes both), plus a PAYMENT credit
     // for whatever was collected up front — only when the sale resolved to a real Customer (no
     // phone number given means no Customer row, and the ledger is customer-scoped). See
     // customerLedger.service.js — the single place the running balance is computed everywhere.
     if (finalCustomerId) {
-      await customerLedgerService.recordSaleDebit({ customerId: finalCustomerId, saleId: sale.id, amount: selling, userId }, { transaction: t });
+      await customerLedgerService.recordSaleDebit({ customerId: finalCustomerId, saleId: sale.id, amount: orderTotal, userId }, { transaction: t });
       // One ledger PAYMENT entry per payment method — mirrors the itemized Payment rows above so
       // a split payment (e.g. part Cash, part UPI) shows up as two distinct ledger lines instead
       // of one entry with a misleading single method.
