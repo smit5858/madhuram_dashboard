@@ -23,6 +23,7 @@ import customerService, { type CustomerData } from "../../services/customer.serv
 import bankAccountService from "../../services/bankAccount.service";
 import courierCompanyService from "../../services/courierCompany.service";
 import platformService from "../../services/platform.service";
+import userService from "../../services/user.service";
 import { COURIER_COMPANY_OTHER } from "@/shared/constants/courierCompanies";
 import CancelSaleModal from "@/shared/components/CancelSaleModal";
 import StockShortageModal, { type StockShortageItem } from "@/pages/sells/components/StockShortageModal";
@@ -227,6 +228,31 @@ const Sells = () => {
       return { ...first, data: { ...first.data, data: mergedData } };
     },
   });
+
+  // Query: every active user, for the admin-side "All Team Members" filter. /users caps a page
+  // at 100, so — same as the product catalog above — remaining pages are fetched and merged.
+  // Sourced from the users table, so newly created employees appear without any code change.
+  const { data: teamMembersResponse } = useQuery({
+    queryKey: ["users", "sells-team-filter"],
+    queryFn: async ({ signal }) => {
+      const limit = 100;
+      const first = await userService.getUsers({ status: "active", limit, page: 1 }, { signal });
+      const totalPages = first.data?.meta?.totalPages || 1;
+      if (totalPages <= 1) return first;
+
+      const remainingPages = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
+      const rest = await Promise.all(
+        remainingPages.map((page) => userService.getUsers({ status: "active", limit, page }, { signal }))
+      );
+      const mergedData = [first, ...rest].flatMap((r) => r.data?.data || []);
+      return { ...first, data: { ...first.data, data: mergedData } };
+    },
+    enabled: canViewAllSales,
+  });
+  const teamMembers = useMemo(
+    () => [...(teamMembersResponse?.data?.data || [])].sort((a, b) => a.name.localeCompare(b.name)),
+    [teamMembersResponse]
+  );
 
   // Query: active Bank Accounts (for the Bank Account dropdown shown when Payment Method =
   // BankTransfer) — configured under Account → Manage Bank Account Details.
@@ -1357,9 +1383,11 @@ const Sells = () => {
                   className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none cursor-pointer"
                 >
                   <option value="">All Team Members</option>
-                  <option value="2">Parth</option>
-                  <option value="4">Vraj</option>
-                  <option value="3">Darshil</option>
+                  {teamMembers.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name}
+                    </option>
+                  ))}
                 </select>
               )}
 

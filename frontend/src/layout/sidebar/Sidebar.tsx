@@ -30,7 +30,8 @@ import {
     UserSquare2,
     Share2,
     ClipboardList,
-    ListChecks,
+    ClipboardCheck,
+    ListTodo,
     FolderKanban,
     Clock,
     type LucideIcon,
@@ -62,14 +63,29 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
     "/setting/route-setting": ShieldCheck,
     "/setting/role-management": UserCog,
     "/settings/platforms": Share2,
-    "/tasks": ListChecks,
+    "/tasks": ListTodo,
     "/projects": FolderKanban,
     "/timesheets": Clock,
 };
 
-const getIconForRoute = (path: string, search?: string, className = "h-5 w-5") => {
+// Parent-group icons that must differ from a child sharing the same `path`
+// (the Tasks group and its "Tasks" child are both "/tasks").
+const GROUP_ICON_MAP: Record<string, LucideIcon> = {
+    "/tasks": ClipboardCheck,
+};
+
+const getIconForRoute = (
+    path: string,
+    search?: string,
+    className = "h-5 w-5",
+    isGroup = false
+) => {
     const key = `${path}${search ?? ""}`.toLowerCase();
-    const Icon = ROUTE_ICON_MAP[key] ?? ROUTE_ICON_MAP[path.toLowerCase()] ?? LayoutDashboard;
+    const Icon =
+        (isGroup ? GROUP_ICON_MAP[path.toLowerCase()] : undefined) ??
+        ROUTE_ICON_MAP[key] ??
+        ROUTE_ICON_MAP[path.toLowerCase()] ??
+        LayoutDashboard;
     return <Icon className={className} strokeWidth={1.5} />;
 };
 
@@ -223,7 +239,7 @@ const Sidebar = () => {
                                             }`}
                                         >
                                             <span className={`flex items-center ${hasActiveChild ? "text-blue-400" : ""}`}>
-                                                {getIconForRoute(item.path)}
+                                                {getIconForRoute(item.path, undefined, "h-5 w-5", true)}
                                                 <span className={labelClasses}>{item.name}</span>
                                             </span>
                                             {!collapsed && (
