@@ -12,6 +12,7 @@ export const Routing = {
     AccountIncome: `/account/income`,
     AccountExpense: `/account/expense`,
     AccountPendingBill: `/account/pending-bill`,
+    AccountPendingBillDetail: `/account/pending-bill/:accountKey`,
     AccountDebited: `/account/debited`,
     AccountBankAccounts: `/account/bank-accounts`,
     RouteSetting: `/setting/route-setting`,
@@ -38,6 +39,7 @@ export const RouteTitles: Record<string, string> = {
     [Routing.AccountIncome]: "Account Income",
     [Routing.AccountExpense]: "Account Expense",
     [Routing.AccountPendingBill]: "Pending Bill",
+    [Routing.AccountPendingBillDetail]: "Pending Bill Account",
     [Routing.AccountDebited]: "Account Debited",
     [Routing.AccountBankAccounts]: "Bank Accounts",
     [Routing.RouteSetting]: "Route Setting",
@@ -50,3 +52,5 @@ export const RouteTitles: Record<string, string> = {
     [Routing.Timesheets]: "Timesheet",
     [Routing.Forbidden]: "Forbidden",
 };
+/** URL of one Pending Bill account's details page (its key is a normalized seller name). */
+export const pendingBillAccountPath = (accountKey: string) => `${Routing.AccountPendingBill}/${encodeURIComponent(accountKey)}`;

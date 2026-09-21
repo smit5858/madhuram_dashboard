@@ -5,10 +5,12 @@ const nameField = z
   .min(1, "Name is required")
   .max(150, "Name must be under 150 characters");
 
+// The Seller/Dealer/Company a bill is owed to — bills are grouped into an account by it.
 const dealerNameField = z
   .string()
-  .max(150, "Dealer name must be under 150 characters")
-  .optional();
+  .trim()
+  .min(1, "Seller / Dealer / Company name is required")
+  .max(150, "Name must be under 150 characters");
 
 // Formik coerces <input type="number"> to a JS number, so this must accept a stray number
 // before checking its pattern — same reasoning as expense.validation.ts's amountField.
@@ -71,10 +73,10 @@ export const pendingBillPaymentRejectSchema = z.object({
 
 export type PendingBillPaymentRejectFormValues = z.infer<typeof pendingBillPaymentRejectSchema>;
 
-// Create-a-bill form only — lets the team optionally record the first payment (full or custom
-// amount) in the same step as adding the bill, instead of always requiring a separate "Record
-// Payment" action afterward. All payment fields stay optional at the schema level; superRefine
-// only requires them once `recordPayment` is checked.
+// Create-a-bill form only — lets the team optionally record a payment already made against this
+// bill (full or custom amount) in the same step as adding it, instead of always requiring a
+// separate "Pay" action afterward. All payment fields stay optional at the schema level;
+// superRefine only requires them once `recordPayment` is checked.
 export const pendingBillEntryWithPaymentSchema = pendingBillEntrySchema
   .extend({
     recordPayment: z.boolean().optional(),

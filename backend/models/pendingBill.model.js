@@ -1,19 +1,22 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../config/db");
+const { accountKeyFor } = require("../helper/pendingBillAccount");
 
-// A separate ledger from Expense (AccountEntry) — bills/expenses like office rent, product
-// purchases, or vendor/dealer bills recorded by the team and paid off by one or more Admin-
-// verified payments (see pendingBillPayment.model.js). Only once a bill is fully paid
-// (remainingAmount reaches 0, status becomes APPROVED) does it get mirrored into an AccountEntry
-// (see pendingBill.controller.js), which is the only thing dailyBalance.service.js sums into
-// Total Out — same rule as before, just triggered by the last verified payment instead of a
-// single manual "Approve" click.
+// One bill owed to a Seller/Dealer/Company, recorded manually by the team. Bills for the same
+// seller are grouped into one Pending Bill account (see accountKey below and
+// helper/pendingBillAccount.js) — the main Pending Bill list shows accounts, not bills, and the
+// account's page shows its bills, its payments and a running outstanding balance, like Debited's
+// customer account.
 //
-// billType distinguishes a manually-entered general bill (office rent, etc.) from one
-// auto-created when a new product is added or an existing product is restocked (see
-// pendingBillService.js#createBillForPurchase, hooked into product.controller.js#createProduct
-// and inventory.service.js#receiveStock) — both live in this same table/list/flow, the restock
-// ones simply carry the extra product/dealer/quantity detail below.
+// A bill is paid off by one or more payments (see pendingBillPayment.model.js) — made against the
+// account (applied oldest-bill-first) or against this bill directly. Each payment creates its own
+// linked Expense (AccountEntry, referenceType "pendingBillPayment") created by whoever made it —
+// see pendingBill.service.js#createExpenseForPayment. Creating or editing a bill itself creates no
+// Expense: dailyBalance.service.js only sums an Expense into Total Out once an Admin approves it.
+//
+// billType: manual bills are always "GENERAL". "RESTOCK" is legacy — bills used to be auto-created
+// when a product was added/restocked; that no longer happens, but existing RESTOCK rows are kept
+// (with the extra product/dealer/quantity detail below) and still display.
 const PendingBill = sequelize.define(
   "PendingBill",
   {
@@ -24,8 +27,13 @@ const PendingBill = sequelize.define(
       defaultValue: "GENERAL",
     },
     name: { type: DataTypes.STRING, allowNull: false },
-    // Optional — bills like office rent or other business bills have no dealer/vendor.
+    // The Seller/Dealer/Company this bill is owed to — required for new bills (see
+    // pendingBill.controller.js), and what bills are grouped into an account by. Older bills may
+    // have none, in which case they group by `name`.
     dealerName: { type: DataTypes.STRING, allowNull: true },
+    // Derived from dealerName/name by the beforeSave hook below (see helper/pendingBillAccount.js)
+    // — never set directly. Identifies which Pending Bill account this bill belongs to.
+    accountKey: { type: DataTypes.STRING, allowNull: true },
     amount: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
     billDate: { type: DataTypes.DATEONLY, allowNull: false },
     description: { type: DataTypes.TEXT, allowNull: true },
@@ -76,7 +84,18 @@ const PendingBill = sequelize.define(
   {
     tableName: "pending_bills",
     timestamps: true,
-    indexes: [{ fields: ["status"] }, { fields: ["billDate"] }, { fields: ["billType"] }, { fields: ["productId"] }],
+    indexes: [
+      { fields: ["status"] },
+      { fields: ["billDate"] },
+      { fields: ["billType"] },
+      { fields: ["productId"] },
+      { fields: ["accountKey"] },
+    ],
+    hooks: {
+      beforeSave: (bill) => {
+        bill.accountKey = accountKeyFor(bill);
+      },
+    },
   }
 );
 

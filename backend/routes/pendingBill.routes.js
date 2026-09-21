@@ -8,6 +8,13 @@ const ROUTE_PATH = "/account/pending-bill";
 
 router.get("/", authenticate, authorize(ROUTE_PATH, "read"), pendingBillController.getPendingBills);
 router.post("/", authenticate, authorize(ROUTE_PATH, "create"), pendingBillController.createPendingBill);
+
+// Accounts — one per Seller/Dealer/Company, the main Pending Bill list and its Account Details
+// page (see pendingBill.controller.js). Declared before "/:id" so "accounts" isn't read as an id.
+router.get("/accounts", authenticate, authorize(ROUTE_PATH, "read"), pendingBillController.getPendingBillAccounts);
+router.get("/accounts/:accountKey", authenticate, authorize(ROUTE_PATH, "read"), pendingBillController.getPendingBillAccount);
+router.post("/accounts/:accountKey/payments", authenticate, authorize(ROUTE_PATH, "create"), pendingBillController.createAccountPayment);
+
 router.get("/:id", authenticate, authorize(ROUTE_PATH, "read"), pendingBillController.getPendingBillById);
 router.put("/:id", authenticate, authorize(ROUTE_PATH, "update"), pendingBillController.updatePendingBill);
 // Delete/Cancel/Verify/Reject are Admin-only — enforced inline in the controller, independent of
@@ -15,10 +22,11 @@ router.put("/:id", authenticate, authorize(ROUTE_PATH, "update"), pendingBillCon
 router.delete("/:id", authenticate, pendingBillController.deletePendingBill);
 router.post("/:id/cancel", authenticate, pendingBillController.cancelPendingBill);
 
-// Payment history — the team records a payment (full or custom/partial amount) here; each one
-// needs its own Admin verification before it counts toward the paid amount. Delete/verify/reject
-// are gated inline in the controller (own not-yet-verified submission, or Admin) rather than via
-// canDelete, since an accountant retracting their own mistaken entry isn't a "delete" permission.
+// Payment against one specific bill (full or custom/partial amount) — takes effect immediately and
+// creates its own linked Expense. Delete/verify/reject only apply to payments recorded under the
+// old submit-then-verify flow; they're gated inline in the controller (own not-yet-verified
+// submission, or Admin) rather than via canDelete, since an accountant retracting their own
+// mistaken entry isn't a "delete" permission.
 router.post("/:id/payments", authenticate, authorize(ROUTE_PATH, "create"), pendingBillController.createPayment);
 router.delete("/:billId/payments/:paymentId", authenticate, pendingBillController.deletePayment);
 router.post("/:billId/payments/:paymentId/verify", authenticate, pendingBillController.verifyPayment);

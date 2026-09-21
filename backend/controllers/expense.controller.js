@@ -32,14 +32,20 @@ const serializeExpense = (row) => ({
   bankAccount: row.bankAccount || null,
   description: row.description,
   status: row.status,
+  // Identifies the originating record, e.g. { referenceType: "pendingBillPayment", referenceId:
+  // <payment id> } for an Expense auto-created from a Pending Bill payment.
+  referenceType: row.referenceType,
+  referenceId: row.referenceId,
   creator: row.creator || null,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 });
 
-// Pending Bill payoffs auto-create an AccountEntry (category "Pending Bill") purely so they count
-// toward the Total Out balance — they're a distinct module with their own page/workflow and must
-// never appear in the Expense list itself (see pendingBillService.js#recalculateStatus).
+// Legacy Pending Bill payoffs (bills fully paid before every payment got its own Expense)
+// auto-created an AccountEntry (category "Pending Bill") purely so they count toward the Total Out
+// balance — they must never appear in the Expense list. Each Pending Bill payment now creates its
+// own Expense with category "Expense", which does appear here, carrying referenceType
+// "pendingBillPayment" (see pendingBillService.js#createExpenseForPayment).
 // Ownership scope (own-only vs viewAllRecords) mirrors lead.controller.js#buildLeadWhere — used
 // by getExpenses and getExpenseTotals so the table and totals can never disagree on scope.
 const buildExpenseWhere = async (user, query) => {

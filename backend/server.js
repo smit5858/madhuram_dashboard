@@ -460,6 +460,35 @@ const ensureLeadProductIdNullable = async () => {
   }
 };
 
+// Same sync({alter:true}) limitation as ensureUserRoleIdNullable above — pending_bill_payments.
+// pendingBillId became optional once account-level payments (which belong to an accountKey, not a
+// single bill) shipped. Idempotent.
+const ensurePendingBillPaymentBillIdNullable = async () => {
+  const { DataTypes } = require("sequelize");
+  const queryInterface = sequelize.getQueryInterface();
+  const tables = await queryInterface.showAllTables();
+  const tableNames = tables.map((table) => (typeof table === "string" ? table : table.tableName));
+  if (!tableNames.includes("pending_bill_payments")) return;
+
+  const columns = await queryInterface.describeTable("pending_bill_payments");
+  if (columns.pendingBillId && columns.pendingBillId.allowNull === false) {
+    await queryInterface.changeColumn("pending_bill_payments", "pendingBillId", { type: DataTypes.INTEGER, allowNull: true });
+  }
+};
+
+// pending_bills.accountKey (the Seller/Dealer/Company account a bill is grouped under — see
+// helper/pendingBillAccount.js) is added by sync({alter:true}) as a nullable column, so bills that
+// existed beforehand need it filled in. Idempotent: only touches rows where it is still NULL.
+const backfillPendingBillAccountKeys = async () => {
+  const { accountKeyFor } = require("./helper/pendingBillAccount");
+  const [rows] = await sequelize.query("SELECT id, name, dealerName FROM pending_bills WHERE accountKey IS NULL");
+  for (const row of rows) {
+    await sequelize.query("UPDATE pending_bills SET accountKey = ? WHERE id = ?", {
+      replacements: [accountKeyFor(row), row.id],
+    });
+  }
+};
+
 // pending_bills gained a NOT NULL remainingAmount column (and paidAmount/billType/etc.) when the
 // restock-bill payment flow was merged into it. sequelize.sync({alter:true}) can't safely add a
 // NOT NULL column to a table that already has rows (MySQL has nothing to put in it) — so if the
@@ -703,6 +732,9 @@ sequelize
     return ensureLeadProductIdNullable();
   })
   .then(() => {
+    return ensurePendingBillPaymentBillIdNullable();
+  })
+  .then(() => {
     return ensureSaleDateBackfilled();
   })
   .then(() => {
@@ -726,6 +758,7 @@ sequelize
   .then(async () => {
     logger.info("Models synced");
     await backfillSaleBankAccounts();
+    await backfillPendingBillAccountKeys();
     await ensureAllRoles();
     await ensureAllRoutesAndPermissions();
     await pruneObsoleteRoutes();

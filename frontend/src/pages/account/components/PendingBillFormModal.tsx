@@ -30,6 +30,8 @@ interface ApiErrorLike {
 interface PendingBillFormModalProps {
   /** null = creating a new record */
   bill: PendingBillData | null;
+  /** Pre-fills the Seller / Dealer / Company field when adding a bill from that seller's account page. */
+  defaultDealerName?: string;
   onClose: () => void;
 }
 
@@ -61,7 +63,7 @@ const PaymentQuickFillButtons = () => {
   );
 };
 
-const PendingBillFormModal = ({ bill, onClose }: PendingBillFormModalProps) => {
+const PendingBillFormModal = ({ bill, defaultDealerName, onClose }: PendingBillFormModalProps) => {
   const queryClient = useQueryClient();
   const isEdit = !!bill?.id;
   const isRestock = bill?.billType === "RESTOCK";
@@ -74,7 +76,7 @@ const PendingBillFormModal = ({ bill, onClose }: PendingBillFormModalProps) => {
 
   const initialValues: PendingBillEntryWithPaymentFormValues = {
     name: bill?.name || "",
-    dealerName: bill?.dealerName || "",
+    dealerName: bill?.dealerName || defaultDealerName || "",
     amount: bill?.amount !== undefined && bill?.amount !== null ? String(bill.amount) : "",
     billDate: bill?.billDate || getTodayISODate(),
     description: bill?.description || "",
@@ -116,6 +118,8 @@ const PendingBillFormModal = ({ bill, onClose }: PendingBillFormModalProps) => {
     onSuccess: (res) => {
       toast.success(res.data?.message || (isEdit ? "Pending bill updated successfully" : "Pending bill created successfully"));
       queryClient.invalidateQueries({ queryKey: ["pending-bill"] });
+      queryClient.invalidateQueries({ queryKey: ["expense"] });
+      queryClient.invalidateQueries({ queryKey: ["expense-totals"] });
       queryClient.invalidateQueries({ queryKey: ["daily-balances"] });
       onClose();
     },
@@ -172,9 +176,9 @@ const PendingBillFormModal = ({ bill, onClose }: PendingBillFormModalProps) => {
             <Form className="flex flex-1 flex-col overflow-hidden">
               <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-5">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <Field name="name" label="Name" placeholder="e.g. Office rent" component={FormikInput} />
-                  <Field name="dealerName" label="Dealer Name (optional)" placeholder="e.g. Vendor / dealer name" component={FormikInput} />
-                  <Field name="amount" label="Amount" type="number" placeholder="0.00" component={FormikInput} />
+                  <Field name="dealerName" label="Seller / Dealer / Company" placeholder="e.g. Thinkcar" component={FormikInput} />
+                  <Field name="name" label="Product / Bill For" placeholder="e.g. ThinkDiag 2" component={FormikInput} />
+                  <Field name="amount" label="Bill Amount" type="number" placeholder="0.00" component={FormikInput} />
                   <Field name="billDate" label="Date" component={FormikDate} />
                   <Field name="billNumber" label="Bill / Invoice Number (optional)" placeholder="e.g. INV-1042" component={FormikInput} />
                   <div className="sm:col-span-2">
@@ -184,7 +188,7 @@ const PendingBillFormModal = ({ bill, onClose }: PendingBillFormModalProps) => {
 
                 {!isEdit && (
                   <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
-                    <Field name="recordPayment" label="Record a payment now" component={FormikCheckbox} />
+                    <Field name="recordPayment" label="Already paid something on this bill" component={FormikCheckbox} />
 
                     {values.recordPayment && (
                       <div className="mt-4 flex flex-col gap-4">
@@ -216,8 +220,8 @@ const PendingBillFormModal = ({ bill, onClose }: PendingBillFormModalProps) => {
                           </div>
                         </div>
                         <p className="text-[11px] text-slate-400">
-                          This payment will be recorded as Pending Verification — it won't count toward the paid amount until an
-                          Admin verifies it.
+                          This payment is recorded on the account straight away and creates an Expense entry (under your name) for
+                          Admin approval.
                         </p>
                       </div>
                     )}
@@ -226,8 +230,8 @@ const PendingBillFormModal = ({ bill, onClose }: PendingBillFormModalProps) => {
 
                 {!isEdit && (
                   <p className="text-[11px] text-slate-400">
-                    New bills are created as Pending. You can also record payments (full or custom amount) later — each needs
-                    Admin verification before it's counted as paid.
+                    The bill is added to the seller's account. You can pay the account (full or a custom amount, any number of
+                    times) from its account page — each payment creates its own Expense entry.
                   </p>
                 )}
               </div>

@@ -8,7 +8,9 @@ export type PendingBillPaymentMethod = "Cash" | "UPI" | "Card" | "BankTransfer" 
 
 export interface PendingBillPaymentData {
     id?: number;
-    pendingBillId?: number;
+    /** Null for an account-level payment (made from the account page), which belongs to `accountKey`. */
+    pendingBillId?: number | null;
+    accountKey?: string | null;
     amount: number | string;
     paymentMethod: PendingBillPaymentMethod;
     paymentDate: string;
@@ -33,12 +35,14 @@ export interface PendingBillData {
     id?: number;
     billType?: PendingBillType;
     name: string;
+    /** The Seller/Dealer/Company this bill is owed to — bills sharing one are grouped into an account. */
     dealerName?: string | null;
+    accountKey?: string | null;
     amount: number | string;
     billDate: string;
     description?: string | null;
-    // Restock-only detail — set when billType === "RESTOCK" (auto-created from a new product or
-    // restock action, never entered manually — see pendingBillService.js#createBillForPurchase).
+    // Restock-only detail — set on legacy billType === "RESTOCK" bills (they used to be auto-created
+    // from a new product or restock action; that no longer happens, but existing ones still display).
     productId?: number | null;
     product?: { id: number; name: string } | null;
     productNameSnapshot?: string | null;
@@ -87,6 +91,79 @@ export interface PendingBillPaymentEntryData {
     notes?: string;
 }
 
+/** One Seller/Dealer/Company's Pending Bill account — a row of the main Pending Bill list. */
+export interface PendingBillAccountSummary {
+    accountKey: string;
+    name: string;
+    billCount: number;
+    totalBilled: number;
+    totalPaid: number;
+    outstanding: number;
+    /** PENDING = still owes money (Active); SETTLED = fully paid (Settled / History). */
+    status: "PENDING" | "SETTLED";
+    lastTransactionDate: string | null;
+}
+
+export interface PendingBillAccountFilters {
+    search?: string;
+    startDate?: string;
+    endDate?: string;
+    status?: "PENDING" | "SETTLED";
+    page?: number;
+    limit?: number;
+}
+
+/** One row of an account's transaction history: a bill (adds to what's owed) or a payment (reduces it). */
+export interface PendingBillAccountTransaction {
+    id: string;
+    type: "BILL" | "PAYMENT";
+    date: string;
+    amount: number;
+    description: string;
+    note?: string | null;
+    billId?: number | null;
+    paymentId?: number;
+    paymentMethod?: PendingBillPaymentMethod;
+    bankAccount?: { id: number; bankName: string; accountHolderName: string; accountNumber: string } | null;
+    reference?: string | null;
+    paymentStatus?: PendingBillPaymentStatus;
+    rejectionReason?: string | null;
+    recordedBy?: { id: number; name: string } | null;
+    /** The Expense this payment created (its own Created By is the user who made the payment). */
+    expense?: { id: number; status: "PENDING" | "APPROVED" | "REJECTED"; creator?: { id: number; name: string } | null } | null;
+    /** False for a payment still awaiting verification / rejected (old flow) — it doesn't move the balance. */
+    affectsBalance: boolean;
+    /** Outstanding balance after this row. */
+    balance: number;
+}
+
+export interface PendingBillAccountDetail {
+    account: PendingBillAccountSummary;
+    bills: PendingBillData[];
+    transactions: PendingBillAccountTransaction[];
+}
+
+export interface AccountPaymentResult {
+    payment: PendingBillPaymentData;
+    previousOutstanding: number;
+    outstanding: number;
+}
+
+const getPendingBillAccounts = (params?: PendingBillAccountFilters, config?: { signal?: AbortSignal }) =>
+    httpService.get<{ success: boolean; data: PendingBillAccountSummary[]; meta: PaginationMeta }>("/pending-bills/accounts", {
+        params,
+        signal: config?.signal,
+    });
+
+const getPendingBillAccount = (accountKey: string) =>
+    httpService.get<{ success: boolean; data: PendingBillAccountDetail }>(`/pending-bills/accounts/${encodeURIComponent(accountKey)}`);
+
+const createAccountPayment = (accountKey: string, data: PendingBillPaymentEntryData) =>
+    httpService.post<{ success: boolean; message: string; data: AccountPaymentResult }>(
+        `/pending-bills/accounts/${encodeURIComponent(accountKey)}/payments`,
+        data
+    );
+
 const getPendingBills = (params?: PendingBillFilters, config?: { signal?: AbortSignal }) =>
     httpService.get<{ success: boolean; data: PendingBillData[]; meta: PaginationMeta }>("/pending-bills", {
         params,
@@ -132,6 +209,9 @@ const rejectPayment = (billId: number, paymentId: number, rejectionReason: strin
     );
 
 export default {
+    getPendingBillAccounts,
+    getPendingBillAccount,
+    createAccountPayment,
     getPendingBills,
     getPendingBillById,
     createPendingBill,

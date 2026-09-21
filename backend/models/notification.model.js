@@ -41,10 +41,8 @@ const Notification = sequelize.define(
         // notify()'s try/catch (see notification.service.js), so Pending Bill notifications did
         // nothing at all. Fixed here alongside the new payment-flow types below.
         //
-        // PENDING_BILL_PENDING_APPROVAL fires on bill creation (both a manually-entered general
-        // bill and an auto-created restock bill — see pendingBill.model.js#billType and
-        // pendingBillService.js#createBillForPurchase, hooked into
-        // product.controller.js#createProduct / inventory.service.js#receiveStock).
+        // PENDING_BILL_PENDING_APPROVAL fires on manual bill creation (restock/new-product
+        // bills are no longer auto-created — see pendingBill.model.js#billType).
         // PENDING_BILL_APPROVED fires once a bill becomes fully paid (remainingAmount reaches 0
         // through one or more verified payments) — same meaning as before, just triggered by the
         // last verified payment instead of a single manual "Approve" click.

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Field, Form, Formik, useFormikContext } from "formik";
 import toast from "react-hot-toast";
 import { XCircle } from "lucide-react";
-import pendingBillService, { type PendingBillData } from "@/services/pendingBill.service";
+import pendingBillService from "@/services/pendingBill.service";
 import bankAccountService from "@/services/bankAccount.service";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
 import FormikDate from "@/shared/components/formik-fields/FormikDate";
@@ -21,16 +21,21 @@ interface ApiErrorLike {
   message?: string;
 }
 
-interface PendingBillPaymentFormModalProps {
-  bill: PendingBillData;
+interface PendingBillAccountPaymentModalProps {
+  accountKey: string;
+  accountName: string;
+  /** The account's current outstanding balance — a payment can't exceed it. */
+  outstanding: number;
   onClose: () => void;
 }
 
-// "Full" is just whichever quick-fill matches the entire remaining balance — there's no separate
-// concept of a full-payment vs custom-payment on the backend, only the amount submitted.
+const formatCurrency = (amount: number) => `₹${amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+
+// "Full" is just whichever quick-fill matches the entire outstanding balance — there's no separate
+// concept of a full vs. partial payment on the backend, only the amount submitted.
 const QUICK_FILL_PERCENTAGES = [25, 50, 75, 100];
 
-const QuickFillButtons = ({ remaining }: { remaining: number }) => {
+const QuickFillButtons = ({ outstanding }: { outstanding: number }) => {
   const { setFieldValue } = useFormikContext<PendingBillPaymentEntryFormValues>();
   return (
     <div className="flex flex-wrap gap-2">
@@ -38,7 +43,7 @@ const QuickFillButtons = ({ remaining }: { remaining: number }) => {
         <button
           key={pct}
           type="button"
-          onClick={() => setFieldValue("amount", ((remaining * pct) / 100).toFixed(2))}
+          onClick={() => setFieldValue("amount", ((outstanding * pct) / 100).toFixed(2))}
           className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-100"
         >
           {pct === 100 ? "Full" : `${pct}%`}
@@ -48,9 +53,34 @@ const QuickFillButtons = ({ remaining }: { remaining: number }) => {
   );
 };
 
-const PendingBillPaymentFormModal = ({ bill, onClose }: PendingBillPaymentFormModalProps) => {
+// Previous outstanding − this payment = remaining outstanding, live as the amount is typed.
+const PaymentPreview = ({ outstanding }: { outstanding: number }) => {
+  const { values } = useFormikContext<PendingBillPaymentEntryFormValues>();
+  const payment = Number(values.amount) || 0;
+  const remaining = Math.max(0, Math.round((outstanding - payment) * 100) / 100);
+
+  return (
+    <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs">
+      <div className="flex items-center justify-between text-slate-600">
+        <span>Previous Outstanding</span>
+        <span className="font-semibold text-slate-800">{formatCurrency(outstanding)}</span>
+      </div>
+      <div className="mt-1 flex items-center justify-between text-slate-600">
+        <span>Payment</span>
+        <span className="font-semibold text-emerald-600">− {formatCurrency(payment)}</span>
+      </div>
+      <div className="mt-2 flex items-center justify-between border-t border-slate-200 pt-2 text-slate-700">
+        <span className="font-semibold">Remaining Outstanding</span>
+        <span className={`text-sm font-bold ${payment > outstanding ? "text-rose-600" : remaining === 0 ? "text-emerald-600" : "text-slate-900"}`}>
+          {formatCurrency(remaining)}
+        </span>
+      </div>
+    </div>
+  );
+};
+
+const PendingBillAccountPaymentModal = ({ accountKey, accountName, outstanding, onClose }: PendingBillAccountPaymentModalProps) => {
   const queryClient = useQueryClient();
-  const remaining = Number(bill.remainingAmount ?? bill.amount);
 
   const { data: bankAccountsResponse } = useQuery({
     queryKey: ["bank-accounts-active"],
@@ -68,9 +98,10 @@ const PendingBillPaymentFormModal = ({ bill, onClose }: PendingBillPaymentFormMo
   };
 
   const saveMutation = useMutation({
-    mutationFn: (data: PendingBillPaymentEntryFormValues) => pendingBillService.createPayment(bill.id!, data),
+    mutationFn: (data: PendingBillPaymentEntryFormValues) => pendingBillService.createAccountPayment(accountKey, data),
     onSuccess: (res) => {
       toast.success(res.data?.message || "Payment recorded successfully");
+      // The account's outstanding, history and the Expense the payment created all change.
       queryClient.invalidateQueries({ queryKey: ["pending-bill"] });
       queryClient.invalidateQueries({ queryKey: ["expense"] });
       queryClient.invalidateQueries({ queryKey: ["expense-totals"] });
@@ -90,8 +121,8 @@ const PendingBillPaymentFormModal = ({ bill, onClose }: PendingBillPaymentFormMo
         if (!errors[key]) errors[key] = issue.message;
       }
     }
-    if (!errors.amount && Number(values.amount) > remaining) {
-      errors.amount = `Amount cannot exceed the remaining balance of ₹${remaining.toLocaleString("en-IN")}`;
+    if (!errors.amount && Number(values.amount) > outstanding) {
+      errors.amount = `Amount cannot exceed the outstanding balance of ${formatCurrency(outstanding)}`;
     }
     return errors;
   };
@@ -106,9 +137,9 @@ const PendingBillPaymentFormModal = ({ bill, onClose }: PendingBillPaymentFormMo
       <div className="w-full max-w-xl overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-200 max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
           <div>
-            <h3 className="text-base font-bold text-slate-900">Record Payment</h3>
+            <h3 className="text-base font-bold text-slate-900">Pay — {accountName}</h3>
             <p className="text-xs text-slate-500">
-              Remaining balance: <span className="font-semibold text-slate-700">₹{remaining.toLocaleString("en-IN")}</span>
+              Current Outstanding: <span className="font-semibold text-rose-600">{formatCurrency(outstanding)}</span>
             </p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition">
@@ -122,9 +153,9 @@ const PendingBillPaymentFormModal = ({ bill, onClose }: PendingBillPaymentFormMo
               <div className="flex-1 overflow-y-auto px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="sm:col-span-2 flex flex-col gap-2">
                   <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Quick fill</span>
-                  <QuickFillButtons remaining={remaining} />
+                  <QuickFillButtons outstanding={outstanding} />
                 </div>
-                <Field name="amount" label="Amount" type="number" placeholder="0.00" component={FormikInput} />
+                <Field name="amount" label="Payment Amount" type="number" placeholder="0.00" component={FormikInput} />
                 <Field name="paymentMethod" label="Payment Method" options={methodOptions} component={FormikSelect} />
                 <Field name="paymentDate" label="Payment Date" component={FormikDate} />
                 <Field name="transactionRef" label="Transaction / Reference No. (optional)" placeholder="e.g. UTR / cheque no." component={FormikInput} />
@@ -140,10 +171,12 @@ const PendingBillPaymentFormModal = ({ bill, onClose }: PendingBillPaymentFormMo
                 <div className="sm:col-span-2">
                   <Field name="notes" label="Notes (optional)" placeholder="Optional notes" multiline component={FormikInput} />
                 </div>
+                <PaymentPreview outstanding={outstanding} />
               </div>
 
               <p className="px-6 pb-1 text-[11px] text-slate-400">
-                This payment is recorded on the account straight away and creates an Expense entry under your name, pending Admin approval.
+                The account's outstanding balance updates immediately. An Expense entry for this payment is created under your name and
+                needs Admin approval before it counts toward Total Out.
               </p>
 
               <div className="flex justify-end gap-2 border-t border-slate-100 px-6 py-4">
@@ -170,4 +203,4 @@ const PendingBillPaymentFormModal = ({ bill, onClose }: PendingBillPaymentFormMo
   );
 };
 
-export default PendingBillPaymentFormModal;
+export default PendingBillAccountPaymentModal;
