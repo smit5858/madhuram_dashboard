@@ -2,7 +2,7 @@ import httpService from "./http-service";
 
 export interface NotificationData {
   id: number;
-  recipientModule: "couriers" | "account" | "admin" | "all" | "leads";
+  recipientModule: "couriers" | "account" | "admin" | "all" | "leads" | "tasks";
   recipientUserId?: number | null;
   type:
     | "NEW_SALE"
@@ -23,7 +23,9 @@ export interface NotificationData {
     | "PENDING_BILL_PARTIALLY_PAID"
     | "LEAD_APPROVAL_REQUIRED"
     | "LEAD_APPROVED"
-    | "LEAD_REJECTED";
+    | "LEAD_REJECTED"
+    | "TASK_ASSIGNED"
+    | "TASK_STATUS_CHANGED";
   title: string;
   message?: string;
   referenceType?: string;

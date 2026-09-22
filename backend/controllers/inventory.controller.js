@@ -1,4 +1,4 @@
-const { SerialUnit, Product, SaleItem, Sale, Dealer } = require("../models");
+const { SerialUnit, Product, SaleItem, Sale, Dealer, Courier } = require("../models");
 const { Op } = require("sequelize");
 const inventoryService = require("../services/inventory.service");
 const { STOCK_TRACKED_TYPES } = inventoryService;
@@ -10,39 +10,55 @@ const errorResponse = (res, err) => {
 };
 
 // Fires after a stock receipt's FIFO sweep (inventoryService.allocateBackorders) clears one or
-// more previously-backordered sale items — lets the Couriers page surface + highlight those
-// shipments live instead of the user having to notice on next refresh. Called after the
-// receiving transaction has already committed, so this is best-effort only (notify() swallows
-// its own errors).
+// more previously-backordered sale items. Each allocation is matched back to the Courier row
+// that was waiting on this exact product (saleItemId is 1:1 with a Courier row — see
+// courier.model.js) and notified to that row's owning employee only (Courier.userId — the
+// existing "assigned employee" relationship for Courier), never broadcast to the whole Couriers
+// module/Admin. An item with no linked Courier row (e.g. "Create Courier Entry" was off) has no
+// pending Courier entry to notify about, so it's skipped.
+//
+// Duplicate-safe by construction: allocateBackorders only ever matches SaleItems that still have
+// backorderedQuantity > 0, so a sale item that was already fully allocated on a previous stock
+// receipt is never re-selected, and a repeat/no-op receiveStock call (nothing left to allocate)
+// returns no allocations at all (see the early return below).
 const notifyBackorderAllocations = async (allocations, product) => {
   if (!allocations || allocations.length === 0) return;
 
-  const allocatedBySale = {};
-  for (const a of allocations) {
-    allocatedBySale[a.saleId] = (allocatedBySale[a.saleId] || 0) + a.allocatedQty;
-  }
-  const saleIds = Object.keys(allocatedBySale).map(Number);
+  const saleItemIds = allocations.map((a) => a.saleItemId);
+  const couriers = await Courier.findAll({
+    where: { saleItemId: { [Op.in]: saleItemIds } },
+    attributes: ["id", "saleItemId", "userId", "customerName"],
+  });
+  const courierBySaleItemId = new Map(couriers.map((c) => [c.saleItemId, c]));
 
-  const sales = await Sale.findAll({ where: { id: { [Op.in]: saleIds } }, attributes: ["id", "invoiceNumber", "customerName"] });
+  const events = allocations
+    .map((a) => {
+      const courier = courierBySaleItemId.get(a.saleItemId);
+      if (!courier || !courier.userId) return null;
+      return {
+        recipientModule: "couriers",
+        recipientUserId: courier.userId,
+        type: "BACKORDER_ALLOCATED",
+        title: "Product Restocked",
+        message: `${product.name} is now back in stock${
+          courier.customerName ? ` for ${courier.customerName}` : ""
+        }. The pending Courier entry can now be processed.`,
+        referenceType: "courier",
+        referenceId: courier.id,
+        event: "backorder_allocated",
+        payload: {
+          courierId: courier.id,
+          saleId: a.saleId,
+          saleItemId: a.saleItemId,
+          productId: product.id,
+          productName: product.name,
+          allocatedQty: a.allocatedQty,
+        },
+      };
+    })
+    .filter(Boolean);
 
-  await notify(
-    sales.map((sale) => ({
-      recipientModule: "couriers",
-      type: "BACKORDER_ALLOCATED",
-      title: "Backordered Item Now In Stock",
-      message: `Invoice ${sale.invoiceNumber}: ${product.name} × ${allocatedBySale[sale.id]} unit(s) received and ready to fulfill`,
-      referenceType: "sale",
-      referenceId: sale.id,
-      event: "backorder_allocated",
-      payload: {
-        saleId: sale.id,
-        invoiceNumber: sale.invoiceNumber,
-        customerName: sale.customerName,
-        productName: product.name,
-        allocatedQty: allocatedBySale[sale.id],
-      },
-    }))
-  );
+  if (events.length) await notify(events);
 };
 
 // POST /inventory/receive

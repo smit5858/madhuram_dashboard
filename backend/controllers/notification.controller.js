@@ -9,11 +9,20 @@ const MODULE_BY_ROUTE_PATH = { "/leads": "leads" };
 
 // Which broadcast modules this user is allowed to see, based on their own granted route
 // permissions — never trust a client-supplied module filter beyond this set, same principle as
-// expense.controller.js's canViewAllRecords. null = unrestricted (Admin sees every broadcast,
-// same as the Admin bypass in authorize.js); "all" is always included since it's the reserved
+// expense.controller.js's canViewAllRecords. "all" is always included since it's the reserved
 // module for a broadcast meant for literally everyone.
+//
+// Admin is scoped to Sells + Expense ("account"), Tasks, and Admin-targeted broadcasts only —
+// NOT an unrestricted bypass. Admin-only broadcasts (new sale, payment received, expense
+// approval, pending bill, lead approval, task events — see the various controllers' notify()
+// calls) all already use recipientModule "admin", so this set covers every category Admin is
+// meant to see. "couriers" is deliberately excluded so Courier/Restock broadcasts (e.g. the
+// pending-courier-waiting-on-stock restock alert) never leak into Admin's feed; those are
+// personal (recipientUserId-targeted) notifications for the responsible employee only.
+const ADMIN_ALLOWED_MODULES = ["admin", "account", "tasks", "all"];
+
 const getAllowedBroadcastModules = async (user) => {
-  if (user.roleName === "Admin") return null;
+  if (user.roleName === "Admin") return ADMIN_ALLOWED_MODULES;
 
   const perms = await UserPermission.findAll({
     where: { userId: user.id, canRead: true },
@@ -32,8 +41,8 @@ const getAllowedBroadcastModules = async (user) => {
 
 // Broadcast (module-wide) notifications are those with no recipientUserId; a personal
 // notification (recipientUserId set) is only ever visible to that one user. `allowedModules`
-// (from getAllowedBroadcastModules; null for Admin) is the real boundary — an explicit `mod`
-// query filter can only narrow it further, never widen it.
+// (from getAllowedBroadcastModules) is the real boundary — an explicit `mod` query filter can
+// only narrow it further, never widen it.
 const buildVisibilityWhere = (userId, mod, allowedModules) => {
   let modules = allowedModules;
   if (mod) {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigate } from "react-router-dom";
-import { Bell, CheckCheck, Package, DollarSign, Truck } from "lucide-react";
+import { Bell, CheckCheck, Package, DollarSign, Truck, ListTodo } from "lucide-react";
 import type { RootState } from "@/store/store";
 import {
   addNotification,
@@ -61,6 +61,10 @@ const NOTIFICATION_TYPE_ROUTE: Record<string, string> = {
   LEAD_REJECTED: "/leads",
   TASK_ASSIGNED: "/tasks",
   TASK_STATUS_CHANGED: "/tasks",
+  // Product-restocked alert for the employee whose Courier entry was waiting on this product
+  // (see inventory.controller.js#notifyBackorderAllocations) — no per-record Courier detail
+  // route exists, so this lands on the Couriers list like the other courier-facing alerts.
+  BACKORDER_ALLOCATED: "/couriers",
 };
 
 const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
@@ -176,6 +180,9 @@ const NotificationBell = ({ moduleName = "all" }: NotificationBellProps) => {
     }
     if (recipientModule === "account") {
       return <DollarSign className="h-4 w-4 text-emerald-500" />;
+    }
+    if (recipientModule === "tasks") {
+      return <ListTodo className="h-4 w-4 text-violet-500" />;
     }
     if (type === "STOCK_LOW") {
       return <Package className="h-4 w-4 text-amber-500" />;

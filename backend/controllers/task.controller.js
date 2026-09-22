@@ -288,21 +288,33 @@ exports.createTask = async (req, res) => {
 
     await t.commit();
 
-    if (uniqueAssigneeIds.length) {
-      await notify(
-        uniqueAssigneeIds.map((assigneeId) => ({
-          recipientModule: "tasks",
-          recipientUserId: assigneeId,
-          type: "TASK_ASSIGNED",
-          title: "New Task Assigned",
-          message: `You have been assigned to "${task.title}".`,
-          referenceType: "task",
-          referenceId: task.id,
-          event: "task_assigned",
-          payload: { taskId: task.id },
-        }))
-      );
-    }
+    const taskEvents = uniqueAssigneeIds.map((assigneeId) => ({
+      recipientModule: "tasks",
+      recipientUserId: assigneeId,
+      type: "TASK_ASSIGNED",
+      title: "New Task Assigned",
+      message: `You have been assigned to "${task.title}".`,
+      referenceType: "task",
+      referenceId: task.id,
+      event: "task_assigned",
+      payload: { taskId: task.id },
+    }));
+    // Admin sees every task event regardless of whether they're the creator/assignee — a
+    // broadcast on "admin" (same pattern as NEW_SALE/EXPENSE_PENDING_APPROVAL) rather than
+    // relying on personal recipientUserId targeting like the assignee notifications above.
+    taskEvents.push({
+      recipientModule: "admin",
+      type: "TASK_ASSIGNED",
+      title: "New Task Created",
+      message: `"${task.title}" was created by ${user.name || "a user"}${
+        assigneeUsers.length ? `, assigned to ${namesOf(assigneeUsers)}` : ""
+      }.`,
+      referenceType: "task",
+      referenceId: task.id,
+      event: "task_assigned",
+      payload: { taskId: task.id },
+    });
+    await notify(taskEvents);
 
     return res.status(201).json({ success: true, message: "Task created successfully", data: task });
   } catch (err) {
@@ -436,21 +448,29 @@ exports.updateTaskStatus = async (req, res) => {
       if (a.userId !== user.id) recipients.add(a.userId);
     });
 
-    if (recipients.size) {
-      await notify(
-        [...recipients].map((uid) => ({
-          recipientModule: "tasks",
-          recipientUserId: uid,
-          type: "TASK_STATUS_CHANGED",
-          title: "Task Status Updated",
-          message: `"${task.title}" status changed to ${status}.`,
-          referenceType: "task",
-          referenceId: task.id,
-          event: "task_status_changed",
-          payload: { taskId: task.id, status },
-        }))
-      );
-    }
+    const statusEvents = [...recipients].map((uid) => ({
+      recipientModule: "tasks",
+      recipientUserId: uid,
+      type: "TASK_STATUS_CHANGED",
+      title: "Task Status Updated",
+      message: `"${task.title}" status changed to ${status}.`,
+      referenceType: "task",
+      referenceId: task.id,
+      event: "task_status_changed",
+      payload: { taskId: task.id, status },
+    }));
+    // Admin sees every status change regardless of their own involvement in the task.
+    statusEvents.push({
+      recipientModule: "admin",
+      type: "TASK_STATUS_CHANGED",
+      title: "Task Status Updated",
+      message: `"${task.title}" status changed to ${status} by ${user.name || "a user"}.`,
+      referenceType: "task",
+      referenceId: task.id,
+      event: "task_status_changed",
+      payload: { taskId: task.id, status },
+    });
+    await notify(statusEvents);
 
     return res.status(200).json({ success: true, message: "Task status updated successfully", data: task });
   } catch (err) {
@@ -490,19 +510,29 @@ exports.addTaskAssignees = async (req, res) => {
     await t.commit();
 
     if (added.length) {
-      await notify(
-        added.map((a) => ({
-          recipientModule: "tasks",
-          recipientUserId: a.userId,
-          type: "TASK_ASSIGNED",
-          title: "New Task Assigned",
-          message: `You have been assigned to "${task.title}".`,
-          referenceType: "task",
-          referenceId: task.id,
-          event: "task_assigned",
-          payload: { taskId: task.id },
-        }))
-      );
+      const addEvents = added.map((a) => ({
+        recipientModule: "tasks",
+        recipientUserId: a.userId,
+        type: "TASK_ASSIGNED",
+        title: "New Task Assigned",
+        message: `You have been assigned to "${task.title}".`,
+        referenceType: "task",
+        referenceId: task.id,
+        event: "task_assigned",
+        payload: { taskId: task.id },
+      }));
+      const addedNames = added.map((a) => nameById.get(a.userId)).filter(Boolean).join(", ");
+      addEvents.push({
+        recipientModule: "admin",
+        type: "TASK_ASSIGNED",
+        title: "Task Assignees Updated",
+        message: `${user.name || "A user"} added ${addedNames || "a new assignee"} to "${task.title}".`,
+        referenceType: "task",
+        referenceId: task.id,
+        event: "task_assigned",
+        payload: { taskId: task.id },
+      });
+      await notify(addEvents);
     }
 
     return res.status(200).json({ success: true, message: "Assignees added successfully", data: added });
@@ -629,21 +659,32 @@ exports.reassignTask = async (req, res) => {
 
     await t.commit();
 
+    const reassignEvents = [];
     if (assigneeId !== user.id) {
-      await notify([
-        {
-          recipientModule: "tasks",
-          recipientUserId: assigneeId,
-          type: "TASK_ASSIGNED",
-          title: "New Task Assigned",
-          message: `You have been assigned to "${task.title}".`,
-          referenceType: "task",
-          referenceId: task.id,
-          event: "task_assigned",
-          payload: { taskId: task.id },
-        },
-      ]);
+      reassignEvents.push({
+        recipientModule: "tasks",
+        recipientUserId: assigneeId,
+        type: "TASK_ASSIGNED",
+        title: "New Task Assigned",
+        message: `You have been assigned to "${task.title}".`,
+        referenceType: "task",
+        referenceId: task.id,
+        event: "task_assigned",
+        payload: { taskId: task.id },
+      });
     }
+    // Admin sees every (re)assignment regardless of who performed it or who the assignee is.
+    reassignEvents.push({
+      recipientModule: "admin",
+      type: "TASK_ASSIGNED",
+      title: current.length ? "Task Reassigned" : "Task Assigned",
+      message: `"${task.title}" was ${current.length ? "reassigned" : "assigned"} to ${target.name} by ${user.name || "a user"}.`,
+      referenceType: "task",
+      referenceId: task.id,
+      event: "task_assigned",
+      payload: { taskId: task.id },
+    });
+    await notify(reassignEvents);
 
     return res.status(200).json({ success: true, message: `Task assigned to ${target.name}`, data: task });
   } catch (err) {
