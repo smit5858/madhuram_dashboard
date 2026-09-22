@@ -65,10 +65,11 @@ const canActOnTask = async (task, jwtUser, transaction) => {
   return !!activeAssignment;
 };
 
-// Adding/removing assignees ("sub-assign"): the spec says "if they have permission" without
-// defining it — operationalized here as "you must already be part of the task" (Admin, creator,
-// or an active assignee), same population as canActOnTask.
-const canManageAssignees = canActOnTask;
+// Adding/removing assignees and reassigning ("sub-assign"): Admin or the task's creator only.
+// Deliberately narrower than canActOnTask — an assignee may work the task and move its status,
+// but must not be able to hand it to someone else, pull other assignees onto it, or remove one,
+// since that is an assignment decision, not task execution. Same population as canEditTaskFields.
+const canManageAssignees = (task, jwtUser) => jwtUser.roleName === "Admin" || task.createdBy === jwtUser.id;
 
 // Editing title/description/priority/dates: Admin or the task's original creator only —
 // deliberately narrower than canActOnTask (an assignee can update status/work logs but not
@@ -835,3 +836,7 @@ exports.deleteTask = async (req, res) => {
 // is allowed to see (same visibility rule as the task list/detail endpoints).
 exports.canViewTask = canViewTask;
 exports.buildTaskScopeWhere = buildTaskScopeWhere;
+// Shared with timesheet.controller.js so a work log/timer can only be booked against a task the
+// user is actually assigned to (or created/admins) — merely being able to *view* a task (e.g. as
+// a fellow project member) must not be enough to log time against a colleague's task.
+exports.canActOnTask = canActOnTask;

@@ -10,6 +10,7 @@ import { formatDisplayDate, getTodayISODate } from "@/shared/utils/date";
 import { addDays, endOfWeek, formatDuration, startOfWeek, weekdayName } from "@/shared/utils/timesheet";
 import ConfirmDeleteModal from "@/pages/tasks/components/ConfirmDeleteModal";
 import TimesheetFormModal from "./components/TimesheetFormModal";
+import TimesheetTimerBar from "./components/TimesheetTimerBar";
 import TimesheetEntriesTable from "./components/TimesheetEntriesTable";
 import TimesheetWeekView from "./components/TimesheetWeekView";
 import TimesheetBreakdown from "./components/TimesheetBreakdown";
@@ -178,6 +179,8 @@ const Timesheets = () => {
             </button>
           )}
         </div>
+
+        {pagePermission.canCreate && <TimesheetTimerBar />}
 
         {tab === "log" && (
           <>
@@ -386,7 +389,7 @@ const Timesheets = () => {
       {deleting && (
         <ConfirmDeleteModal
           title="Delete Work Log"
-          itemName={`${formatDisplayDate(deleting.workDate)} · ${formatDuration(deleting.durationMinutes)}`}
+          itemName={`${formatDisplayDate(deleting.workDate)} · ${formatDuration(deleting.durationMinutes ?? 0)}`}
           warning={`This removes ${deleting.user?.name ? `${deleting.user.name}'s` : "the"} work log from the timesheet. The deletion is recorded in the history.`}
           isSubmitting={deleteMutation.isPending}
           onClose={() => setDeleting(null)}

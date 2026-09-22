@@ -21,10 +21,23 @@ interface TimesheetEntriesTableProps {
   onDelete: (entry: TimesheetEntryData) => void;
 }
 
+/** Assigned Task vs Other Work — derived from whether the entry is linked to a task, not a stored
+ *  field, so it can never drift from the actual link. */
+const EntryTypeBadge = ({ isTask }: { isTask: boolean }) => (
+  <span
+    className={`inline-flex w-fit items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+      isTask ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-500"
+    }`}
+  >
+    {isTask ? "Assigned Task" : "Other Work"}
+  </span>
+);
+
 const TaskCell = ({ entry }: { entry: TimesheetEntryData }) => {
   if (entry.task) {
     return (
       <div className="flex flex-col gap-1">
+        <EntryTypeBadge isTask />
         <span className="font-medium text-slate-800">{entry.task.title}</span>
         <span className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
           {entry.project && (
@@ -40,6 +53,7 @@ const TaskCell = ({ entry }: { entry: TimesheetEntryData }) => {
   if (entry.project) {
     return (
       <div className="flex flex-col gap-1">
+        <EntryTypeBadge isTask={false} />
         <span className="inline-flex items-center gap-1 font-medium text-slate-800">
           <FolderKanban className="h-3.5 w-3.5 text-slate-400" /> {entry.project.name}
         </span>
@@ -48,7 +62,12 @@ const TaskCell = ({ entry }: { entry: TimesheetEntryData }) => {
     );
   }
   const removed = entry.deletedTaskTitle || entry.deletedProjectName;
-  return <span className="text-slate-400">{removed ? `${removed} (removed)` : "—"}</span>;
+  return (
+    <div className="flex flex-col gap-1">
+      <EntryTypeBadge isTask={false} />
+      <span className="text-slate-400">{removed ? `${removed} (removed)` : "—"}</span>
+    </div>
+  );
 };
 
 /** Who entered the log and when — plus who corrected it afterwards, if an Admin did. */
@@ -123,15 +142,29 @@ const TimesheetEntriesTable = ({ entries, isLoading, error, showDate, showEmploy
                 <TaskCell entry={entry} />
               </td>
               <td className="px-4 py-3 max-w-md">
-                <p className="whitespace-pre-line text-slate-700">{entry.description}</p>
+                {entry.description ? (
+                  <p className="whitespace-pre-line text-slate-700">{entry.description}</p>
+                ) : (
+                  <p className="italic text-slate-400">In progress…</p>
+                )}
                 {entry.notes && <p className="mt-1 whitespace-pre-line text-xs text-slate-400">Note: {entry.notes}</p>}
               </td>
               <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatClock(entry.startTime)}</td>
               <td className="px-4 py-3 whitespace-nowrap text-gray-600">
-                {formatClock(entry.endTime)}
-                {entry.endsNextDay && <span className="ml-1 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-600">+1 day</span>}
+                {entry.status === "RUNNING" ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" /> Running…
+                  </span>
+                ) : (
+                  <>
+                    {formatClock(entry.endTime!)}
+                    {entry.endsNextDay && <span className="ml-1 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-600">+1 day</span>}
+                  </>
+                )}
               </td>
-              <td className="px-4 py-3 whitespace-nowrap font-semibold text-slate-800">{formatDuration(entry.durationMinutes)}</td>
+              <td className="px-4 py-3 whitespace-nowrap font-semibold text-slate-800">
+                {entry.status === "RUNNING" ? <span className="text-slate-400">—</span> : formatDuration(entry.durationMinutes!)}
+              </td>
               <td className="px-4 py-3 whitespace-nowrap text-right">
                 {entry.canEdit && (
                   <div className="inline-flex items-center gap-1">

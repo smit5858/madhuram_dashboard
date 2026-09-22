@@ -73,10 +73,14 @@ const TaskViewModal = ({ taskId, onClose }: TaskViewModalProps) => {
 
   const activeAssignees = useMemo(() => (task?.assignees || []).filter((a) => !a.removedAt), [task]);
 
-  // Mirrors the backend's canActOnTask/canManageAssignees rules — Admin, creator, or an active
-  // assignee. This is UX only; the backend re-checks and is the real boundary.
+  // Mirrors the backend's canActOnTask rule — Admin, creator, or an active assignee. Governs
+  // status changes; this is UX only, the backend re-checks and is the real boundary.
   const canAct = isAdmin || task?.createdBy === userId || activeAssignees.some((a) => a.userId === userId);
   const canEditFields = isAdmin || task?.createdBy === userId;
+  // Mirrors the backend's canManageAssignees rule — Admin or creator only, deliberately narrower
+  // than canAct: a plain assignee may work the task but must not hand it off, add another
+  // assignee, or remove one. Assigning/reassigning is an authorization decision, not task work.
+  const canManageAssignees = isAdmin || task?.createdBy === userId;
   // Notes: Admin or someone currently assigned (backend canNoteOnTask) — a creator who handed
   // the task off can still view it but not add notes.
   const canNote = isAdmin || activeAssignees.some((a) => a.userId === userId);
@@ -87,7 +91,7 @@ const TaskViewModal = ({ taskId, onClose }: TaskViewModalProps) => {
   const { data: projectResp } = useQuery({
     queryKey: ["projects", "detail", projectId],
     queryFn: () => projectService.getProjectById(projectId!),
-    enabled: !!projectId && canAct,
+    enabled: !!projectId && canManageAssignees,
   });
   const projectMemberIds = useMemo(
     () => (projectResp?.data?.data?.members || []).filter((m) => !m.removedAt).map((m) => m.userId),
@@ -250,7 +254,7 @@ const TaskViewModal = ({ taskId, onClose }: TaskViewModalProps) => {
                 activeAssignees.map((a) => (
                   <div key={a.id} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
                     <span className="text-sm text-slate-700">{a.user?.name || `#${a.userId}`}</span>
-                    {canAct && (
+                    {canManageAssignees && (
                       <button
                         type="button"
                         disabled={removeAssigneeMutation.isPending}
@@ -265,7 +269,7 @@ const TaskViewModal = ({ taskId, onClose }: TaskViewModalProps) => {
                 ))
               )}
             </div>
-            {canAct && (
+            {canManageAssignees && (
               <div className="mt-3 flex gap-2">
                 <select
                   value={addAssigneeId}
@@ -289,7 +293,7 @@ const TaskViewModal = ({ taskId, onClose }: TaskViewModalProps) => {
                 </button>
               </div>
             )}
-            {canAct && (
+            {canManageAssignees && (
               <div className="mt-2 flex gap-2">
                 <select
                   value={reassignToId}

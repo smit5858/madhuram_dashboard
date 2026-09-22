@@ -32,6 +32,11 @@ interface TimesheetFormModalProps {
 }
 
 const NO_LINK = "none";
+// Work that was never an assigned task/project — e.g. "Restock Products" that came up on the
+// floor. Resolves to the same taskId:null/projectId:null payload as NO_LINK (see saveMutation
+// below); kept as a distinct, always-offered option so it reads as a deliberate choice rather than
+// "this entry's task got deleted".
+const OTHER_WORK = "other";
 
 const linkValueOf = (entry: TimesheetEntryData | null, defaultTask?: TimesheetTaskOption): string => {
   if (entry) {
@@ -159,6 +164,7 @@ const TimesheetFormModal = ({ entry, defaultDate, defaultTask, onClose }: Timesh
                     <label htmlFor="link" className="form-input-label">Task / Project</label>
                     <Field as="select" id="link" name="link" className={`form-input ${linkError ? "form-input-error" : ""}`} disabled={optionsLoading}>
                       <option value="">{optionsLoading ? "Loading..." : "Select a task or project"}</option>
+                      <option value={OTHER_WORK}>Other Work (not tied to a task/project)</option>
                       {values.link === NO_LINK && <option value={NO_LINK}>{entry?.deletedTaskTitle || entry?.deletedProjectName || "Removed task"} (removed)</option>}
                       {tasks.length > 0 && (
                         <optgroup label="Tasks">

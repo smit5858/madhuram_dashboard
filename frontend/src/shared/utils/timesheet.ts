@@ -53,3 +53,15 @@ export const formatClock = (hhmm: string): string => {
   const [h, m] = hhmm.split(":").map(Number);
   return `${String(h % 12 || 12).padStart(2, "0")}:${String(m).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`;
 };
+
+/** Live elapsed time since a stored ISO start timestamp, as "1:23:05" (or "23:05" under an hour).
+ *  `nowMs` is injectable for testability; recomputed from the real timestamp on every call, so a
+ *  ticking caller self-corrects after any tab-throttling instead of drifting. */
+export const formatElapsed = (startedAtIso: string, nowMs: number = Date.now()): string => {
+  const totalSeconds = Math.max(0, Math.floor((nowMs - new Date(startedAtIso).getTime()) / 1000));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+};

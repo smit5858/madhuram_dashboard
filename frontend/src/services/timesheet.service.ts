@@ -20,14 +20,21 @@ export interface TimesheetEntryData {
   description: string;
   /** 24h "HH:mm" */
   startTime: string;
-  endTime: string;
+  /** Null while status is RUNNING (a live timer with no end yet). */
+  endTime: string | null;
   endsNextDay: boolean;
-  durationMinutes: number;
+  /** Null while status is RUNNING. */
+  durationMinutes: number | null;
   notes?: string | null;
+  /** RUNNING = an active Start-Time timer; COMPLETED = every entry as before (manual or finished). */
+  status: "RUNNING" | "COMPLETED";
+  /** Precise instants behind a timer entry's startTime/endTime; null for manual/old rows. */
+  startedAt?: string | null;
+  endedAt?: string | null;
   /** What the entry was linked to before that task/project was deleted. */
   deletedTaskTitle?: string | null;
   deletedProjectName?: string | null;
-  /** True only for Admin — employees add entries but cannot edit or delete them. */
+  /** True only for Admin, and only once the entry is COMPLETED — a running timer can't be edited. */
   canEdit: boolean;
   createdAt?: string;
   updatedAt?: string;
@@ -93,6 +100,16 @@ export interface SaveTimesheetPayload {
   notes?: string | null;
 }
 
+export interface StartTimesheetPayload {
+  taskId: number | null;
+  projectId: number | null;
+}
+
+export interface StopTimesheetPayload {
+  description: string;
+  notes?: string | null;
+}
+
 const getTimesheets = (filters: TimesheetFilters = {}, config?: { signal?: AbortSignal }) =>
   httpService.get<{ success: boolean; data: TimesheetEntryData[]; meta: PaginationMeta; summary: { totalMinutes: number } }>("/timesheets", {
     params: filters,
@@ -115,6 +132,16 @@ const updateTimesheet = (id: number, data: SaveTimesheetPayload) =>
 
 const deleteTimesheet = (id: number) => httpService.delete<{ success: boolean; message: string }>(`/timesheets/${id}`);
 
+// An employee may have several timers running at once (see startTimesheet) — always a list,
+// oldest-started first.
+const getActiveTimesheet = () => httpService.get<{ success: boolean; data: TimesheetEntryData[] }>("/timesheets/active");
+
+const startTimesheet = (data: StartTimesheetPayload) =>
+  httpService.post<{ success: boolean; message: string; data: TimesheetEntryData }>("/timesheets/start", data);
+
+const stopTimesheet = (id: number, data: StopTimesheetPayload) =>
+  httpService.patch<{ success: boolean; message: string; data: TimesheetEntryData }>(`/timesheets/${id}/stop`, data);
+
 export default {
   getTimesheets,
   getTimesheetSummary,
@@ -123,4 +150,7 @@ export default {
   createTimesheet,
   updateTimesheet,
   deleteTimesheet,
+  getActiveTimesheet,
+  startTimesheet,
+  stopTimesheet,
 };

@@ -11,9 +11,15 @@ router.get("/", authenticate, authorize(ROUTE_PATH, "read"), timesheetController
 router.get("/summary", authenticate, authorize(ROUTE_PATH, "read"), timesheetController.getTimesheetSummary);
 router.get("/options", authenticate, authorize(ROUTE_PATH, "read"), timesheetController.getTimesheetOptions);
 router.get("/activity", authenticate, authorize(ROUTE_PATH, "read"), timesheetController.getTimesheetActivity);
+router.get("/active", authenticate, authorize(ROUTE_PATH, "read"), timesheetController.getActiveTimesheet);
 // Anyone with create access logs their own hours; update/delete are Admin-only — enforced in the
 // controller too, so a stray canUpdate/canDelete grant on a non-Admin never opens them up.
 router.post("/", authenticate, authorize(ROUTE_PATH, "create"), timesheetController.createTimesheet);
+// Start/stop are how an employee logs their own hours via a live timer instead of typing times —
+// same "create" trust level as POST /, and stop must work for the entry's owner even though PUT is
+// Admin-only (see stopTimesheet's own-timer check).
+router.post("/start", authenticate, authorize(ROUTE_PATH, "create"), timesheetController.startTimesheet);
+router.patch("/:id/stop", authenticate, authorize(ROUTE_PATH, "create"), timesheetController.stopTimesheet);
 router.put("/:id", authenticate, authorize(ROUTE_PATH, "update"), timesheetController.updateTimesheet);
 router.delete("/:id", authenticate, authorize(ROUTE_PATH, "delete"), timesheetController.deleteTimesheet);
 

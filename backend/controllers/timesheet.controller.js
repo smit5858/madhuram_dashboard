@@ -3,7 +3,7 @@ const sequelize = require("../config/db");
 const { TimesheetEntry, Task, Project, User, ActivityLog } = require("../models");
 const { canViewAllRecords } = require("../helper/permissionScope");
 const { logActivity } = require("../services/activityLog.service");
-const { canViewTask, buildTaskScopeWhere } = require("./task.controller");
+const { canActOnTask, buildTaskScopeWhere } = require("./task.controller");
 const { buildProjectScopeWhere, canAccessProject } = require("./project.controller");
 
 const ROUTE_PATH = "/timesheets";
@@ -78,6 +78,13 @@ const isTooFarInFuture = (workDate) => {
   return dayIndex(workDate) > dayIndex(today) + 1;
 };
 
+// The server-local "YYYY-MM-DD" / "HH:mm" for a Date instant — what the Start/End Time buttons
+// stamp onto workDate/startTime/endTime, matching the format every other part of this module uses.
+const partsOf = (date) => ({
+  workDate: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`,
+  clockTime: `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`,
+});
+
 // ---------- request parsing ----------
 
 // undefined = not supplied, null = explicitly cleared, NaN = malformed.
@@ -118,17 +125,22 @@ const validateCandidate = (c) => {
 };
 
 // Works out which task/project the entry is booked against. Picking a task pins the project to
-// that task's project; a project-only entry is allowed for work that isn't tied to one task.
-// Visibility is only re-checked when the link actually changes, so an employee can still fix a
-// typo in an old entry after losing access to its task.
+// that task's project; a project-only entry is allowed for work that isn't tied to one task, and
+// neither is required at all — "Other Work" that was never an assigned task can be logged with no
+// link. Visibility is only re-checked when the link actually changes, so an employee can still fix
+// a typo in an old entry after losing access to its task.
+//
+// The task check is canActOnTask (Admin / creator / active assignee), not the broader canViewTask
+// — being able to merely see a task (e.g. as a fellow project member who isn't assigned to it)
+// must not be enough to book time against it; only someone who can actually work the task may.
 const resolveLinks = async (candidate, existing, user, transaction) => {
   const { taskId, projectId } = candidate;
 
   if (taskId) {
     const task = await Task.findByPk(taskId, { transaction });
     if (!task) return { status: 404, error: "Task not found" };
-    if ((!existing || existing.taskId !== taskId) && !(await canViewTask(task, user, transaction))) {
-      return { status: 403, error: "Access denied: this task is outside your allowed scope" };
+    if ((!existing || existing.taskId !== taskId) && !(await canActOnTask(task, user, transaction))) {
+      return { status: 403, error: "Access denied: you are not assigned to this task" };
     }
     return { taskId: task.id, projectId: task.projectId };
   }
@@ -142,9 +154,9 @@ const resolveLinks = async (candidate, existing, user, transaction) => {
     return { taskId: null, projectId: project.id };
   }
 
-  // An entry whose task/project was deleted keeps its hours and may stay unlinked when edited.
-  if (existing && !existing.taskId && !existing.projectId) return { taskId: null, projectId: null };
-  return { status: 400, error: "Select the task or project this work was for" };
+  // No task/project selected — "Other Work": logged hours that were never an assigned task, or an
+  // entry whose task/project was since deleted keeping its hours unlinked.
+  return { taskId: null, projectId: null };
 };
 
 // An employee can't be in two places at once: reject a log that overlaps another of their own
@@ -220,7 +232,9 @@ const recordActivity = async ({ action, entry, actorId, lines, taskLines }, tran
 // Employees add their own logs; correcting or removing one is an Admin action.
 const isAdmin = (user) => user.roleName === "Admin";
 
-const serialize = (entry, user) => ({ ...entry.toJSON(), canEdit: isAdmin(user) });
+// A RUNNING entry has no endTime/durationMinutes yet, so it can't go through the normal
+// edit/delete path (which would just 409 — see updateTimesheet/deleteTimesheet) until stopped.
+const serialize = (entry, user) => ({ ...entry.toJSON(), canEdit: isAdmin(user) && entry.status !== "RUNNING" });
 
 // Non-admins see only their own entries unless granted "view all records" on /timesheets in
 // Settings → Route Setting (Admin always can). The scope is decided server-side; a userId filter
@@ -419,6 +433,166 @@ exports.getTimesheetActivity = async (req, res) => {
   }
 };
 
+// GET /timesheets/active — the caller's own currently-running timers (used to restore the timer
+// bar's state after a page refresh/login). An employee may have several running at once — see
+// startTimesheet below — so this is a list, oldest-started first. Never reports another user's
+// running timers — starting/stopping is a personal action, unlike the shared visibility
+// getTimesheets offers.
+exports.getActiveTimesheet = async (req, res) => {
+  try {
+    const entries = await TimesheetEntry.findAll({
+      where: { userId: req.user.id, status: "RUNNING" },
+      include: ENTRY_INCLUDE,
+      order: [["startedAt", "ASC"]],
+    });
+    return res.status(200).json({ success: true, data: entries.map((entry) => serialize(entry, req.user)) });
+  } catch (err) {
+    return fail(res, err);
+  }
+};
+
+// POST /timesheets/start — begins a live timer for the current user. Several may run at once (an
+// employee genuinely working two tasks in parallel, e.g. while one is waiting on something) — the
+// only thing rejected outright is starting the *same* task/project/Other-Work a second time while
+// it's already running, since that's a duplicate click rather than a second real thread of work.
+exports.startTimesheet = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const user = req.user;
+
+    const taskId = toId(req.body?.taskId ?? null);
+    const projectId = toId(req.body?.projectId ?? null);
+    if (Number.isNaN(taskId) || Number.isNaN(projectId)) {
+      await t.rollback();
+      return res.status(400).json({ success: false, message: "Invalid task or project" });
+    }
+
+    const links = await resolveLinks({ taskId, projectId }, null, user, t);
+    if (links.error) {
+      await t.rollback();
+      return res.status(links.status).json({ success: false, message: links.error });
+    }
+
+    const duplicate = await TimesheetEntry.findOne({
+      where: { userId: user.id, status: "RUNNING", taskId: links.taskId, projectId: links.projectId },
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+    if (duplicate) {
+      await t.rollback();
+      return res.status(409).json({ success: false, message: "You already have a timer running for this — stop it before starting another one for the same work" });
+    }
+
+    const now = new Date();
+    const { workDate, clockTime } = partsOf(now);
+
+    const created = await TimesheetEntry.create(
+      {
+        userId: user.id,
+        taskId: links.taskId,
+        projectId: links.projectId,
+        workDate,
+        description: "",
+        startTime: clockTime,
+        endTime: null,
+        endsNextDay: false,
+        durationMinutes: null,
+        status: "RUNNING",
+        startedAt: now,
+        notes: null,
+      },
+      { transaction: t }
+    );
+    const entry = await TimesheetEntry.findByPk(created.id, { include: ENTRY_INCLUDE, transaction: t });
+
+    await t.commit();
+    return res.status(201).json({ success: true, message: "Timer started", data: serialize(entry, user) });
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    return fail(res, err);
+  }
+};
+
+// PATCH /timesheets/:id/stop — completes the caller's own running timer. Description is collected
+// here (not at Start) so starting stays one click; everything else about the resulting row is
+// computed, not typed, from the real startedAt/now instants.
+exports.stopTimesheet = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const user = req.user;
+    const existing = await TimesheetEntry.findByPk(req.params.id, { transaction: t, lock: t.LOCK.UPDATE });
+    if (!existing) {
+      await t.rollback();
+      return res.status(404).json({ success: false, message: "Timesheet entry not found" });
+    }
+    if (existing.status !== "RUNNING") {
+      await t.rollback();
+      return res.status(400).json({ success: false, message: "This entry is not running" });
+    }
+    if (existing.userId !== user.id) {
+      await t.rollback();
+      return res.status(403).json({ success: false, message: "You can only stop your own timer" });
+    }
+
+    const description = cleanText(req.body?.description);
+    if (!description) {
+      await t.rollback();
+      return res.status(400).json({ success: false, message: "Describe the work you did" });
+    }
+    if (typeof description !== "string" || description.length > MAX_TEXT_LENGTH) {
+      await t.rollback();
+      return res.status(400).json({ success: false, message: `Work description must be under ${MAX_TEXT_LENGTH} characters` });
+    }
+    const notes = cleanText(req.body?.notes) || null;
+    if (notes && (typeof notes !== "string" || notes.length > MAX_TEXT_LENGTH)) {
+      await t.rollback();
+      return res.status(400).json({ success: false, message: `Notes must be under ${MAX_TEXT_LENGTH} characters` });
+    }
+
+    const now = new Date();
+    const { clockTime: endTime } = partsOf(now);
+    const endsNextDay = dayIndex(partsOf(now).workDate) > dayIndex(existing.workDate);
+
+    // Duration comes from the real startedAt→now instants, not from diffing "HH:mm" strings —
+    // those only have minute granularity, so a session stopped within the same clock-minute it
+    // started (a normal, short timer run) would otherwise look like end <= start and be rejected.
+    // Round up so a sub-minute session still logs as "1m" instead of "0m"/an error.
+    const rawMinutes = (now.getTime() - new Date(existing.startedAt).getTime()) / 60000;
+    if (rawMinutes >= 1440) {
+      await t.rollback();
+      return res.status(400).json({ success: false, message: "A single work log cannot be 24 hours or longer" });
+    }
+    const durationMinutes = Math.max(1, Math.round(rawMinutes));
+
+    // No overlap check here (unlike createTimesheet/updateTimesheet below): a stopped timer is
+    // expected to overlap another of the employee's entries whenever two timers were run in
+    // parallel — see startTimesheet — so that would reject a legitimate stop, not catch a mistake.
+
+    await existing.update(
+      { description, notes, endTime, endsNextDay, durationMinutes, status: "COMPLETED", endedAt: now },
+      { transaction: t }
+    );
+    const entry = await TimesheetEntry.findByPk(existing.id, { include: ENTRY_INCLUDE, transaction: t });
+
+    await recordActivity(
+      {
+        action: "TIMESHEET_ADDED",
+        entry,
+        actorId: user.id,
+        lines: entrySummaryLines(entry, { includeTask: true }),
+        taskLines: entrySummaryLines(entry, { includeTask: false }),
+      },
+      t
+    );
+
+    await t.commit();
+    return res.status(200).json({ success: true, message: "Timer stopped", data: serialize(entry, user) });
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    return fail(res, err);
+  }
+};
+
 // POST /timesheets — the employee is always the logged-in user; a userId in the body is ignored.
 exports.createTimesheet = async (req, res) => {
   const t = await sequelize.transaction();
@@ -500,6 +674,10 @@ exports.updateTimesheet = async (req, res) => {
     if (!isAdmin(user)) {
       await t.rollback();
       return res.status(403).json({ success: false, message: "Only Admin can edit timesheet entries" });
+    }
+    if (existing.status === "RUNNING") {
+      await t.rollback();
+      return res.status(409).json({ success: false, message: "This timer is still running — stop it before editing or deleting it" });
     }
 
     const candidate = buildCandidate(existing, req.body || {});
@@ -596,6 +774,10 @@ exports.deleteTimesheet = async (req, res) => {
     if (!isAdmin(user)) {
       await t.rollback();
       return res.status(403).json({ success: false, message: "Only Admin can delete timesheet entries" });
+    }
+    if (entry.status === "RUNNING") {
+      await t.rollback();
+      return res.status(409).json({ success: false, message: "This timer is still running — stop it before editing or deleting it" });
     }
 
     await recordActivity(

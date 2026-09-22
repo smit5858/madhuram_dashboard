@@ -476,6 +476,25 @@ const ensurePendingBillPaymentBillIdNullable = async () => {
   }
 };
 
+// Same sync({alter:true}) limitation as ensureUserRoleIdNullable above — timesheet_entries.endTime
+// and durationMinutes became optional once a RUNNING (live Start/End Time timer) entry can exist
+// without them yet — see timesheetEntry.model.js. Idempotent.
+const ensureTimesheetEntryFieldsNullable = async () => {
+  const { DataTypes } = require("sequelize");
+  const queryInterface = sequelize.getQueryInterface();
+  const tables = await queryInterface.showAllTables();
+  const tableNames = tables.map((table) => (typeof table === "string" ? table : table.tableName));
+  if (!tableNames.includes("timesheet_entries")) return;
+
+  const columns = await queryInterface.describeTable("timesheet_entries");
+  if (columns.endTime && columns.endTime.allowNull === false) {
+    await queryInterface.changeColumn("timesheet_entries", "endTime", { type: DataTypes.TIME, allowNull: true });
+  }
+  if (columns.durationMinutes && columns.durationMinutes.allowNull === false) {
+    await queryInterface.changeColumn("timesheet_entries", "durationMinutes", { type: DataTypes.INTEGER, allowNull: true });
+  }
+};
+
 // pending_bills.accountKey (the Seller/Dealer/Company account a bill is grouped under — see
 // helper/pendingBillAccount.js) is added by sync({alter:true}) as a nullable column, so bills that
 // existed beforehand need it filled in. Idempotent: only touches rows where it is still NULL.
@@ -730,6 +749,9 @@ sequelize
   })
   .then(() => {
     return ensureLeadProductIdNullable();
+  })
+  .then(() => {
+    return ensureTimesheetEntryFieldsNullable();
   })
   .then(() => {
     return ensurePendingBillPaymentBillIdNullable();

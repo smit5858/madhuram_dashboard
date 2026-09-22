@@ -64,9 +64,10 @@ const TimesheetEntry = sequelize.define(
         return value ? String(value).slice(0, 5) : value;
       },
     },
+    // Null while status is RUNNING — a live timer has no end yet.
     endTime: {
       type: DataTypes.TIME,
-      allowNull: false,
+      allowNull: true,
       get() {
         const value = this.getDataValue("endTime");
         return value ? String(value).slice(0, 5) : value;
@@ -77,9 +78,29 @@ const TimesheetEntry = sequelize.define(
       allowNull: false,
       defaultValue: false,
     },
+    // Null while status is RUNNING; set once the entry is stopped. SUM() ignores NULLs, so a
+    // running entry contributes 0 to totals until it completes.
     durationMinutes: {
       type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    // RUNNING = a live Start-Time timer with no endTime/durationMinutes yet; COMPLETED = every
+    // entry as before (manual or a finished timer). Existing rows default to COMPLETED for free.
+    status: {
+      type: DataTypes.ENUM("RUNNING", "COMPLETED"),
       allowNull: false,
+      defaultValue: "COMPLETED",
+    },
+    // Precise instants (unlike startTime/endTime's "HH:mm") the Start/End Time buttons captured —
+    // the source of truth for the live elapsed-time display and for deriving startTime/endTime/
+    // endsNextDay/durationMinutes when the timer is stopped. Null for old/manual rows.
+    startedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    endedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
     },
     notes: {
       type: DataTypes.TEXT,
