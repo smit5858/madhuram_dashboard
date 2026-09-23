@@ -3,11 +3,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
 import { useNavigate, useParams } from "react-router-dom";
 import toast from "react-hot-toast";
-import { ArrowLeft, Plus, Edit2, Trash2 } from "lucide-react";
+import { ArrowLeft, Plus, Edit2, Trash2, BadgePercent } from "lucide-react";
 import { type RootState } from "@/store/store";
 import customerLedgerService, { type LedgerEntry } from "@/services/customerLedger.service";
 import BalanceBadge from "@/shared/components/BalanceBadge";
 import LedgerPaymentModal from "./components/LedgerPaymentModal";
+import LedgerDiscountModal from "./components/LedgerDiscountModal";
 import DeleteLedgerEntryModal from "./components/DeleteLedgerEntryModal";
 import ShareStatementMenu from "./components/ShareStatementMenu";
 import { formatDisplayDate } from "@/shared/utils/date";
@@ -17,6 +18,7 @@ const describeEntry = (entry: LedgerEntry) => {
   if (entry.type === "SALE") return `Product Sale${entry.sale?.invoiceNumber ? ` (${entry.sale.invoiceNumber})` : ""}`;
   if (entry.type === "PAYMENT") return `Payment${entry.paymentMethod ? ` - ${entry.paymentMethod}` : ""}`;
   if (entry.type === "MANUAL_DEBIT") return `Manual Debit${entry.note ? ` - ${entry.note}` : ""}`;
+  if (entry.type === "DISCOUNT") return "Discount";
   return `Adjustment${entry.note ? ` - ${entry.note}` : ""}`;
 };
 
@@ -32,6 +34,7 @@ const CustomerLedger = () => {
   const canManage = auth.role === "Admin" || auth.role === "Account";
 
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [isDiscountModalOpen, setIsDiscountModalOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<LedgerEntry | null>(null);
   const [deletingEntry, setDeletingEntry] = useState<LedgerEntry | null>(null);
 
@@ -76,6 +79,7 @@ const CustomerLedger = () => {
   }
 
   const { customer, balance, entries } = ledger;
+  const pendingAmount = balance.status === "PENDING" ? Math.abs(balance.amount) : 0;
 
   return (
     <div className="p-6 bg-white rounded-xl shadow-md flex flex-col gap-6">
@@ -100,6 +104,15 @@ const CustomerLedger = () => {
         <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">Transaction History</h2>
         <div className="flex items-center gap-2">
           <ShareStatementMenu customerId={id} customerName={customer.name} customerPhone={customer.phone} balance={balance} />
+          {canManage && pendingAmount > 0 && (
+            <button
+              type="button"
+              onClick={() => setIsDiscountModalOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 active:scale-[0.98]"
+            >
+              <BadgePercent className="h-4 w-4" /> Discount
+            </button>
+          )}
           {canManage && (
             <button
               type="button"
@@ -137,8 +150,14 @@ const CustomerLedger = () => {
                     <td className="px-4 py-3.5 font-mono text-slate-400">{index + 1}</td>
                     <td className="px-4 py-3.5 whitespace-nowrap">{formatDisplayDate(entry.transactionDate)}</td>
                     <td className="px-4 py-3.5">{describeEntry(entry)}</td>
-                    <td className={`px-4 py-3.5 text-right font-bold whitespace-nowrap ${entry.amount < 0 ? "text-rose-600" : "text-emerald-600"}`}>
-                      {entry.amount < 0 ? "-" : "+"}₹{Math.abs(entry.amount).toLocaleString("en-IN")}
+                    {/* A discount is stored positive (it reduces pending) but shown as a deduction,
+                        in its own color so it reads as neither a sale nor a received payment. */}
+                    <td
+                      className={`px-4 py-3.5 text-right font-bold whitespace-nowrap ${
+                        entry.type === "DISCOUNT" ? "text-amber-600" : entry.amount < 0 ? "text-rose-600" : "text-emerald-600"
+                      }`}
+                    >
+                      {entry.type === "DISCOUNT" || entry.amount < 0 ? "-" : "+"}₹{Math.abs(entry.amount).toLocaleString("en-IN")}
                     </td>
                     <td className="px-4 py-3.5 whitespace-nowrap">{entry.paymentMethod || "—"}</td>
                     <td className="px-4 py-3.5 max-w-xs truncate">{entry.reference || entry.note || "—"}</td>
@@ -149,7 +168,8 @@ const CustomerLedger = () => {
                               form (see DebitedFormModal) — keeps that flow's field set (no
                               payment method/bank account) separate from this Collect Payment
                               modal's. */}
-                          {canManage && entry.type !== "MANUAL_DEBIT" && (
+                          {/* Discounts aren't editable (the backend rejects it) — delete and re-apply. */}
+                          {canManage && entry.type !== "MANUAL_DEBIT" && entry.type !== "DISCOUNT" && (
                             <button
                               onClick={() => setEditingEntry(entry)}
                               className="rounded p-1 text-blue-600 hover:bg-blue-50 transition"
@@ -180,6 +200,15 @@ const CustomerLedger = () => {
 
       {isPaymentModalOpen && (
         <LedgerPaymentModal customerId={id} customerName={customer.name} onClose={() => setIsPaymentModalOpen(false)} />
+      )}
+
+      {isDiscountModalOpen && (
+        <LedgerDiscountModal
+          customerId={id}
+          customerName={customer.name}
+          pendingAmount={pendingAmount}
+          onClose={() => setIsDiscountModalOpen(false)}
+        />
       )}
 
       {editingEntry && (

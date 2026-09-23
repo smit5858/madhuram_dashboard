@@ -11,6 +11,7 @@ const describeEntry = (entry) => {
   if (entry.type === "SALE") return `Product Sale${entry.sale?.invoiceNumber ? ` (${entry.sale.invoiceNumber})` : ""}`;
   if (entry.type === "PAYMENT") return `Payment${entry.paymentMethod ? ` - ${entry.paymentMethod}` : ""}`;
   if (entry.type === "MANUAL_DEBIT") return `Manual Debit${entry.note ? ` - ${entry.note}` : ""}`;
+  if (entry.type === "DISCOUNT") return "Discount";
   return `Adjustment${entry.note ? ` - ${entry.note}` : ""}`;
 };
 
@@ -100,9 +101,12 @@ function generateCustomerStatementPdf(customer, balance, entries, res) {
     x += columns[1].width;
     doc.text(describeEntry(entry), x, y, { width: columns[2].width, ellipsis: true });
     x += columns[2].width;
+    // A discount is stored positive (it reduces pending) but shown as a deduction, in its own
+    // color so it isn't mistaken for either a sale debit or a received payment.
+    const isDiscount = entry.type === "DISCOUNT";
     doc
-      .fillColor(amount < 0 ? "#e11d48" : "#059669")
-      .text(`${amount < 0 ? "-" : "+"} Rs. ${Math.abs(amount).toLocaleString("en-IN")}`, x, y, { width: columns[3].width });
+      .fillColor(isDiscount ? "#d97706" : amount < 0 ? "#e11d48" : "#059669")
+      .text(`${isDiscount || amount < 0 ? "-" : "+"} Rs. ${Math.abs(amount).toLocaleString("en-IN")}`, x, y, { width: columns[3].width });
     doc.fillColor("black");
     y += rowHeight;
   });

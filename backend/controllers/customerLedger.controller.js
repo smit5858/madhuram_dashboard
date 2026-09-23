@@ -126,6 +126,34 @@ exports.recordManualDebit = async (req, res) => {
   }
 };
 
+// POST /customers/:id/ledger/discounts — Ledger page "Discount", Admin/Account only. Reduces the
+// customer's pending amount only: a discount is not money received or spent, so (unlike
+// recordPayment) no Income/Expense entry is created and no daily-balance recalculation is needed.
+exports.recordDiscount = async (req, res) => {
+  try {
+    if (!isLedgerManager(req.user.roleName)) {
+      return res.status(403).json({ success: false, message: "Forbidden: only Admin or Account can apply a discount" });
+    }
+
+    const customer = await Customer.findByPk(req.params.id);
+    if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
+
+    const { amount, transactionDate } = req.body || {};
+
+    const entry = await sequelize.transaction((transaction) =>
+      customerLedgerService.recordDiscount(
+        { customerId: customer.id, amount, transactionDate, userId: req.user.id },
+        { transaction }
+      )
+    );
+
+    const balance = await customerLedgerService.getCustomerBalance(customer.id);
+    return res.status(201).json({ success: true, message: "Discount applied successfully", data: { entry, balance } });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
 // PUT /customers/:id/ledger/entries/:entryId — edit an entry (spec §20), Admin/Account only.
 exports.updateEntry = async (req, res) => {
   try {

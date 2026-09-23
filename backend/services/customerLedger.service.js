@@ -278,6 +278,65 @@ const recordManualDebit = async ({ customerId, amount, transactionDate, referenc
   );
 };
 
+// Ledger page "Discount" — reduces the customer's pending amount without any money changing
+// hands. Stored as a positive DISCOUNT entry so the plain SUM() balance picks it up like a
+// credit, but it is never mirrored into Income/Expense (the controller deliberately skips
+// incomeSync). Must run inside a transaction: the customer row is locked so two concurrent
+// discounts can't both pass the "not more than pending" check against the same stale balance.
+const recordDiscount = async ({ customerId, amount, transactionDate, userId }, { transaction } = {}) => {
+  const parsedAmount = parseFloat(amount);
+  if (isNaN(parsedAmount) || parsedAmount <= 0) {
+    const err = new Error("Discount amount must be greater than 0");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  await Customer.findByPk(customerId, { transaction, lock: !!transaction });
+
+  const resolvedDate = transactionDate || todayDateOnly();
+
+  // Same double-submission defense as recordManualDebit above — checked before the pending
+  // limit so a retried request returns the entry it already created instead of failing.
+  const recentDuplicate = await CustomerLedgerEntry.findOne({
+    where: {
+      customerId,
+      type: "DISCOUNT",
+      amount: parsedAmount,
+      transactionDate: resolvedDate,
+      createdAt: { [Op.gte]: new Date(Date.now() - 10000) },
+    },
+    order: [["createdAt", "DESC"]],
+    transaction,
+  });
+  if (recentDuplicate) return recentDuplicate;
+
+  const balance = await getCustomerBalance(customerId, { transaction });
+  const pending = balance.amount < 0 ? -balance.amount : 0;
+  if (pending <= 0) {
+    const err = new Error("This customer has no pending amount to discount");
+    err.statusCode = 400;
+    throw err;
+  }
+  if (parsedAmount - pending > 0.001) {
+    const err = new Error(`Discount cannot be more than the pending amount (₹${pending.toLocaleString("en-IN")})`);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  return CustomerLedgerEntry.create(
+    {
+      customerId,
+      saleId: null,
+      type: "DISCOUNT",
+      amount: parsedAmount,
+      note: "Discount applied",
+      transactionDate: resolvedDate,
+      createdBy: userId || null,
+    },
+    { transaction }
+  );
+};
+
 const entryIncludes = [
   { model: Sale, as: "sale", attributes: ["id", "invoiceNumber"] },
   { model: User, as: "creator", attributes: ["id", "name"] },
@@ -324,6 +383,14 @@ const updateEntry = async (
   if (!entry) {
     const err = new Error("Ledger entry not found");
     err.statusCode = 404;
+    throw err;
+  }
+
+  // A discount's amount was validated against the pending balance at the time it was applied —
+  // editing it here would bypass that check, so it can only be deleted and re-applied.
+  if (entry.type === "DISCOUNT") {
+    const err = new Error("A discount cannot be edited — delete it and apply a new discount instead");
+    err.statusCode = 400;
     throw err;
   }
 
@@ -560,6 +627,7 @@ module.exports = {
   recordPayment,
   recordAdjustment,
   recordManualDebit,
+  recordDiscount,
   getCustomerLedger,
   findEntryByPaymentId,
   updateEntry,

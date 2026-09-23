@@ -7,7 +7,7 @@ export interface LedgerEntry {
   customerId: number;
   saleId?: number | null;
   sale?: { id: number; invoiceNumber?: string } | null;
-  type: "SALE" | "PAYMENT" | "ADJUSTMENT" | "MANUAL_DEBIT";
+  type: "SALE" | "PAYMENT" | "ADJUSTMENT" | "MANUAL_DEBIT" | "DISCOUNT";
   amount: number;
   paymentMethod?: LedgerPaymentMethod | null;
   /** Legacy single-account fields — superseded by `bankPayments` (amount per bank), kept for
@@ -96,6 +96,18 @@ const recordManualDebit = (customerId: number, data: RecordManualDebitPayload) =
     data
   );
 
+export interface RecordDiscountPayload {
+  amount: number;
+}
+
+// Ledger page "Discount" — reduces the customer's pending amount only (no Income/Expense entry),
+// see customerLedger.controller.js#recordDiscount.
+const recordDiscount = (customerId: number, data: RecordDiscountPayload) =>
+  httpService.post<{ success: boolean; message: string; data: { entry: LedgerEntry; balance: LedgerBalance } }>(
+    `/customers/${customerId}/ledger/discounts`,
+    data
+  );
+
 export interface ManualDebitEntry {
   id: number;
   amount: number;
@@ -160,6 +172,7 @@ export default {
   deleteLedgerEntry,
   downloadStatementPdf,
   recordManualDebit,
+  recordDiscount,
   getDebtors,
   getReceivableTotals,
 };

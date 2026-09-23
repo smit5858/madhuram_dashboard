@@ -75,3 +75,14 @@ export const manualDebitSchema = z.object({
 });
 
 export type ManualDebitFormValues = z.infer<typeof manualDebitSchema>;
+
+// Ledger page "Add Discount" — capped at the customer's current pending amount (the backend
+// re-checks this against the live balance; see customerLedger.service.js#recordDiscount).
+export const createDiscountSchema = (pendingAmount: number) =>
+  z.object({
+    amount: amountField.refine((val) => Number(val) <= pendingAmount, {
+      message: `Discount cannot be more than the pending amount (₹${pendingAmount.toLocaleString("en-IN")})`,
+    }),
+  });
+
+export type DiscountFormValues = z.infer<ReturnType<typeof createDiscountSchema>>;

@@ -26,6 +26,7 @@ router.get("/:id/ledger", authenticate, authorizeAny(["/sells", "/account/debite
 router.get("/:id/ledger/statement.pdf", authenticate, authorizeAny(["/sells", "/account/debited"]), customerLedgerController.getStatementPdf);
 router.post("/:id/ledger/payments", authenticate, authorize("/account/debited", "create"), customerLedgerController.recordPayment);
 router.post("/:id/ledger/manual-debits", authenticate, authorize("/account/debited", "create"), customerLedgerController.recordManualDebit);
+router.post("/:id/ledger/discounts", authenticate, authorize("/account/debited", "create"), customerLedgerController.recordDiscount);
 router.put("/:id/ledger/entries/:entryId", authenticate, authorize("/account/debited", "update"), customerLedgerController.updateEntry);
 router.delete("/:id/ledger/entries/:entryId", authenticate, authorize("/account/debited", "delete"), customerLedgerController.deleteEntry);
 
