@@ -44,6 +44,7 @@ export type IncomeEntryFormValues = z.infer<typeof incomeEntrySchema>;
 export const incomeFilterSchema = z.object({
   search: z.string().max(150, "Search term is too long").optional(),
   paymentMethod: z.string().optional(),
+  status: z.string().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
 });

@@ -59,11 +59,12 @@ const AccountEntry = sequelize.define(
       allowNull: true,
       references: { model: "bank_accounts", key: "id" },
     },
-    // Approval workflow (Expense only). INCOME rows and other entry types are created already
-    // APPROVED (they have no approval step) — only expense.controller.js#createExpense and the
-    // auto-created courier-charge entry (courier.controller.js#completeIncomingCourier) ever
-    // start a row as PENDING. dailyBalance.service.js only sums APPROVED rows into the daily
-    // Total In/Out, so a PENDING (or REJECTED) expense has zero effect on the balance.
+    // Approval workflow. Every manual Expense/Income entry (expense.controller.js#createExpense,
+    // income.controller.js#createIncomeEntry) and every auto-created one (Sale/Courier/Customer
+    // Payment/Pending Bill) starts PENDING until an Admin approves it. Only the password-gated
+    // "Balance Adjustment" rows (income.controller.js#updateBalance) rely on this APPROVED
+    // default. dailyBalance.service.js only sums APPROVED rows into the daily Total In/Out, so a
+    // PENDING (or REJECTED) entry has zero effect on the balance.
     status: {
       type: DataTypes.ENUM("PENDING", "APPROVED", "REJECTED"),
       allowNull: false,

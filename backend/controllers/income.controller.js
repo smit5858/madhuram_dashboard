@@ -133,10 +133,11 @@ const attachSaleProducts = async (rows) => {
  * expense.controller.js untouched.
  */
 const buildIncomeWhere = (query) => {
-  const { search, paymentMethod, startDate, endDate } = query;
+  const { search, paymentMethod, startDate, endDate, status } = query;
   const where = { entryType: "INCOME" };
 
   if (paymentMethod) where.paymentMethod = paymentMethod;
+  if (status && ["PENDING", "APPROVED"].includes(status)) where.status = status;
   if (search && search.trim()) {
     const term = `%${search.trim()}%`;
     where[Op.or] = [
@@ -278,7 +279,9 @@ const validateIncomePayload = (body) => {
   return null;
 };
 
-// POST /income
+// POST /income — always created PENDING (never trusts a status from the body), same as
+// expense.controller.js#createExpense. Only an Admin approving it (see approveIncome below) makes
+// it count toward Total Income / the daily balance's Total In, so no recalculateDay is needed here.
 exports.createIncomeEntry = async (req, res) => {
   try {
     const validationError = validateIncomePayload(req.body);
@@ -302,10 +305,9 @@ exports.createIncomeEntry = async (req, res) => {
       paymentMethod: paymentMethod || null,
       bankAccountId: needsBankAccount(paymentMethod) ? bankAccountId || null : null,
       description: description || null,
+      status: "PENDING",
       createdBy: req.user.id,
     });
-
-    await recalculateDay(entryDate);
 
     const withBank = await AccountEntry.findByPk(entry.id, { include: [BANK_ACCOUNT_INCLUDE] });
 
@@ -341,6 +343,9 @@ exports.updateIncomeEntry = async (req, res) => {
     entry.paymentMethod = paymentMethod || null;
     entry.bankAccountId = needsBankAccount(paymentMethod) ? bankAccountId || null : null;
     entry.description = description || null;
+    // A non-Admin editing an already-approved entry sends it back for re-approval, so an
+    // approved amount can never be changed without an Admin signing off on it again.
+    if (req.user.roleName !== "Admin" && entry.status === "APPROVED") entry.status = "PENDING";
 
     await entry.save();
 

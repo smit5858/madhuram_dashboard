@@ -128,6 +128,12 @@ const IncomeFormModal = ({ entry, onClose }: IncomeFormModalProps) => {
                 </div>
               </div>
 
+              {!isEdit && (
+                <p className="px-6 pb-1 text-[11px] text-slate-400">
+                  New income records are created as Pending Approval and only affect the account balance once an Admin approves them.
+                </p>
+              )}
+
               <div className="flex justify-end gap-2 border-t border-slate-100 px-6 py-4">
                 <button
                   type="button"

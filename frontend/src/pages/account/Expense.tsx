@@ -24,7 +24,7 @@ const PAGE_SIZE = 10;
 
 const STATUS_OPTIONS = [
   { value: "", label: "All Status" },
-  { value: "PENDING", label: "Pending" },
+  { value: "PENDING", label: "Pending Approval" },
   { value: "APPROVED", label: "Approved" },
   { value: "REJECTED", label: "Rejected" },
 ];

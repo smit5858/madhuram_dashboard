@@ -22,6 +22,12 @@ interface ApiErrorLike {
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
+const STATUS_OPTIONS = [
+  { value: "", label: "All Status" },
+  { value: "PENDING", label: "Pending Approval" },
+  { value: "APPROVED", label: "Approved" },
+];
+
 const formatCurrency = (amount: number | string | undefined) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(Number(amount) || 0);
 
@@ -42,12 +48,13 @@ const FilterSync = ({
     setAppliedFilters((prev) => ({
       ...prev,
       paymentMethod: (values.paymentMethod || undefined) as IncomeFilters["paymentMethod"],
+      status: (values.status || undefined) as IncomeFilters["status"],
       startDate: values.startDate || undefined,
       endDate: values.endDate || undefined,
       page: 1,
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [values.paymentMethod, values.startDate, values.endDate]);
+  }, [values.paymentMethod, values.status, values.startDate, values.endDate]);
 
   return null;
 };
@@ -139,7 +146,7 @@ const Income = () => {
   });
 
   const hasActiveFilters = Boolean(
-    appliedFilters.search || appliedFilters.paymentMethod || appliedFilters.startDate || appliedFilters.endDate
+    appliedFilters.search || appliedFilters.paymentMethod || appliedFilters.status || appliedFilters.startDate || appliedFilters.endDate
   );
 
   const handleReset = () => {
@@ -163,7 +170,7 @@ const Income = () => {
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm flex items-center justify-between text-xs">
           <Formik
             innerRef={filterFormRef}
-            initialValues={{ search: "", paymentMethod: "", startDate: "", endDate: "" } as IncomeFilterValues}
+            initialValues={{ search: "", paymentMethod: "", status: "", startDate: "", endDate: "" } as IncomeFilterValues}
             validate={(values) => {
               const result = incomeFilterSchema.safeParse(values);
               return result.success ? {} : { search: result.error.issues[0]?.message };
@@ -203,6 +210,18 @@ const Income = () => {
               >
                 <option value="">All Types</option>
                 {PAYMENT_METHOD_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </Field>
+
+              <Field
+                as="select"
+                name="status"
+                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-medium text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none cursor-pointer"
+              >
+                {STATUS_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
                   </option>

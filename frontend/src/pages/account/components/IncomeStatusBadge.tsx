@@ -1,7 +1,7 @@
 import type { IncomeStatus } from "@/services/income.service";
 
 const STATUS_LABEL: Record<IncomeStatus, string> = {
-  PENDING: "Pending",
+  PENDING: "Pending Approval",
   APPROVED: "Approved",
 };
 

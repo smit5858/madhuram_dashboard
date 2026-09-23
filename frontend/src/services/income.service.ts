@@ -42,6 +42,7 @@ export interface IncomeEntryData {
 export interface IncomeFilters {
     search?: string;
     paymentMethod?: PaymentMethod | "";
+    status?: IncomeStatus | "";
     startDate?: string;
     endDate?: string;
     page?: number;
