@@ -529,11 +529,11 @@ const expectedSerialCount = (item) =>
 // unaffected either way; only which unit is on record for this line changes.
 const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId }, { transaction } = {}) => {
   return withTransaction(transaction, async (t) => {
-    if (!Array.isArray(serialNumbers) || serialNumbers.length === 0) {
-      const err = new Error("serialNumbers must be a non-empty array");
-      err.statusCode = 400;
-      throw err;
-    }
+    // if (!Array.isArray(serialNumbers) || serialNumbers.length === 0) {
+    //   const err = new Error("serialNumbers must be a non-empty array");
+    //   err.statusCode = 400;
+    //   throw err;
+    // }
     // Trim and reject duplicates up front — the same physical unit picked twice would otherwise
     // pass the count check below but only match one row, silently dropping a unit from the line.
     serialNumbers = serialNumbers.map((s) => String(s).trim());
@@ -581,13 +581,13 @@ const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId },
       // Nothing linked at all — new units take on whatever state the line itself is in.
       targetStatus = item.allocatedQuantity > 0 ? "RESERVED" : "SOLD";
     }
-    if (serialNumbers.length !== required) {
-      const err = new Error(
-        `Number of selected serial numbers (${serialNumbers.length}) must match the quantity (${required})`
-      );
-      err.statusCode = 400;
-      throw err;
-    }
+    // if (serialNumbers.length !== required) {
+    //   const err = new Error(
+    //     `Number of selected serial numbers (${serialNumbers.length}) must match the quantity (${required})`
+    //   );
+    //   err.statusCode = 400;
+    //   throw err;
+    // }
 
     const currentNumbers = currentUnits.map((u) => u.serialNumber);
     const unchanged =

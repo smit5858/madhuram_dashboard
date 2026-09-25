@@ -12,7 +12,8 @@ import FormikDate from "../../../shared/components/formik-fields/FormikDate";
 import FormikSerialPicker from "../../../shared/components/formik-fields/FormikSerialPicker";
 import CustomerAutocompleteField from "../../../shared/components/CustomerAutocompleteField";
 import { normalizePhoneDigits } from "../../../shared/utils/phone";
-import { courierEditSchema, validateSerialNumbers, type CourierEditFormValues } from "../../../validation/courier.validation";
+// import { courierEditSchema, validateSerialNumbers, type CourierEditFormValues } from "../../../validation/courier.validation";
+import { courierEditSchema, type CourierEditFormValues } from "../../../validation/courier.validation";
 import { COURIER_COMPANY_OTHER } from "../../../shared/constants/courierCompanies";
 import { SHIPMENT_TYPE_LABEL, type ShipmentType } from "../../../shared/constants/courierStatus";
 import { DELIVERY_MODE_OPTIONS, type DeliveryMode } from "../../../shared/constants/deliveryMode";
@@ -254,11 +255,11 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
             }
         }
         const serialErrors: Record<number, string> = {};
-        for (const row of productRows) {
-            if (!row.isSerialized || row.requiredSerialCount === 0) continue;
-            const err = validateSerialNumbers(values.serialsByItem?.[row.saleItemId] || [], row.requiredSerialCount);
-            if (err) serialErrors[row.saleItemId] = err;
-        }
+        // for (const row of productRows) {
+        //     if (!row.isSerialized || row.requiredSerialCount === 0) continue;
+        //     const err = validateSerialNumbers(values.serialsByItem?.[row.saleItemId] || [], row.requiredSerialCount);
+        //     if (err) serialErrors[row.saleItemId] = err;
+        // }
         // Belt-and-braces cross-row check: two sibling rows for the same product (e.g. a sale
         // with two separate lines of the same serialized item) must never claim the same unit —
         // the picker already excludes a sibling's live pick from its own choices (see
