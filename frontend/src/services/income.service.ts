@@ -24,6 +24,9 @@ export interface IncomeEntryData {
      *  Bank" field (see IncomeFormModal.tsx), same pattern as Sells/Customer Ledger. */
     bankAccountId?: number | null;
     bankAccount?: { id: number; bankName: string; accountHolderName: string; accountNumber: string } | null;
+    /** Read-only: bank(s) a Sale / Customer Ledger synced row was paid into, resolved from the
+     *  source's bank split (see income.controller.js#attachBankPayments). */
+    bankPayments?: { bankName: string; accountNumber: string; amount: string | number }[];
     description?: string | null;
     /** Read-only: the linked Sale's own Notes (entered by the sales employee on the Sell form),
      *  attached server-side for sale-linked entries. Distinct from `description` above, which is

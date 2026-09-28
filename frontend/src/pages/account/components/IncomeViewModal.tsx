@@ -44,6 +44,10 @@ const Section = ({ title, children }: { title: string; children: ReactNode }) =>
 const formatCurrency = (amount: number | string | undefined) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(Number(amount) || 0);
 
+// Account number is optional on a bank account, so drop the "— …" part when it's missing.
+const formatBank = (bank: { bankName: string; accountNumber?: string | null }) =>
+  bank.accountNumber ? `${bank.bankName} — ${bank.accountNumber}` : bank.bankName;
+
 interface IncomeViewModalProps {
   entry: IncomeEntryData;
   onClose: () => void;
@@ -99,13 +103,26 @@ const IncomeViewModal = ({ entry, onClose }: IncomeViewModalProps) => {
                 // across more than one payment method (see order.service.js#createOrder).
                 value={entry.paymentMethod ? PAYMENT_METHOD_LABEL[entry.paymentMethod] ?? entry.paymentMethod : undefined}
               />
-              {(entry.paymentMethod === "BankTransfer" || entry.paymentMethod === "UPI") && (
+              {(entry.paymentMethod === "BankTransfer" || entry.paymentMethod === "UPI" || !!entry.bankPayments?.length) && (
                 <DetailItem
                   icon={Banknote}
                   label="Bank"
-                  // entry.bankAccount is the current "Select Bank" pick; entry.bankName is the
-                  // legacy free-text value from before that field existed.
-                  value={entry.bankAccount ? `${entry.bankAccount.bankName} — ${entry.bankAccount.accountNumber}` : entry.bankName}
+                  // entry.bankAccount is the current "Select Bank" pick; entry.bankPayments is the
+                  // bank split of a Sale / Customer Ledger synced row (amounts shown only when split
+                  // across more than one account); entry.bankName is the legacy free-text value.
+                  value={
+                    entry.bankAccount
+                      ? formatBank(entry.bankAccount)
+                      : entry.bankPayments?.length
+                        ? entry.bankPayments
+                            .map((p) =>
+                              entry.bankPayments!.length > 1
+                                ? `${formatBank(p)} (₹${Number(p.amount).toLocaleString("en-IN")})`
+                                : formatBank(p)
+                            )
+                            .join(", ")
+                        : entry.bankName
+                  }
                 />
               )}
             </Section>

@@ -1,4 +1,7 @@
-const { AccountEntry, DailyAccountBalance, User, BankAccount, Sale, Courier, SaleItem, Product, SerialUnit } = require("../models");
+const {
+  AccountEntry, DailyAccountBalance, User, BankAccount, Sale, Courier, SaleItem, Product, SerialUnit,
+  SaleBankAccount, LedgerEntryBankAccount,
+} = require("../models");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const sequelize = require("../config/db");
@@ -31,6 +34,48 @@ const attachSaleNotes = async (rows) => {
     if (r.referenceType === "sale" && r.referenceId) {
       r.dataValues.saleNotes = notesById.get(r.referenceId) || null;
     }
+  }
+};
+
+/**
+ * Attaches the bank account(s) a synced INCOME row was actually paid into, as a read-only
+ * `bankPayments` field ([{ bankName, accountNumber, amount }]) for the Income view's "Bank" row.
+ * Rows auto-created by a Sale or a Customer Ledger payment never get their own bankAccountId —
+ * the bank lives on the source record's split table (SaleBankAccount / LedgerEntryBankAccount,
+ * possibly more than one account) — so it's resolved here at read time, which also covers rows
+ * synced before this existed. Rows with their own bankAccountId (manual entries) are left alone.
+ */
+const attachBankPayments = async (rows) => {
+  const list = (Array.isArray(rows) ? rows : [rows]).filter((r) => !r.bankAccountId && r.referenceId);
+  const idsOf = (type) => [...new Set(list.filter((r) => r.referenceType === type).map((r) => r.referenceId))];
+  const saleIds = idsOf("sale");
+  const ledgerEntryIds = idsOf("customerLedgerEntry");
+  if (saleIds.length === 0 && ledgerEntryIds.length === 0) return;
+
+  const bankInclude = { model: BankAccount, as: "bankAccount", attributes: ["bankName", "accountNumber"] };
+  const [saleSplits, ledgerSplits] = await Promise.all([
+    saleIds.length ? SaleBankAccount.findAll({ where: { saleId: saleIds }, include: [bankInclude], order: [["id", "ASC"]] }) : [],
+    ledgerEntryIds.length
+      ? LedgerEntryBankAccount.findAll({ where: { ledgerEntryId: ledgerEntryIds }, include: [bankInclude], order: [["id", "ASC"]] })
+      : [],
+  ]);
+
+  const group = (splits, key) => {
+    const map = new Map();
+    for (const s of splits) {
+      if (!s.bankAccount) continue;
+      if (!map.has(s[key])) map.set(s[key], []);
+      map.get(s[key]).push({ bankName: s.bankAccount.bankName, accountNumber: s.bankAccount.accountNumber, amount: s.amount });
+    }
+    return map;
+  };
+  const bySale = group(saleSplits, "saleId");
+  const byLedgerEntry = group(ledgerSplits, "ledgerEntryId");
+
+  for (const r of list) {
+    const source = r.referenceType === "sale" ? bySale : r.referenceType === "customerLedgerEntry" ? byLedgerEntry : null;
+    const payments = source?.get(r.referenceId);
+    if (payments?.length) r.dataValues.bankPayments = payments;
   }
 };
 
@@ -173,6 +218,7 @@ exports.getIncomeEntries = async (req, res) => {
     await attachSaleNotes(rows);
     await attachCourierStatus(rows);
     await attachSaleProducts(rows);
+    await attachBankPayments(rows);
 
     return res.status(200).json({
       success: true,
@@ -262,6 +308,7 @@ exports.getIncomeById = async (req, res) => {
     if (!entry) return res.status(404).json({ success: false, message: "Income record not found" });
     await attachSaleNotes(entry);
     await attachSaleProducts(entry);
+    await attachBankPayments(entry);
     return res.status(200).json({ success: true, data: entry });
   } catch (err) {
     return errorResponse(res, err);
