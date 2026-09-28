@@ -87,9 +87,11 @@ const buildSalesWhere = async (user, query) => {
   }
   if (status) where.status = status;
   if (city) where.city = { [Op.like]: `%${city}%` };
+
   const searchTerms = [];
   const customerSearch = (customerName || search || "").trim();
   const invoiceSearch = (invoiceNumber || search || "").trim();
+  const productSearch = (search || "").trim();
 
   if (customerSearch) {
     searchTerms.push(
@@ -99,6 +101,17 @@ const buildSalesWhere = async (user, query) => {
   }
   if (invoiceSearch) {
     searchTerms.push({ invoiceNumber: { [Op.like]: `%${invoiceSearch}%` } });
+  }
+  if (productSearch) {
+    const matchingProductSaleIds = await SaleItem.findAll({
+      include: [{ model: Product, where: { name: { [Op.like]: `%${productSearch}%` } }, attributes: [] }],
+      attributes: ["saleId"],
+      group: ["saleId"],
+      raw: true,
+    });
+    if (matchingProductSaleIds.length) {
+      searchTerms.push({ id: { [Op.in]: matchingProductSaleIds.map((row) => row.saleId).concat([-1]) } });
+    }
   }
 
   if (searchTerms.length) {
@@ -134,8 +147,11 @@ exports.getSales = async (req, res) => {
   try {
     const user = req.user;
     const where = await buildSalesWhere(user, req.query);
+    const pageNum = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(req.query.limit, 10) || 10, 1);
+    const offset = (pageNum - 1) * limitNum;
 
-    const sales = await Sale.findAll({
+    const { count, rows } = await Sale.findAndCountAll({
       where,
       include: [
         { model: Customer, as: "customer", attributes: ["id", "name", "phone", "email", "address", "city", "pincode"] },
@@ -154,10 +170,22 @@ exports.getSales = async (req, res) => {
         },
       ],
       order: [["createdAt", "DESC"]],
+      limit: limitNum,
+      offset,
+      distinct: true,
     });
 
-    const data = await attachCourierEntryFlags(await attachLedgerBalances(sales));
-    return res.status(200).json({ success: true, data });
+    const data = await attachCourierEntryFlags(await attachLedgerBalances(rows));
+    return res.status(200).json({
+      success: true,
+      data,
+      meta: {
+        page: pageNum,
+        limit: limitNum,
+        total: count,
+        totalPages: Math.ceil(count / limitNum) || 1,
+      },
+    });
   } catch (err) {
     return errorResponse(res, err);
   }

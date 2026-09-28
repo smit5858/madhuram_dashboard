@@ -115,6 +115,7 @@ const FilterSync = ({
       ...prev,
       customerName: debouncedSearch || undefined,
       invoiceNumber: debouncedSearch || undefined,
+      search: debouncedSearch || undefined,
       page: 1,
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -178,7 +179,7 @@ const Sells = () => {
 
   // Filters State
   const [appliedFilters, setAppliedFilters] = useState<SalesFilters>(initialStatus ? { status: initialStatus } : {});
-  const [pageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(10);
   const [isExportOpen, setIsExportOpen] = useState(false);
 
   // Query: Sells Totals (server-side authorization scoped)
@@ -1660,34 +1661,54 @@ const Sells = () => {
         )}
 
         {!isSellsLoading && !sellsError && pagePermission.canRead && sellsList.length > 0 && (
-          <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+          <div className="flex flex-col gap-3 border-t border-slate-100 px-4 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
             <span>
               Page {paginationMeta.page} of {paginationMeta.totalPages} · {paginationMeta.total} records
             </span>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={paginationMeta.page <= 1}
-                onClick={() =>
-                  setAppliedFilters((prev) => ({ ...prev, page: Math.max(1, paginationMeta.page - 1) }))
-                }
-                className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <button
-                type="button"
-                disabled={paginationMeta.page >= paginationMeta.totalPages}
-                onClick={() =>
-                  setAppliedFilters((prev) => ({
-                    ...prev,
-                    page: Math.min(paginationMeta.totalPages, paginationMeta.page + 1),
-                  }))
-                }
-                className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 text-slate-500">
+                Rows:
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    const nextPageSize = Number(e.target.value);
+                    setPageSize(nextPageSize);
+                    setAppliedFilters((prev) => ({ ...prev, page: 1 }));
+                  }}
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:border-[#3d6fe0] focus:outline-none"
+                >
+                  {[10, 20, 50, 100].map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={paginationMeta.page <= 1}
+                  onClick={() =>
+                    setAppliedFilters((prev) => ({ ...prev, page: Math.max(1, paginationMeta.page - 1) }))
+                  }
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  disabled={paginationMeta.page >= paginationMeta.totalPages}
+                  onClick={() =>
+                    setAppliedFilters((prev) => ({
+                      ...prev,
+                      page: Math.min(paginationMeta.totalPages, paginationMeta.page + 1),
+                    }))
+                  }
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           </div>
         )}
