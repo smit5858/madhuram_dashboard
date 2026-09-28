@@ -6,6 +6,7 @@ const expenseController = require("../controllers/expense.controller");
 
 // Static sub-paths declared before /:id so they are never swallowed by the param route.
 router.get("/totals", authenticate, authorize("/account/expense", "read"), expenseController.getExpenseTotals);
+router.get("/employee-suggestions", authenticate, authorize("/account/expense", "read"), expenseController.getEmployeeSuggestions);
 
 router.get("/", authenticate, authorize("/account/expense", "read"), expenseController.getExpenses);
 router.post("/", authenticate, authorize("/account/expense", "create"), expenseController.createExpense);

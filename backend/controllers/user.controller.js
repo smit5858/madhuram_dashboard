@@ -3,6 +3,15 @@ const { Op } = require("sequelize");
 const { hashPassword } = require("../helper/common");
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_REGEX = /^\d{10}$/;
+// Optional field: blank/null clears it, anything else must be exactly 10 digits (spaces are
+// stripped so a formatted "98765 43210" from the UI is accepted). Returns undefined when invalid.
+const normalizeOptionalPhone = (phone) => {
+  if (phone === null || phone === undefined) return null;
+  const digits = String(phone).replace(/\s+/g, "");
+  if (!digits) return null;
+  return PHONE_REGEX.test(digits) ? digits : undefined;
+};
 const SAFE_ATTRIBUTES = { exclude: ["password", "refreshToken", "tokenInvalidatedAt"] };
 
 // GET /users
@@ -23,7 +32,7 @@ exports.getUsers = async (req, res) => {
 
     if (search && search.trim()) {
       const s = `%${search.trim()}%`;
-      where[Op.or] = [{ name: { [Op.like]: s } }, { email: { [Op.like]: s } }];
+      where[Op.or] = [{ name: { [Op.like]: s } }, { email: { [Op.like]: s } }, { phone: { [Op.like]: s } }];
     }
 
     if (role) {
@@ -111,7 +120,12 @@ exports.getUserById = async (req, res) => {
 // POST /users
 exports.createUser = async (req, res) => {
   try {
-    const { name, email, password, roleId, allowedCity, isActive } = req.body || {};
+    const { name, email, password, roleId, allowedCity, isActive, phone } = req.body || {};
+
+    const normalizedPhone = normalizeOptionalPhone(phone);
+    if (normalizedPhone === undefined) {
+      return res.status(400).json({ success: false, message: "Phone number must be exactly 10 digits" });
+    }
 
     if (!name || !name.trim()) {
       return res.status(400).json({ success: false, message: "Name is required" });
@@ -149,6 +163,7 @@ exports.createUser = async (req, res) => {
       password: hashPassword(password),
       roleId,
       allowedCity: allowedCity ? allowedCity.trim() : null,
+      phone: normalizedPhone,
       isActive: isActive !== undefined ? Boolean(isActive) : true,
     });
 
@@ -177,7 +192,7 @@ exports.createUser = async (req, res) => {
 exports.updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, password, roleId, allowedCity, isActive } = req.body || {};
+    const { name, email, password, roleId, allowedCity, isActive, phone } = req.body || {};
 
     const user = await User.findByPk(id);
     if (!user) {
@@ -219,6 +234,14 @@ exports.updateUser = async (req, res) => {
         return res.status(400).json({ success: false, message: "Name cannot be empty" });
       }
       user.name = name.trim();
+    }
+
+    if (phone !== undefined) {
+      const normalizedPhone = normalizeOptionalPhone(phone);
+      if (normalizedPhone === undefined) {
+        return res.status(400).json({ success: false, message: "Phone number must be exactly 10 digits" });
+      }
+      user.phone = normalizedPhone;
     }
 
     if (allowedCity !== undefined) user.allowedCity = allowedCity ? allowedCity.trim() : null;

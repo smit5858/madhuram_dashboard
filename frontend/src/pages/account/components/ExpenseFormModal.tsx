@@ -1,20 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Field, Form, Formik, useFormikContext } from "formik";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { CheckCircle2, Loader2, XCircle } from "lucide-react";
-import expenseService, { type ExpenseEntryData } from "@/services/expense.service";
-import customerService, { type CustomerData } from "@/services/customer.service";
+import { XCircle } from "lucide-react";
+import expenseService, { type ExpenseEntryData, type EmployeeSuggestion } from "@/services/expense.service";
 import bankAccountService from "@/services/bankAccount.service";
+import { useDebounce } from "@/hook/useDebounce";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
 import FormikSelect from "@/shared/components/formik-fields/FormikSelect";
 import FormikDate from "@/shared/components/formik-fields/FormikDate";
-import FormikPhoneInput from "@/shared/components/formik-fields/FormikPhoneInput";
+import CustomerAutocompleteField from "@/shared/components/CustomerAutocompleteField";
 import { expenseEntrySchema, type ExpenseEntryFormValues } from "@/validation/expense.validation";
 import { PAYMENT_METHOD_OPTIONS } from "@/shared/constants/paymentMethod";
 import { getTodayISODate } from "@/shared/utils/date";
-import { useDebounce } from "@/hook/useDebounce";
-import { normalizePhoneDigits } from "@/shared/utils/phone";
+import { normalizePhoneDigits, formatPhoneDisplay } from "@/shared/utils/phone";
 
 const needsBankAccount = (paymentMethod?: string) => paymentMethod === "BankTransfer" || paymentMethod === "UPI";
 
@@ -24,118 +23,71 @@ interface ExpenseFormModalProps {
   onClose: () => void;
 }
 
-/** Debounced phone lookup + suggestions dropdown for the Mobile field, mirroring the customer
- *  autocomplete in pages/sells/Sells.tsx — lets Add Expense pull Name/Mobile from an existing
- *  customer instead of the user re-typing it every time. Lives inside <Formik> and reads/writes
- *  form state via context, same shape as Expense.tsx's FilterSync. Disabled while editing an
- *  existing entry, same as Sells.tsx skips its own lookup when editing a sale. */
-const CustomerAutofill = ({ enabled, onSelectCustomer }: { enabled: boolean; onSelectCustomer: (id: number | null) => void }) => {
+/** Expense-only: suggests matching active Users (employees) while typing in the Name field, so an
+ *  expense paid to a team member doesn't need the name re-typed. Matches name/phone via
+ *  GET /expense/employee-suggestions (authorized by Expense read, unlike GET /users which Accounts
+ *  staff usually can't access); picking an employee with a phone also fills Mobile. Opens only
+ *  while typing (not on focus) so clicking a suggestion doesn't immediately reopen the list. */
+const UserNameSuggestions = ({ onSelectUser }: { onSelectUser: () => void }) => {
   const { values, setFieldValue } = useFormikContext<ExpenseEntryFormValues>();
-  const [suggestions, setSuggestions] = useState<CustomerData[]>([]);
-  const [status, setStatus] = useState<"idle" | "loading" | "found" | "not_found">("idle");
-  const debouncedMobile = useDebounce(values.mobile, 350);
+  const [isOpen, setIsOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const debouncedName = useDebounce(values.name.trim(), 350);
 
   useEffect(() => {
-    if (!enabled) return;
-
-    let isMounted = true;
-    const cleanPhone = (debouncedMobile || "").trim();
-
-    // Deferred (not called synchronously in the effect body) so this satisfies
-    // react-hooks/set-state-in-effect — these run on the next tick either way.
-    const resetTimer = setTimeout(() => {
-      if (!isMounted) return;
-      if (cleanPhone.length < 3) {
-        setSuggestions([]);
-        setStatus("idle");
-        onSelectCustomer(null);
-      } else if (cleanPhone.length >= 10) {
-        setStatus("loading");
+    const handleClickOutside = (event: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
       }
-    }, 0);
-
-    if (cleanPhone.length < 3) {
-      return () => {
-        isMounted = false;
-        clearTimeout(resetTimer);
-      };
-    }
-
-    customerService
-      .getCustomers({ search: cleanPhone, limit: 6 })
-      .then((res) => {
-        if (!isMounted) return;
-        const matches = res.data?.data || [];
-        setSuggestions(matches);
-
-        const exactMatch = matches.find((c) => c.phone === cleanPhone);
-        if (exactMatch) {
-          setStatus("found");
-          onSelectCustomer(exactMatch.id || null);
-        } else if (cleanPhone.length >= 10) {
-          setStatus("not_found");
-          onSelectCustomer(null);
-        } else {
-          setStatus("idle");
-        }
-      })
-      .catch(() => {
-        if (isMounted) setSuggestions([]);
-      });
-
-    return () => {
-      isMounted = false;
-      clearTimeout(resetTimer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedMobile, enabled]);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
-  if (!enabled) return null;
+  const showList = isOpen && debouncedName.length >= 2;
 
-  const handleSelect = (cust: CustomerData) => {
-    setFieldValue("mobile", cust.phone);
-    setFieldValue("name", cust.name);
-    setStatus("found");
-    setSuggestions([]);
-    onSelectCustomer(cust.id || null);
+  const { data } = useQuery({
+    queryKey: ["expense-employee-suggestions", debouncedName],
+    queryFn: ({ signal }) => expenseService.getEmployeeSuggestions(debouncedName, { signal }),
+    enabled: showList,
+    retry: false,
+  });
+  const users = data?.data?.data || [];
+
+  const handleSelect = (user: EmployeeSuggestion) => {
+    setFieldValue("name", user.name);
+    if (user.phone) setFieldValue("mobile", normalizePhoneDigits(user.phone));
+    setIsOpen(false);
+    onSelectUser();
   };
 
   return (
-    <>
-      {status !== "found" && suggestions.length > 0 && (
+    <div ref={wrapperRef} onChangeCapture={() => setIsOpen(true)} className="relative">
+      <Field name="name" label="Name" placeholder="Name" component={FormikInput} />
+      {showList && users.length > 0 && (
         <div className="absolute z-30 left-0 right-0 top-full mt-1 max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
           <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100">
-            Matching Customers ({suggestions.length})
+            Matching Employees ({users.length})
           </div>
-          {suggestions.map((cust) => (
+          {users.map((user) => (
             <button
-              key={cust.id}
+              key={user.id}
               type="button"
-              onClick={() => handleSelect(cust)}
+              onClick={() => handleSelect(user)}
               className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs hover:bg-blue-50 transition-colors"
             >
               <div>
-                <p className="font-semibold text-slate-900">{cust.name}</p>
-                <p className="text-[11px] text-blue-600 font-mono">{cust.phone}</p>
+                <p className="font-semibold text-slate-900">{user.name}</p>
+                {user.phone && <p className="text-[11px] text-blue-600 font-mono">{formatPhoneDisplay(user.phone)}</p>}
               </div>
-              {cust.city && (
-                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">{cust.city}</span>
+              {user.Role?.name && (
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">{user.Role.name}</span>
               )}
             </button>
           ))}
         </div>
       )}
-      {status === "found" && (
-        <p className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
-          <CheckCircle2 className="h-3.5 w-3.5" /> Existing customer — details auto-filled
-        </p>
-      )}
-      {status === "loading" && (
-        <p className="mt-1 flex items-center gap-1 text-[11px] text-blue-600 font-medium">
-          <Loader2 className="h-3 w-3 animate-spin" /> Searching...
-        </p>
-      )}
-    </>
+    </div>
   );
 };
 
@@ -216,14 +168,27 @@ const ExpenseFormModal = ({ entry, onClose }: ExpenseFormModalProps) => {
         </div>
 
         <Formik initialValues={initialValues} validate={validate} onSubmit={handleSubmit} enableReinitialize>
-          {({ values }) => (
+          {({ values, errors, touched, setFieldValue }) => (
             <Form className="flex flex-1 flex-col overflow-hidden">
               <div className="flex-1 overflow-y-auto px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Field name="name" label="Name" placeholder="Name" component={FormikInput} />
-                <div className="relative">
-                  <Field name="mobile" label="Mobile" placeholder="9876543210" component={FormikPhoneInput} />
-                  <CustomerAutofill enabled={!isEdit} onSelectCustomer={setCustomerId} />
-                </div>
+                {/* Same customer phone search as Debited (DebitedFormModal). Picking a suggestion fills
+                    the name and links the customer; re-typing the number unlinks it, since the typed
+                    number may no longer belong to that customer. */}
+                <CustomerAutocompleteField
+                  label="Mobile"
+                  value={values.mobile || ""}
+                  onPhoneChange={(phone) => {
+                    setFieldValue("mobile", phone);
+                    setCustomerId(null);
+                  }}
+                  onSelectCustomer={(customer) => {
+                    setFieldValue("mobile", normalizePhoneDigits(customer.phone));
+                    setFieldValue("name", customer.name);
+                    setCustomerId(customer.id ?? null);
+                  }}
+                  error={touched.mobile ? errors.mobile : undefined}
+                />
+                <UserNameSuggestions onSelectUser={() => setCustomerId(null)} />
                 <Field name="product" label="Product" placeholder="Product name" component={FormikInput} />
                 <Field name="amount" label="Amount" type="number" placeholder="0.00" component={FormikInput} />
                 <Field name="entryDate" label="Date" component={FormikDate} />

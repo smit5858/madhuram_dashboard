@@ -10,6 +10,7 @@ export interface UserData {
   id: number;
   name: string;
   email: string;
+  phone?: string | null;
   roleId: number;
   Role?: UserRole;
   isActive: boolean;
@@ -22,6 +23,7 @@ export interface CreateUserPayload {
   name: string;
   email: string;
   password: string;
+  phone?: string | null;
   roleId: number;
   allowedCity?: string;
   isActive?: boolean;
@@ -31,6 +33,7 @@ export interface UpdateUserPayload {
   name?: string;
   email?: string;
   password?: string;
+  phone?: string | null;
   roleId?: number;
   allowedCity?: string;
   isActive?: boolean;

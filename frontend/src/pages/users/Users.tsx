@@ -23,6 +23,8 @@ import { useDebounce } from "@/hook/useDebounce";
 import { type RootState } from "../../store/store";
 import { formatDisplayDate } from "@/shared/utils/date";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
+import FormikPhoneInput from "@/shared/components/formik-fields/FormikPhoneInput";
+import { normalizePhoneDigits, formatPhoneDisplay } from "@/shared/utils/phone";
 import userService, {
   type UserData,
   type CreateUserPayload,
@@ -39,6 +41,7 @@ import {
 interface UserFormValues {
   name: string;
   email: string;
+  phone: string;
   password: string;
   roleId: number | "";
   allowedCity: string;
@@ -48,6 +51,7 @@ interface UserFormValues {
 const EMPTY_FORM_VALUES: UserFormValues = {
   name: "",
   email: "",
+  phone: "",
   password: "",
   roleId: "",
   allowedCity: "",
@@ -242,6 +246,8 @@ const Users = () => {
     const basePayload = {
       name: values.name.trim(),
       email: values.email.trim(),
+      // null (not undefined) so clearing the field on edit actually removes the stored number.
+      phone: values.phone || null,
       roleId: Number(values.roleId),
       allowedCity: values.allowedCity.trim() || undefined,
       isActive: values.isActive,
@@ -345,7 +351,7 @@ const Users = () => {
                 <Field
                   name="search"
                   type="text"
-                  placeholder="Search by name or email..."
+                  placeholder="Search by name, email or phone..."
                   className="w-full form-input pl-9"
                   component={FormikInput}
                 />
@@ -452,6 +458,9 @@ const Users = () => {
 
                     <td className="px-4 py-3.5">
                       <div className="font-semibold text-slate-900 whitespace-nowrap">{user.name}</div>
+                      {user.phone && (
+                        <div className="text-[11px] text-slate-500 font-mono whitespace-nowrap mt-0.5">{formatPhoneDisplay(user.phone)}</div>
+                      )}
                       <div className="text-[11px] text-slate-400 md:hidden flex items-center gap-1 mt-0.5">
                         <Mail className="h-3 w-3" />
                         {user.email}
@@ -635,6 +644,7 @@ const Users = () => {
                   ? {
                       name: selectedUser.name || "",
                       email: selectedUser.email || "",
+                      phone: normalizePhoneDigits(selectedUser.phone) || "",
                       password: "",
                       roleId: selectedUser.roleId ?? "",
                       allowedCity: selectedUser.allowedCity || "",
@@ -661,6 +671,13 @@ const Users = () => {
                     label="Email Address *"
                     placeholder="user@madhuram.com"
                     component={FormikInput}
+                  />
+
+                  <Field
+                    name="phone"
+                    label="Phone Number"
+                    placeholder="98765 43210"
+                    component={FormikPhoneInput}
                   />
 
                   <Field
@@ -778,6 +795,10 @@ const Users = () => {
                   <span className={selectedUser.isActive ? "text-emerald-600 font-semibold" : "text-rose-600 font-semibold"}>
                     {selectedUser.isActive ? "Active" : "Inactive"}
                   </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-medium block">Phone:</span>
+                  <span className="text-slate-800 font-semibold">{selectedUser.phone ? formatPhoneDisplay(selectedUser.phone) : "—"}</span>
                 </div>
                 <div>
                   <span className="text-slate-400 font-medium block">Allowed City:</span>

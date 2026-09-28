@@ -18,6 +18,11 @@ const emailField = z
   .min(1, "Email is required")
   .email("Please enter a valid email");
 
+// Optional — blank is allowed, otherwise exactly 10 digits (same rule as income.validation.ts).
+const optionalPhoneField = z
+  .union([z.string().regex(/^\d{10}$/, "Phone number must be exactly 10 digits"), z.literal("")])
+  .optional();
+
 const roleIdField = z.coerce
   .number({ error: "Role is required" })
   .min(1, "Role is required");
@@ -26,6 +31,7 @@ export const createUserSchema = z.object({
   name: nameField,
   email: emailField,
   password: z.string().min(6, "Password must be at least 6 characters"),
+  phone: optionalPhoneField,
   roleId: roleIdField,
   allowedCity: z.string().optional(),
   isActive: z.boolean().optional(),
@@ -39,6 +45,7 @@ export const editUserSchema = z.object({
   password: z
     .union([z.literal(""), z.string().min(6, "Password must be at least 6 characters")])
     .optional(),
+  phone: optionalPhoneField,
   roleId: roleIdField,
   allowedCity: z.string().optional(),
   isActive: z.boolean().optional(),

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Field, Form, Formik } from "formik";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
@@ -5,7 +6,7 @@ import { XCircle } from "lucide-react";
 import incomeService, { type IncomeEntryData } from "@/services/income.service";
 import bankAccountService from "@/services/bankAccount.service";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
-import FormikPhoneInput from "@/shared/components/formik-fields/FormikPhoneInput";
+import CustomerAutocompleteField from "@/shared/components/CustomerAutocompleteField";
 import FormikSelect from "@/shared/components/formik-fields/FormikSelect";
 import FormikDate from "@/shared/components/formik-fields/FormikDate";
 import { incomeEntrySchema, type IncomeEntryFormValues } from "@/validation/income.validation";
@@ -24,6 +25,7 @@ interface IncomeFormModalProps {
 const IncomeFormModal = ({ entry, onClose }: IncomeFormModalProps) => {
   const queryClient = useQueryClient();
   const isEdit = !!entry?.id;
+  const [customerId, setCustomerId] = useState<number | null>(entry?.customerId ?? null);
 
   const { data: bankAccountsResponse } = useQuery({
     queryKey: ["bank-accounts-active"],
@@ -81,6 +83,7 @@ const IncomeFormModal = ({ entry, onClose }: IncomeFormModalProps) => {
       paymentMethod: (values.paymentMethod || undefined) as IncomeEntryData["paymentMethod"],
       bankAccountId: needsBankAccount(values.paymentMethod) && values.bankAccountId ? Number(values.bankAccountId) : undefined,
       description: values.description || undefined,
+      customerId: customerId ?? undefined,
     });
   };
 
@@ -98,11 +101,27 @@ const IncomeFormModal = ({ entry, onClose }: IncomeFormModalProps) => {
         </div>
 
         <Formik initialValues={initialValues} validate={validate} onSubmit={handleSubmit} enableReinitialize>
-          {({ values }) => (
+          {({ values, errors, touched, setFieldValue }) => (
             <Form className="flex flex-1 flex-col overflow-hidden">
               <div className="flex-1 overflow-y-auto px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Same customer phone search as Debited (DebitedFormModal). Picking a suggestion fills
+                    the name and links the customer; re-typing the number unlinks it, since the typed
+                    number may no longer belong to that customer. */}
+                <CustomerAutocompleteField
+                  label="Customer Phone Number"
+                  value={values.customerPhone || ""}
+                  onPhoneChange={(phone) => {
+                    setFieldValue("customerPhone", phone);
+                    setCustomerId(null);
+                  }}
+                  onSelectCustomer={(customer) => {
+                    setFieldValue("customerPhone", normalizePhoneDigits(customer.phone));
+                    setFieldValue("customerName", customer.name);
+                    setCustomerId(customer.id ?? null);
+                  }}
+                  error={touched.customerPhone ? errors.customerPhone : undefined}
+                />
                 <Field name="customerName" label="Customer Name" placeholder="Customer name" component={FormikInput} />
-                <Field name="customerPhone" label="Customer Phone" placeholder="98765 43210" component={FormikPhoneInput} />
                 <Field name="productName" label="Product Name" placeholder="Product name" component={FormikInput} />
                 <Field name="serialNumber" label="Serial Number" placeholder="Serial number (if any)" component={FormikInput} />
                 <Field name="amount" label="Amount" type="number" placeholder="0.00" component={FormikInput} />

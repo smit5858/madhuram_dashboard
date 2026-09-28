@@ -1,4 +1,4 @@
-const { AccountEntry, User, BankAccount } = require("../models");
+const { AccountEntry, User, Role, BankAccount } = require("../models");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const sequelize = require("../config/db");
@@ -88,6 +88,36 @@ exports.getExpenses = async (req, res) => {
       data: rows.map(serializeExpense),
       meta: { page: pageNum, limit: limitNum, total: count, totalPages: Math.ceil(count / limitNum) || 1 },
     });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// GET /expense/employee-suggestions?search= — lets the Add Expense form suggest active users
+// (employees) by name or phone. Lives under /expense (authorized by Expense read) rather than
+// reusing GET /users, since Accounts staff usually lack /users access. Returns only the fields the
+// suggestion list needs — no email or other account details.
+exports.getEmployeeSuggestions = async (req, res) => {
+  try {
+    const search = String(req.query.search || "").trim();
+    if (search.length < 2) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+
+    const s = `%${search}%`;
+    const users = await User.findAll({
+      where: {
+        deletedAt: null,
+        isActive: true,
+        [Op.or]: [{ name: { [Op.like]: s } }, { phone: { [Op.like]: s } }],
+      },
+      attributes: ["id", "name", "phone"],
+      include: [{ model: Role, attributes: ["name"] }],
+      order: [["name", "ASC"]],
+      limit: 6,
+    });
+
+    return res.status(200).json({ success: true, data: users });
   } catch (err) {
     return errorResponse(res, err);
   }

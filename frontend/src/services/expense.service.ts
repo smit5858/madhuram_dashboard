@@ -68,7 +68,21 @@ const approveExpenseEntry = (id: number) =>
 const rejectExpenseEntry = (id: number) =>
     httpService.put<{ success: boolean; message: string; data: ExpenseEntryData }>(`/expense/${id}/reject`, {});
 
+export interface EmployeeSuggestion {
+    id: number;
+    name: string;
+    phone?: string | null;
+    Role?: { name: string } | null;
+}
+
+const getEmployeeSuggestions = (search: string, config?: { signal?: AbortSignal }) =>
+    httpService.get<{ success: boolean; data: EmployeeSuggestion[] }>("/expense/employee-suggestions", {
+        params: { search },
+        signal: config?.signal,
+    });
+
 export default {
+    getEmployeeSuggestions,
     getExpenseEntries,
     getExpenseTotals,
     getExpenseById,

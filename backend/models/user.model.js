@@ -36,6 +36,11 @@ const User = sequelize.define(
             type: DataTypes.BOOLEAN,
             defaultValue: true,
         },
+        // Optional 10-digit mobile number (digits only, same format as customers.phone).
+        phone: {
+            type: DataTypes.STRING(15),
+            allowNull: true,
+        },
         allowedCity: {
             type: DataTypes.STRING,
             allowNull: true, // null = no city restriction (Admin overrides via role check)
