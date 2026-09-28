@@ -187,6 +187,7 @@ export interface SalesFilters {
   status?: string;
   city?: string;
   customerName?: string;
+  invoiceNumber?: string;
   startDate?: string;
   endDate?: string;
   search?: string;

@@ -107,11 +107,16 @@ const FilterSync = ({
   const { values } = useFormikContext<{ search: string; startDate: string; endDate: string; status: string }>();
   const debouncedSearch = useDebounce(values.search, 400);
 
-  // The one search box filters by the customer's name or phone number, as stored directly on the
+  // The one search box filters by customer details and invoice number, as stored directly on the
   // Sale record (see sells.controller.js#buildSalesWhere) — works alongside every other
   // filter/pagination as usual.
   useEffect(() => {
-    setAppliedFilters((prev) => ({ ...prev, customerName: debouncedSearch || undefined, page: 1 }));
+    setAppliedFilters((prev) => ({
+      ...prev,
+      customerName: debouncedSearch || undefined,
+      invoiceNumber: debouncedSearch || undefined,
+      page: 1,
+    }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSearch]);
 
@@ -1353,7 +1358,7 @@ const Sells = () => {
                 <Field
                   name="search"
                   type="text"
-                  placeholder="Search by customer..."
+                  placeholder="Search by customer or invoice..."
                   className="rounded-full border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-3 text-xs text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                 />
               </div>
