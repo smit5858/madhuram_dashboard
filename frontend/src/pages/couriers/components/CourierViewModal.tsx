@@ -118,6 +118,12 @@ const CourierViewModal = ({ courier, onClose }: CourierViewModalProps) => {
     if (line.isNonInventory) return line.serialNumber ? [line.serialNumber] : [];
     return line.isSerialized ? line.assigned.map((u) => u.serialNumber) : [];
   };
+  /** What to show when serialInfoForSaleItem returns an empty array — a serialized line whose
+   *  serials haven't been picked yet is "Not Selected", not "Not Required". */
+  const emptySerialLabel = (saleItemId?: number | null): string => {
+    const line = saleItemId ? serialLines.find((l) => l.saleItemId === saleItemId) : undefined;
+    return line?.isSerialized && line.requiredCount > 0 ? "Not Selected" : "Not Required";
+  };
 
   const { data: companiesResponse } = useQuery({
     queryKey: ["courier-companies-picker"],
@@ -211,7 +217,7 @@ const CourierViewModal = ({ courier, onClose }: CourierViewModalProps) => {
                   <DetailItem
                     icon={Hash}
                     label={serials.length > 1 ? "Serial Numbers" : "Serial Number"}
-                    value={serials.length > 0 ? serials.join(", ") : "Not Required"}
+                    value={serials.length > 0 ? serials.join(", ") : emptySerialLabel(courier.saleItemId)}
                     full
                   />
                 );
@@ -305,7 +311,7 @@ const CourierViewModal = ({ courier, onClose }: CourierViewModalProps) => {
                             {s.quantity ? ` × ${s.quantity}` : ""}
                           </td>
                           <td className="px-3 py-2.5 font-mono text-[10px] text-slate-600">
-                            {serials === null ? "—" : serials.length > 0 ? serials.join(", ") : "Not Required"}
+                            {serials === null ? "—" : serials.length > 0 ? serials.join(", ") : emptySerialLabel(s.saleItemId)}
                           </td>
                           <td className="px-3 py-2.5">
                             <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${STATUS_BADGE_CLASS[s.status || "PENDING"]}`}>

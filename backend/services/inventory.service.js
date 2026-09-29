@@ -589,6 +589,17 @@ const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId },
     //   throw err;
     // }
 
+    // Units only FIFO-held by reserveStock were never shown as selected, so an empty pick means
+    // "nothing chosen yet" — keep them backing the reservation instead of releasing them.
+    if (serialNumbers.length === 0 && item.serialsManuallySelected === false) {
+      return { serialUnitIds: currentUnits.map((u) => u.id) };
+    }
+    // Any non-empty submission is an explicit user pick, even one matching the FIFO units.
+    if (serialNumbers.length > 0 && item.serialsManuallySelected !== true) {
+      item.serialsManuallySelected = true;
+      await item.save({ transaction: t });
+    }
+
     const currentNumbers = currentUnits.map((u) => u.serialNumber);
     const unchanged =
       serialNumbers.length === currentNumbers.length && serialNumbers.every((s) => currentNumbers.includes(s));

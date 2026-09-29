@@ -617,6 +617,7 @@ const createOrder = async ({
           fulfilledQuantity: 0,
           backorderedQuantity: 0,
           notes: trimmedItemNotes,
+          serialsManuallySelected: !!serialNumbers,
         },
         { transaction: t }
       );
@@ -1238,6 +1239,7 @@ const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialN
         fulfilledQuantity: 0,
         backorderedQuantity: 0,
         notes: trimmedItemNotes,
+        serialsManuallySelected: Array.isArray(serialNumbers) && serialNumbers.length > 0,
       },
       { transaction: t }
     );
@@ -1358,6 +1360,9 @@ const updateOrderItem = async ({ saleId, saleItemId, quantity, sellingPrice, not
         item.allocatedQuantity += reserveResult.allocated;
         item.backorderedQuantity += reserveResult.backordered;
         newlyAllocated = reserveResult.allocated;
+        // The extra units were FIFO-held, not user-picked — the line's serials must be
+        // re-selected in the Courier picker rather than shown pre-filled.
+        if (reserveResult.serialUnitIds.length > 0) item.serialsManuallySelected = false;
       } else if (delta < 0) {
         let toRelease = -delta;
         const releaseFromBackorder = Math.min(toRelease, item.backorderedQuantity);

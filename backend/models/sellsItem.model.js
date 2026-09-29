@@ -82,6 +82,15 @@ const SaleItem = sequelize.define(
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    // Whether this line's serial units were picked by a user (true) or only held by
+    // reserveStock's FIFO fallback (false). FIFO-held units still back the reservation but are
+    // never shown as "selected" in the Courier serial picker — the user must choose them.
+    // NULL = line created before this flag existed; treated as user-picked.
+    serialsManuallySelected: {
+      type: DataTypes.BOOLEAN,
+      allowNull: true,
+      defaultValue: null,
+    },
   },
   {
     tableName: "sells_items",

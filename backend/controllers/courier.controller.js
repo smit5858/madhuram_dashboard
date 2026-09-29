@@ -425,11 +425,21 @@ exports.getCourierSerials = async (req, res) => {
         const isSerialized = item.Product?.productType === "SERIALIZED";
         const heldForItem = held.filter((u) => u.saleItemId === item.id && u.productId === item.productId);
         const reserved = heldForItem.filter((u) => u.status === "RESERVED");
-        const assigned = (reserved.length > 0 ? reserved : heldForItem.filter((u) => u.status === "SOLD")).map((u) => ({
+        const heldUnits = reserved.length > 0 ? reserved : heldForItem.filter((u) => u.status === "SOLD");
+        // Units only FIFO-held by reserveStock (see SaleItem.serialsManuallySelected) are offered
+        // as ordinary choices, not reported as assigned — the user must pick serials manually.
+        const autoHeld = item.serialsManuallySelected === false;
+        const assigned = (autoHeld ? [] : heldUnits).map((u) => ({
           id: u.id,
           serialNumber: u.serialNumber,
           status: u.status,
         }));
+        const availableForItem = [
+          ...(autoHeld ? heldUnits : []),
+          ...availableUnits.filter((u) => u.productId === item.productId),
+        ]
+          .sort((a, b) => a.id - b.id)
+          .map((u) => ({ id: u.id, serialNumber: u.serialNumber }));
         return {
           courierId: c.id,
           saleItemId: item.id,
@@ -447,11 +457,9 @@ exports.getCourierSerials = async (req, res) => {
           // The line's quantity (see inventoryService.expectedSerialCount), not assigned.length —
           // a line that's short of serials must ask for the full count so the missing ones get
           // picked, instead of treating the shortfall as the requirement.
-          requiredCount: isSerialized ? inventoryService.expectedSerialCount(item) || assigned.length : 0,
+          requiredCount: isSerialized ? inventoryService.expectedSerialCount(item) || heldUnits.length : 0,
           assigned: isSerialized ? assigned : [],
-          available: isSerialized
-            ? availableUnits.filter((u) => u.productId === item.productId).map((u) => ({ id: u.id, serialNumber: u.serialNumber }))
-            : [],
+          available: isSerialized ? availableForItem : [],
         };
       })
       .filter(Boolean);

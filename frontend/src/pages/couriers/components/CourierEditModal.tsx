@@ -254,7 +254,20 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
                 if (!errors[field]) errors[field] = issue.message;
             }
         }
+        // Courier company is never pre-selected, so an outgoing shipment sent by courier must
+        // have one picked manually before saving (Office Pickup doesn't need one).
+        const courierRequired = formDirection === "OUT" && (values.deliveryMode || "COURIER") === "COURIER";
+        if (courierRequired && !values.courierCompany && !errors.courierCompany) {
+            errors.courierCompany = "Please select a courier company";
+        }
         const serialErrors: Record<number, string> = {};
+        // Serial numbers are never pre-selected — every serialized line needs a manual pick.
+        for (const row of productRows) {
+            if (!row.isSerialized || row.requiredSerialCount === 0) continue;
+            if ((values.serialsByItem?.[row.saleItemId] || []).length === 0) {
+                serialErrors[row.saleItemId] = row.requiredSerialCount > 1 ? "Please select the serial numbers" : "Please select a serial number";
+            }
+        }
         // for (const row of productRows) {
         //     if (!row.isSerialized || row.requiredSerialCount === 0) continue;
         //     const err = validateSerialNumbers(values.serialsByItem?.[row.saleItemId] || [], row.requiredSerialCount);
@@ -438,7 +451,7 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
 
                             <Field
                                 name="courierCompany"
-                                label="Courier Company Name"
+                                label={formDirection === "OUT" && (values.deliveryMode || "COURIER") === "COURIER" ? "Courier Company Name *" : "Courier Company Name"}
                                 placeholder="Select a courier company"
                                 options={COMPANY_OPTIONS}
                                 component={FormikSelect}
@@ -560,7 +573,7 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
                                                         </p>
                                                     ) : (
                                                         <>
-                                                        {row.currentSerials.length < row.requiredSerialCount && (
+                                                        {row.currentSerials.length > 0 && row.currentSerials.length < row.requiredSerialCount && (
                                                             <p className="mt-2 text-xs text-amber-600">
                                                                 Only {row.currentSerials.length} of {row.requiredSerialCount} serial numbers are on record for this product — select the remaining {row.requiredSerialCount - row.currentSerials.length}.
                                                             </p>
