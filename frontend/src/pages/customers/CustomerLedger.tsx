@@ -11,6 +11,7 @@ import LedgerPaymentModal from "./components/LedgerPaymentModal";
 import LedgerDiscountModal from "./components/LedgerDiscountModal";
 import DeleteLedgerEntryModal from "./components/DeleteLedgerEntryModal";
 import ShareStatementMenu from "./components/ShareStatementMenu";
+import SaleItemsModal from "./components/SaleItemsModal";
 import { formatDisplayDate } from "@/shared/utils/date";
 import { formatPhoneDisplay } from "@/shared/utils/phone";
 
@@ -37,6 +38,7 @@ const CustomerLedger = () => {
   const [isDiscountModalOpen, setIsDiscountModalOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<LedgerEntry | null>(null);
   const [deletingEntry, setDeletingEntry] = useState<LedgerEntry | null>(null);
+  const [viewingSaleEntry, setViewingSaleEntry] = useState<LedgerEntry | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["customer-ledger", id],
@@ -149,7 +151,24 @@ const CustomerLedger = () => {
                   <tr key={entry.id} className="hover:bg-slate-50/70 transition-colors">
                     <td className="px-4 py-3.5 font-mono text-slate-400">{index + 1}</td>
                     <td className="px-4 py-3.5 whitespace-nowrap">{formatDisplayDate(entry.transactionDate)}</td>
-                    <td className="px-4 py-3.5">{describeEntry(entry)}</td>
+                    <td className="px-4 py-3.5">
+                      {entry.type === "SALE" && entry.sale?.invoiceNumber ? (
+                        <>
+                          Product Sale (
+                          <button
+                            type="button"
+                            onClick={() => setViewingSaleEntry(entry)}
+                            className="font-semibold text-blue-600 hover:underline"
+                            title="View products"
+                          >
+                            {entry.sale.invoiceNumber}
+                          </button>
+                          )
+                        </>
+                      ) : (
+                        describeEntry(entry)
+                      )}
+                    </td>
                     {/* A discount is stored positive (it reduces pending) but shown as a deduction,
                         in its own color so it reads as neither a sale nor a received payment. */}
                     <td
@@ -214,6 +233,8 @@ const CustomerLedger = () => {
       {editingEntry && (
         <LedgerPaymentModal customerId={id} customerName={customer.name} entry={editingEntry} onClose={() => setEditingEntry(null)} />
       )}
+
+      {viewingSaleEntry && <SaleItemsModal entry={viewingSaleEntry} onClose={() => setViewingSaleEntry(null)} />}
 
       {deletingEntry && (
         <DeleteLedgerEntryModal

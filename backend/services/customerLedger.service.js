@@ -1,6 +1,6 @@
 const { Op } = require("sequelize");
 const sequelize = require("../config/db");
-const { CustomerLedgerEntry, Customer, Sale, User, BankAccount, LedgerEntryBankAccount } = require("../models");
+const { CustomerLedgerEntry, Customer, Sale, SaleItem, Product, User, BankAccount, LedgerEntryBankAccount } = require("../models");
 
 const todayDateOnly = () => new Date().toISOString().slice(0, 10);
 
@@ -338,7 +338,21 @@ const recordDiscount = async ({ customerId, amount, transactionDate, userId }, {
 };
 
 const entryIncludes = [
-  { model: Sale, as: "sale", attributes: ["id", "invoiceNumber"] },
+  {
+    model: Sale,
+    as: "sale",
+    attributes: ["id", "invoiceNumber"],
+    // Line items so the ledger's invoice link can show which products the sale was for without
+    // a separate /sells/:id call (which would also require /sells read permission).
+    include: [
+      {
+        model: SaleItem,
+        as: "items",
+        attributes: ["id", "quantity", "sellingPrice", "fulfillmentStatus"],
+        include: [{ model: Product, attributes: ["id", "name"] }],
+      },
+    ],
+  },
   { model: User, as: "creator", attributes: ["id", "name"] },
   { model: BankAccount, as: "bankAccount", attributes: ["id", "bankName", "accountHolderName", "accountNumber"] },
   {

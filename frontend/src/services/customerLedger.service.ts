@@ -6,7 +6,11 @@ export interface LedgerEntry {
   id: number;
   customerId: number;
   saleId?: number | null;
-  sale?: { id: number; invoiceNumber?: string } | null;
+  sale?: {
+    id: number;
+    invoiceNumber?: string;
+    items?: { id: number; quantity: number; sellingPrice: number | string; fulfillmentStatus?: string; Product?: { id: number; name: string } | null }[];
+  } | null;
   type: "SALE" | "PAYMENT" | "ADJUSTMENT" | "MANUAL_DEBIT" | "DISCOUNT";
   amount: number;
   paymentMethod?: LedgerPaymentMethod | null;

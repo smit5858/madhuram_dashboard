@@ -321,7 +321,11 @@ exports.approveExpense = async (req, res) => {
       if (!row) return { entry: null };
       if (row.status === "APPROVED") return { entry: row, alreadyApproved: true };
 
+      // An expense counts toward the balance on the day it is approved, not the day it was
+      // requested — a PENDING row never contributed to its old date's total, so only the new
+      // (approval) date needs recalculating below.
       row.status = "APPROVED";
+      row.entryDate = dayjs().format("YYYY-MM-DD");
       await row.save({ transaction });
       return { entry: row, alreadyApproved: false };
     });
