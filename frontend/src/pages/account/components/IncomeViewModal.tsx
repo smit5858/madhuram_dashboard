@@ -87,8 +87,8 @@ const IncomeViewModal = ({ entry, onClose }: IncomeViewModalProps) => {
             </Section>
 
             <Section title="Product">
-              <DetailItem icon={Package} label="Product Name" value={entry.productName} />
-              <DetailItem icon={Hash} label="Serial Number" value={entry.serialNumber} />
+              <DetailItem icon={Package} label="Product Name" value={entry.productName} full />
+              <DetailItem icon={Hash} label="Serial Number" value={entry.serialNumber} full />
             </Section>
 
             <Section title="Transaction">

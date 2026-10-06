@@ -294,11 +294,8 @@ const Income = () => {
                       <div className="text-gray-800 max-w-50 truncate" title={entry.productName || "—"}>
                         {entry.productName || "—"}
                       </div>
-                      {entry.serialNumber && (
-                        <div className="text-xs text-gray-400" title={`SN: ${entry.serialNumber}`}>
-                          SN: {entry.serialNumber}
-                        </div>
-                      )}
+                      {/* Serial numbers are shown only in IncomeViewModal — a multi-unit sale's
+                          list is too long for a table cell and would stretch the row. */}
                     </td>
                     <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap">{formatCurrency(entry.amount)}</td>
                     <td className="px-4 py-3 whitespace-nowrap text-gray-500">{formatDisplayDate(entry.entryDate)}</td>
