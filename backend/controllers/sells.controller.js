@@ -224,42 +224,20 @@ exports.exportSales = async (req, res) => {
   }
 };
 
-// GET /sells/totals?startDate=&endDate= — date range is optional (all-time totals when
-// absent, unchanged from before); when present, narrows the sum the same way buildSalesWhere's
-// list/export date filter does, so a dashboard can reuse this one endpoint for "Today"/"This
-// month" KPIs instead of needing a separate aggregate per window.
+// GET /sells/totals — accepts the same filters as the list (search, status, userId, date
+// range, ...) via buildSalesWhere, so the Sells page summary cards always match the table's
+// current filters. Date range is optional (all-time totals when absent), so a dashboard can
+// reuse this one endpoint for "Today"/"This month" KPIs instead of a separate aggregate.
 exports.getSellsTotals = async (req, res) => {
   try {
     const user = req.user;
     const canViewAll = user && (await canViewAllRecords(user, "/sells"));
-    const { startDate, endDate } = req.query;
-    const where = {};
-
-    if (canViewAll) {
-      const { userId, createdBy } = req.query;
-      const targetUser = userId || createdBy;
-      if (targetUser) {
-        where.createdBy = targetUser;
-      }
-    } else {
-      where.createdBy = user.id;
-    }
-
-    if (startDate || endDate) {
-      where.createdAt = {};
-      if (startDate) where.createdAt[Op.gte] = new Date(startDate);
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        where.createdAt[Op.lte] = end;
-      }
-    }
+    const where = await buildSalesWhere(user, req.query);
+    // CANCELLED sales are excluded unless the caller explicitly filters for them.
+    if (!where.status) where.status = { [Op.ne]: "CANCELLED" };
 
     const totals = await Sale.findAll({
-      where: {
-        ...where,
-        status: { [Op.ne]: "CANCELLED" },
-      },
+      where,
       attributes: [
         [sequelize.fn("SUM", sequelize.col("sellingAmount")), "totalSellingAmount"],
         [sequelize.fn("SUM", sequelize.col("collectedAmount")), "totalCollectedAmount"],

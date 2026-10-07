@@ -32,7 +32,7 @@ import ProductSearchSelect from "@/pages/sells/components/ProductSearchSelect";
 import PaymentsEditor from "@/pages/sells/components/PaymentsEditor";
 import { validatePaymentRows, sumPaymentRows, needsBankAccount, PAYMENT_ENTRY_METHODS, type PaymentRow, type PaymentEntryMethod } from "@/pages/sells/utils/paymentRows";
 import { blurNumberInputOnWheel } from "@/shared/utils/input";
-import { formatDisplayDate, getTodayISODate } from "@/shared/utils/date";
+import { formatDisplayDate, getFirstOfMonthISODate, getTodayISODate } from "@/shared/utils/date";
 import { normalizePhoneDigits, formatPhoneDisplay } from "@/shared/utils/phone";
 
 interface FormItem {
@@ -182,10 +182,18 @@ const Sells = () => {
   const [pageSize, setPageSize] = useState(10);
   const [isExportOpen, setIsExportOpen] = useState(false);
 
-  // Query: Sells Totals (server-side authorization scoped)
+  // Query: Sells Totals (server-side authorization scoped). Uses the same filters as the table;
+  // with no date range picked, the cards default to the current month (so they reset monthly).
+  const hasDateFilter = Boolean(appliedFilters.startDate || appliedFilters.endDate);
+  const totalsFilters: SalesFilters = {
+    ...appliedFilters,
+    page: undefined,
+    ...(hasDateFilter ? {} : { startDate: getFirstOfMonthISODate(), endDate: getTodayISODate() }),
+  };
+  const totalsPeriodLabel = hasDateFilter ? "selected period" : "this month";
   const { data: totalsResponse } = useQuery({
-    queryKey: ["sells-totals", appliedFilters.userId],
-    queryFn: () => saleService.getSellsTotals({ userId: appliedFilters.userId }),
+    queryKey: ["sells-totals", totalsFilters],
+    queryFn: () => saleService.getSellsTotals(totalsFilters),
     enabled: pagePermission.canRead,
   });
 
@@ -1297,7 +1305,7 @@ const Sells = () => {
             ₹{totalsData.totalSellingAmount.toLocaleString("en-IN")}
           </div>
           <p className="mt-1 text-[11px] text-slate-500">
-            {canViewAllSales ? "Combined team selling total" : "Your total sales contribution"}
+            {canViewAllSales ? "Combined team selling total" : "Your total sales contribution"}, {totalsPeriodLabel}
           </p>
         </div>
 
@@ -1313,7 +1321,7 @@ const Sells = () => {
           <div className="mt-2 text-2xl font-bold text-emerald-700 font-mono">
             ₹{totalsData.totalCollectedAmount.toLocaleString("en-IN")}
           </div>
-          <p className="mt-1 text-[11px] text-slate-500">Total payments received</p>
+          <p className="mt-1 text-[11px] text-slate-500">Payments received, {totalsPeriodLabel}</p>
         </div>
 
         <div className="rounded-2xl border border-amber-100 bg-linear-to-br from-amber-50/60 to-white p-4 shadow-sm">
@@ -1328,7 +1336,7 @@ const Sells = () => {
           <div className="mt-2 text-2xl font-bold text-amber-700 font-mono">
             ₹{totalsData.totalPendingAmount.toLocaleString("en-IN")}
           </div>
-          <p className="mt-1 text-[11px] text-slate-500">Outstanding balance</p>
+          <p className="mt-1 text-[11px] text-slate-500">Outstanding balance, {totalsPeriodLabel}</p>
         </div>
 
         <div className="rounded-2xl border border-indigo-100 bg-linear-to-br from-indigo-50/60 to-white p-4 shadow-sm">
@@ -1343,7 +1351,7 @@ const Sells = () => {
           <div className="mt-2 text-2xl font-bold text-slate-900 font-mono">
             {totalsData.totalSalesCount}
           </div>
-          <p className="mt-1 text-[11px] text-slate-500">Recorded transactions</p>
+          <p className="mt-1 text-[11px] text-slate-500">Recorded transactions, {totalsPeriodLabel}</p>
         </div>
       </div>
 

@@ -9,6 +9,13 @@ export const getTodayISODate = (): string => {
   return `${year}-${month}-${day}`;
 };
 
+/** First day of the current month as YYYY-MM-DD, local timezone (same convention as
+ *  getTodayISODate above). */
+export const getFirstOfMonthISODate = (): string => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+};
+
 /** Formats any date-bearing value as "DD-MM-YYYY" — the app-wide display format. A plain
  *  `YYYY-MM-DD` value (e.g. a Sequelize DATEONLY field like `entryDate`/`billDate`) is
  *  reordered directly, without going through `Date`, so it can't drift a calendar day in

@@ -10,15 +10,10 @@ import customerService from "@/services/customer.service";
 import KpiCard from "./components/KpiCard";
 import GenericTrendChart from "./components/GenericTrendChart";
 import RecentOrders from "./components/RecentOrders";
-import { getTodayISODate } from "@/shared/utils/date";
+import { getFirstOfMonthISODate, getTodayISODate } from "@/shared/utils/date";
 
 const formatCurrency = (amount: number) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
-
-const firstOfMonthISODate = () => {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-};
 
 // Sales (+ Admin, via reuse) dashboard. Gated on the same /sells and /customers permissions
 // their own module pages check — same pattern as AccountsDashboard.tsx.
@@ -46,7 +41,7 @@ const SalesDashboard = () => {
 
   const { data: monthResp, isLoading: monthLoading } = useQuery({
     queryKey: ["dashboard-sales-month", today],
-    queryFn: () => sellsService.getSellsTotals({ startDate: firstOfMonthISODate(), endDate: today }),
+    queryFn: () => sellsService.getSellsTotals({ startDate: getFirstOfMonthISODate(), endDate: today }),
     enabled: canRead.sells,
   });
 
