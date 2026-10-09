@@ -5,6 +5,7 @@ const sequelize = require("../config/db");
 const { recalculateDay } = require("../services/dailyBalance.service");
 const { notify } = require("../services/notification.service");
 const { canViewAllRecords } = require("../helper/permissionScope");
+const { exportAccountEntries, EXPENSE_EXPORT_COLUMNS } = require("../services/accountExport.service");
 
 const errorResponse = (res, err) => res.status(err.statusCode || 500).json({ success: false, message: err.message });
 
@@ -88,6 +89,35 @@ exports.getExpenses = async (req, res) => {
       data: rows.map(serializeExpense),
       meta: { page: pageNum, limit: limitNum, total: count, totalPages: Math.ceil(count / limitNum) || 1 },
     });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// GET /expense/export?format=pdf|excel&search=&status=
+// Exports every row matching the list's filters (unpaginated) — same buildExpenseWhere, so the
+// own-only vs viewAllRecords scope is enforced identically to the table.
+exports.exportExpenses = async (req, res) => {
+  try {
+    const where = await buildExpenseWhere(req.user, req.query);
+    const rows = await AccountEntry.findAll({
+      where,
+      include: [{ model: User, as: "creator", attributes: ["id", "name"] }, BANK_ACCOUNT_INCLUDE],
+      order: [["entryDate", "DESC"], ["createdAt", "DESC"]],
+    });
+
+    const format = req.query.format === "pdf" ? "pdf" : "excel";
+    return await exportAccountEntries(
+      format,
+      {
+        title: "Expense",
+        filePrefix: "expense",
+        columns: EXPENSE_EXPORT_COLUMNS,
+        rows: rows.map((r) => r.get({ plain: true })),
+        filters: req.query,
+      },
+      res
+    );
   } catch (err) {
     return errorResponse(res, err);
   }

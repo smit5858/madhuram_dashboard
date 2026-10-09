@@ -84,6 +84,10 @@ const getIncomeTotals = (params?: IncomeFilters, config?: { signal?: AbortSignal
         signal: config?.signal,
     });
 
+/** Unpaginated export of the filtered Income list — page/limit are ignored server-side. */
+const exportIncome = (format: "pdf" | "excel", filters?: IncomeFilters) =>
+    httpService.get<Blob>("/income/export", { params: { ...filters, format }, responseType: "blob" });
+
 const getDailyBalances = (
     params?: { page?: number; limit?: number; startDate?: string; endDate?: string },
     config?: { signal?: AbortSignal }
@@ -114,6 +118,7 @@ const approveIncomeEntry = (id: number) =>
 export default {
     getIncomeEntries,
     getIncomeTotals,
+    exportIncome,
     getDailyBalances,
     getIncomeById,
     createIncomeEntry,

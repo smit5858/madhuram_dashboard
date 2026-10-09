@@ -14,6 +14,7 @@ import { formatDisplayDate } from "@/shared/utils/date";
 import ExpenseStatusBadge from "./components/ExpenseStatusBadge";
 import ExpenseViewModal from "./components/ExpenseViewModal";
 import ExpenseFormModal from "./components/ExpenseFormModal";
+import ExportDropdown from "@/shared/components/ExportDropdown";
 
 interface ApiErrorLike {
   response?: { data?: { message?: string } };
@@ -236,15 +237,21 @@ const Expense = () => {
               </button>
             </div>
 
-            {pagePermission.canCreate && (
-              <button
-                type="button"
-                onClick={() => setShowAddModal(true)}
-                className="inline-flex items-center justify-center gap-1.5 rounded-full bg-[#3d6fe0] px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-blue-500/10 hover:bg-[#3162d2] active:scale-[0.98]"
-              >
-                <Plus className="h-4 w-4" /> Add Expense
-              </button>
-            )}
+            <div className="flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:items-center">
+              <ExportDropdown
+                filePrefix="expense"
+                onExport={(format) => expenseService.exportExpenses(format, appliedFilters)}
+              />
+              {pagePermission.canCreate && (
+                <button
+                  type="button"
+                  onClick={() => setShowAddModal(true)}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-full bg-[#3d6fe0] px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-blue-500/10 hover:bg-[#3162d2] active:scale-[0.98]"
+                >
+                  <Plus className="h-4 w-4" /> Add Expense
+                </button>
+              )}
+            </div>
           </Form>
         </Formik>
       </div>

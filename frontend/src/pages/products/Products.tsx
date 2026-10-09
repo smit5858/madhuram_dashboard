@@ -31,9 +31,14 @@ import productService, {
   type CreateProductPayload,
   type UpdateProductPayload,
   type ProductFilters,
+  type SerialUnitDetail,
 } from "../../services/product.service";
 import dealerService, { type DealerData, type DealerListResponse } from "../../services/dealer.service";
-import inventoryService, { type ReceiveNonSerialPayload, type ReceiveSerializedPayload } from "../../services/inventory.service";
+import inventoryService, {
+  type ReceiveNonSerialPayload,
+  type ReceiveSerializedPayload,
+  type UpdateSerialUnitPayload,
+} from "../../services/inventory.service";
 import AddressAutocompleteInput from "@/shared/components/AddressAutocompleteInput";
 import { getTodayISODate, formatDisplayDate } from "@/shared/utils/date";
 import {
@@ -45,6 +50,7 @@ import {
   editProductSchema,
   receiveNonSerialStockSchema,
   receiveSerializedStockSchema,
+  editSerialUnitSchema,
   type ProductFilterValues,
 } from "@/validation/product.validation";
 import { createDealerSchema, type CreateDealerFormValues } from "@/validation/dealer.validation";
@@ -704,6 +710,160 @@ const ReceiveStockModal = ({
   );
 };
 
+interface EditSerialUnitFormValues {
+  serialNumber: string;
+  purchasePrice: number | "";
+  sellingPrice: number | "";
+  purchaseDate: string;
+  dealerId: number | "";
+}
+
+/** Edits one already-received serial unit from the product detail's Serial Units table.
+ *  RESERVED/SOLD units are tied to a sale, so only their purchase details stay editable
+ *  (the backend enforces the same rule). */
+const EditSerialUnitModal = ({
+  unit,
+  productId,
+  dealers,
+  onClose,
+}: {
+  unit: SerialUnitDetail;
+  productId: number;
+  dealers: DealerData[];
+  onClose: () => void;
+}) => {
+  const queryClient = useQueryClient();
+  const isSaleLinked = unit.status === "RESERVED" || unit.status === "SOLD";
+
+  const updateSerialUnitMutation = useMutation({
+    mutationFn: (payload: UpdateSerialUnitPayload) => inventoryService.updateSerialUnit(unit.id, payload),
+    onSuccess: (res) => {
+      toast.success(res.data?.message || "Serial unit updated successfully");
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["product-detail", productId] });
+      onClose();
+    },
+    onError: (err: ApiErrorLike) => {
+      toast.error(err.response?.data?.message || err.message || "Failed to update serial unit");
+    },
+  });
+
+  const initialValues: EditSerialUnitFormValues = {
+    serialNumber: unit.serialNumber,
+    purchasePrice: unit.purchasePrice ?? "",
+    sellingPrice: isSaleLinked ? "" : (unit.sellingPrice ?? ""),
+    purchaseDate: unit.purchaseDate ? unit.purchaseDate.slice(0, 10) : "",
+    dealerId: unit.dealer?.id ?? "",
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900">Edit Serial Unit</h3>
+            <p className="text-xs text-slate-500 font-mono">{unit.serialNumber}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition"
+          >
+            <XCircle className="h-5 w-5" />
+          </button>
+        </div>
+
+        <Formik<EditSerialUnitFormValues>
+          initialValues={initialValues}
+          validate={(values) => parseFormikErrors(editSerialUnitSchema.safeParse(values))}
+          onSubmit={(values, helpers) => {
+            const payload: UpdateSerialUnitPayload = {
+              purchasePrice: values.purchasePrice === "" ? null : Number(values.purchasePrice),
+              purchaseDate: values.purchaseDate || null,
+              dealerId: values.dealerId === "" ? null : Number(values.dealerId),
+            };
+            if (!isSaleLinked) {
+              payload.serialNumber = values.serialNumber.trim();
+              payload.sellingPrice = values.sellingPrice === "" ? null : Number(values.sellingPrice);
+            }
+            updateSerialUnitMutation.mutate(payload, { onSettled: () => helpers.setSubmitting(false) });
+          }}
+        >
+          {({ values, setFieldValue, isSubmitting }) => (
+            <Form className="space-y-3">
+              {isSaleLinked && (
+                <p className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-700">
+                  This unit is {unit.status} — only its purchase details can be changed.
+                </p>
+              )}
+              {isSaleLinked ? (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Serial Number</label>
+                  <div className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-mono text-slate-500">
+                    {unit.serialNumber}
+                  </div>
+                </div>
+              ) : (
+                <Field name="serialNumber" label="Serial Number *" placeholder="Scan or type serial number" component={FormikInput} />
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <Field name="purchasePrice" type="number" label="Purchase Price" placeholder="0.00" component={FormikInput} />
+                {!isSaleLinked && (
+                  <Field name="sellingPrice" type="number" label="Selling Price" placeholder="0.00" component={FormikInput} />
+                )}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Purchase Date</label>
+                  <input
+                    type="date"
+                    value={values.purchaseDate}
+                    onChange={(e) => setFieldValue("purchaseDate", e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Dealer / Supplier</label>
+                  <select
+                    value={values.dealerId}
+                    onChange={(e) => setFieldValue("dealerId", e.target.value ? Number(e.target.value) : "")}
+                    className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                  >
+                    <option value="">-- No dealer --</option>
+                    {dealers.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting || updateSerialUnitMutation.isPending}
+                  className="rounded-lg bg-[#3d6fe0] px-5 py-2 text-xs font-semibold text-white shadow hover:bg-[#3162d2] disabled:opacity-50 transition"
+                >
+                  {isSubmitting || updateSerialUnitMutation.isPending ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </Form>
+          )}
+        </Formik>
+      </div>
+    </div>
+  );
+};
+
 /** Global "search by serial number → history" lookup. A serial is only unique per product
  *  (see serialUnit.model.js), so a query can legitimately match units on more than one
  *  product — the user picks which match they meant before the full timeline loads. */
@@ -935,6 +1095,7 @@ const Products = () => {
   const [selectedProduct, setSelectedProduct] = useState<ProductData | null>(null);
   const [detailProductId, setDetailProductId] = useState<number | null>(null);
   const [unitSearchQuery, setUnitSearchQuery] = useState("");
+  const [editingSerialUnit, setEditingSerialUnit] = useState<SerialUnitDetail | null>(null);
   const [receiveStockProduct, setReceiveStockProduct] = useState<ProductData | null>(null);
   const [isSerialLookupOpen, setIsSerialLookupOpen] = useState(false);
   const [dealerQuickAdd, setDealerQuickAdd] = useState<{
@@ -988,6 +1149,18 @@ const Products = () => {
     },
     onError: (err: ApiErrorLike) => {
       toast.error(err.response?.data?.message || err.message || "Failed to deactivate product");
+    },
+  });
+
+  const deleteSerialUnitMutation = useMutation({
+    mutationFn: (id: number) => inventoryService.deleteSerialUnit(id),
+    onSuccess: (res) => {
+      toast.success(res.data?.message || "Serial unit deleted successfully");
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["product-detail", detailProductId] });
+    },
+    onError: (err: ApiErrorLike) => {
+      toast.error(err.response?.data?.message || err.message || "Failed to delete serial unit");
     },
   });
 
@@ -1109,6 +1282,12 @@ const Products = () => {
     }
 
     createProductMutation.mutate(createPayload, { onSettled: () => helpers.setSubmitting(false) });
+  };
+
+  const handleDeleteSerialUnit = (unit: SerialUnitDetail) => {
+    if (window.confirm(`Are you sure you want to delete serial number "${unit.serialNumber}"? This cannot be undone.`)) {
+      deleteSerialUnitMutation.mutate(unit.id);
+    }
   };
 
   const handleDelete = (product: ProductData) => {
@@ -2002,11 +2181,16 @@ const Products = () => {
                                     <th className="py-1.5 pr-3 whitespace-nowrap">Customer Name</th>
                                     <th className="py-1.5 pr-3 whitespace-nowrap">Selling Date</th>
                                     <th className="py-1.5 pr-3 whitespace-nowrap">Selling Amount</th>
+                                    {(pagePermission.canUpdate || pagePermission.canDelete) && (
+                                      <th className="py-1.5 pr-3 whitespace-nowrap text-right">Actions</th>
+                                    )}
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-200">
                                   {filteredUnits.map((u, idx) => {
                                     const isSold = u.status === "SOLD";
+                                    // Mirrors inventory.service.js#deleteSerialUnit — units ever tied to a sale can't be deleted.
+                                    const canDeleteUnit = !["RESERVED", "SOLD", "RETURNED"].includes(u.status);
                                     return (
                                       <tr key={u.id}>
                                         <td className="py-1.5 pr-3 whitespace-nowrap">{idx + 1}</td>
@@ -2032,6 +2216,33 @@ const Products = () => {
                                         <td className="py-1.5 pr-3 whitespace-nowrap">
                                           {isSold ? formatCurrency(u.sellingPrice) : <span className="italic text-slate-400">Not Sold</span>}
                                         </td>
+                                        {(pagePermission.canUpdate || pagePermission.canDelete) && (
+                                          <td className="py-1.5 pr-3 whitespace-nowrap">
+                                            <div className="flex items-center justify-end gap-1">
+                                              {pagePermission.canUpdate && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => setEditingSerialUnit(u)}
+                                                  title="Edit Serial Unit"
+                                                  className="rounded p-1 text-blue-600 hover:bg-blue-50 transition"
+                                                >
+                                                  <Edit2 className="h-3.5 w-3.5" />
+                                                </button>
+                                              )}
+                                              {pagePermission.canDelete && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleDeleteSerialUnit(u)}
+                                                  disabled={!canDeleteUnit || deleteSerialUnitMutation.isPending}
+                                                  title={canDeleteUnit ? "Delete Serial Unit" : `A ${u.status} unit cannot be deleted`}
+                                                  className="rounded p-1 text-rose-500 hover:bg-rose-50 transition disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                                                >
+                                                  <Trash2 className="h-3.5 w-3.5" />
+                                                </button>
+                                              )}
+                                            </div>
+                                          </td>
+                                        )}
                                       </tr>
                                     );
                                   })}
@@ -2065,6 +2276,15 @@ const Products = () => {
           product={receiveStockProduct}
           dealers={dealers}
           onClose={() => setReceiveStockProduct(null)}
+        />
+      )}
+
+      {editingSerialUnit && detailProductId !== null && (
+        <EditSerialUnitModal
+          unit={editingSerialUnit}
+          productId={detailProductId}
+          dealers={dealers}
+          onClose={() => setEditingSerialUnit(null)}
         />
       )}
 

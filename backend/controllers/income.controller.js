@@ -7,6 +7,7 @@ const dayjs = require("dayjs");
 const sequelize = require("../config/db");
 const { checkPassword } = require("../helper/common");
 const { recalculateDay, getPreviousClosing } = require("../services/dailyBalance.service");
+const { exportAccountEntries, INCOME_EXPORT_COLUMNS } = require("../services/accountExport.service");
 
 const errorResponse = (res, err) => res.status(err.statusCode || 500).json({ success: false, message: err.message });
 
@@ -225,6 +226,38 @@ exports.getIncomeEntries = async (req, res) => {
       data: rows,
       meta: { page: pageNum, limit: limitNum, total: count, totalPages: Math.ceil(count / limitNum) || 1 },
     });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// GET /income/export?format=pdf|excel&search=&paymentMethod=&status=&startDate=&endDate=
+// Exports every row matching the list's filters (unpaginated) via the same buildIncomeWhere, so
+// the file always matches what the table shows.
+exports.exportIncome = async (req, res) => {
+  try {
+    const where = buildIncomeWhere(req.query);
+    const rows = await AccountEntry.findAll({
+      where,
+      include: [{ model: User, as: "creator", attributes: ["id", "name"] }, BANK_ACCOUNT_INCLUDE],
+      order: [["entryDate", "DESC"], ["createdAt", "DESC"]],
+    });
+
+    await attachSaleProducts(rows);
+    await attachBankPayments(rows);
+
+    const format = req.query.format === "pdf" ? "pdf" : "excel";
+    return await exportAccountEntries(
+      format,
+      {
+        title: "Income",
+        filePrefix: "income",
+        columns: INCOME_EXPORT_COLUMNS,
+        rows: rows.map((r) => r.get({ plain: true })),
+        filters: req.query,
+      },
+      res
+    );
   } catch (err) {
     return errorResponse(res, err);
   }

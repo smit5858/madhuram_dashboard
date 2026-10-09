@@ -133,3 +133,10 @@ export const receiveSerializedStockSchema = z.object({
 });
 
 export type ReceiveSerializedStockFormValues = z.infer<typeof receiveSerializedStockSchema>;
+
+// Edit one already-received serial unit.
+export const editSerialUnitSchema = z.object({
+  serialNumber: z.string().trim().min(1, "Serial number is required"),
+  purchasePrice: optionalAmountField,
+  sellingPrice: optionalAmountField,
+});

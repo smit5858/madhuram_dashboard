@@ -62,9 +62,25 @@ const receiveStock = (data: ReceiveNonSerialPayload | ReceiveSerializedPayload) 
 const updateSerialStatus = (id: number, data: { status: "AVAILABLE" | "DAMAGED" | "LOST"; notes?: string }) =>
   httpService.put<{ success: boolean; message: string; data: SerialUnitData }>(`/inventory/serials/${id}`, data);
 
+export interface UpdateSerialUnitPayload {
+  serialNumber?: string;
+  purchasePrice?: number | null;
+  sellingPrice?: number | null;
+  purchaseDate?: string | null;
+  dealerId?: number | null;
+}
+
+const updateSerialUnit = (id: number, data: UpdateSerialUnitPayload) =>
+  httpService.put<{ success: boolean; message: string; data: SerialUnitData }>(`/inventory/serials/${id}/details`, data);
+
+const deleteSerialUnit = (id: number) =>
+  httpService.delete<{ success: boolean; message: string; data: { id: number } }>(`/inventory/serials/${id}`);
+
 export default {
   getSerials,
   getSerialById,
   receiveStock,
   updateSerialStatus,
+  updateSerialUnit,
+  deleteSerialUnit,
 };

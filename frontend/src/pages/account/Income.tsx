@@ -14,6 +14,7 @@ import { formatDisplayDate } from "@/shared/utils/date";
 import IncomeViewModal from "./components/IncomeViewModal";
 import IncomeFormModal from "./components/IncomeFormModal";
 import IncomeStatusBadge from "./components/IncomeStatusBadge";
+import ExportDropdown from "@/shared/components/ExportDropdown";
 
 interface ApiErrorLike {
   response?: { data?: { message?: string } };
@@ -242,6 +243,10 @@ const Income = () => {
             </Form>
           </Formik>
           <div className="flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:items-center sm:justify-end">
+            <ExportDropdown
+              filePrefix="income"
+              onExport={(format) => incomeService.exportIncome(format, appliedFilters)}
+            />
             {pagePermission.canCreate && (
               <button
                 type="button"

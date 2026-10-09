@@ -6,6 +6,7 @@ const incomeController = require("../controllers/income.controller");
 
 // Static sub-paths declared before /:id so they are never swallowed by the param route.
 router.get("/totals", authenticate, authorize("/account/income", "read"), incomeController.getIncomeTotals);
+router.get("/export", authenticate, authorize("/account/income", "read"), incomeController.exportIncome);
 router.get("/daily-balances", authenticate, authorize("/account/income", "read"), incomeController.getDailyBalances);
 // Role-checked inline in the controller (Admin or Account) — independent of canUpdate, since
 // Account can perform this balance correction even though it cannot edit Income records.

@@ -11,6 +11,8 @@ router.post("/receive", authenticate, authorize("/products", "create"), inventor
 router.get("/serials", authenticate, authorize("/products", "read"), inventoryController.getSerials);
 router.get("/serials/:id", authenticate, authorize("/products", "read"), inventoryController.getSerialById);
 router.put("/serials/:id", authenticate, authorize("/products", "update"), inventoryController.updateSerialStatus);
+router.put("/serials/:id/details", authenticate, authorize("/products", "update"), inventoryController.updateSerialUnit);
+router.delete("/serials/:id", authenticate, authorize("/products", "delete"), inventoryController.deleteSerialUnit);
 router.get("/backorders", authenticate, authorize("/products", "read"), inventoryController.getBackorders);
 
 module.exports = router;

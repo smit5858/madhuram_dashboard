@@ -1059,6 +1059,97 @@ const updateSerialStatus = async ({ serialUnitId, status, userId, notes }, { tra
   });
 };
 
+// Units tied to a sale — their serial number is what the invoice/income entry shows, and their
+// selling price is read from the SaleItem, so only purchase provenance stays editable on them.
+const SALE_LINKED_SERIAL_STATUSES = ["RESERVED", "SOLD"];
+
+// Manual correction of one unit's details (typo in serial number, wrong purchase price, etc.).
+const updateSerialUnit = async (
+  { serialUnitId, serialNumber, purchasePrice, sellingPrice, purchaseDate, dealerId, userId },
+  { transaction } = {}
+) => {
+  return withTransaction(transaction, async (t) => {
+    const unit = await SerialUnit.findByPk(serialUnitId, { transaction: t, lock: true });
+    if (!unit) throw new Error("Serial unit not found");
+
+    const isSaleLinked = SALE_LINKED_SERIAL_STATUSES.includes(unit.status);
+    const changes = [];
+
+    if (serialNumber !== undefined) {
+      const trimmed = String(serialNumber || "").trim();
+      if (!trimmed) throw new Error("Serial number is required");
+      if (trimmed !== unit.serialNumber) {
+        if (isSaleLinked) {
+          throw new Error(`Serial number cannot be changed on a ${unit.status} unit`);
+        }
+        changes.push(`serial ${unit.serialNumber} -> ${trimmed}`);
+        unit.serialNumber = trimmed;
+      }
+    }
+    if (sellingPrice !== undefined) {
+      if (isSaleLinked) {
+        throw new Error(`Selling price cannot be changed on a ${unit.status} unit`);
+      }
+      unit.sellingPrice = sellingPrice === "" ? null : sellingPrice;
+    }
+    if (purchasePrice !== undefined) unit.purchasePrice = purchasePrice === "" ? null : purchasePrice;
+    if (purchaseDate !== undefined) unit.purchaseDate = purchaseDate || null;
+    if (dealerId !== undefined) unit.dealerId = dealerId || null;
+
+    await unit.save({ transaction: t });
+
+    await StockMovement.create(
+      {
+        productId: unit.productId,
+        type: "ADJUSTMENT",
+        quantity: 0,
+        reservedDelta: 0,
+        referenceType: "serialUnit",
+        referenceId: unit.id,
+        createdBy: userId,
+        notes: `Serial ${unit.serialNumber} details edited${changes.length ? `: ${changes.join(", ")}` : ""}`,
+      },
+      { transaction: t }
+    );
+
+    return unit;
+  });
+};
+
+// Removes a unit entered by mistake. Units that were ever part of a sale (RESERVED/SOLD, or
+// RETURNED which keeps saleItemId for audit lineage) are refused — write those off instead.
+const deleteSerialUnit = async ({ serialUnitId, userId }, { transaction } = {}) => {
+  return withTransaction(transaction, async (t) => {
+    const unit = await SerialUnit.findByPk(serialUnitId, { transaction: t, lock: true });
+    if (!unit) throw new Error("Serial unit not found");
+
+    if ([...SALE_LINKED_SERIAL_STATUSES, "RETURNED"].includes(unit.status)) {
+      const err = new Error(`A ${unit.status} serial unit cannot be deleted`);
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const { id, productId, serialNumber } = unit;
+    await unit.destroy({ transaction: t });
+
+    await StockMovement.create(
+      {
+        productId,
+        type: "ADJUSTMENT",
+        quantity: 0,
+        reservedDelta: 0,
+        referenceType: "serialUnit",
+        referenceId: id,
+        createdBy: userId,
+        notes: `Serial ${serialNumber} deleted`,
+      },
+      { transaction: t }
+    );
+
+    return { id };
+  });
+};
+
 module.exports = {
   LOW_STOCK_THRESHOLD,
   STOCK_TRACKED_TYPES,
@@ -1076,6 +1167,8 @@ module.exports = {
   allocateBackorders,
   adjustStock,
   updateSerialStatus,
+  updateSerialUnit,
+  deleteSerialUnit,
   recomputeSaleFulfillmentStatus,
   computeItemFulfillmentStatus,
   isNonInventoryProduct,

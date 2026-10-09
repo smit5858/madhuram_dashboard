@@ -50,6 +50,10 @@ const getExpenseEntries = (params?: ExpenseFilters, config?: { signal?: AbortSig
 const getExpenseTotals = (config?: { signal?: AbortSignal }) =>
     httpService.get<{ success: boolean; data: ExpenseTotalsData }>("/expense/totals", { signal: config?.signal });
 
+/** Unpaginated export of the filtered Expense list — page/limit are ignored server-side. */
+const exportExpenses = (format: "pdf" | "excel", filters?: ExpenseFilters) =>
+    httpService.get<Blob>("/expense/export", { params: { ...filters, format }, responseType: "blob" });
+
 const getExpenseById = (id: number) =>
     httpService.get<{ success: boolean; data: ExpenseEntryData }>(`/expense/${id}`);
 
@@ -85,6 +89,7 @@ export default {
     getEmployeeSuggestions,
     getExpenseEntries,
     getExpenseTotals,
+    exportExpenses,
     getExpenseById,
     createExpenseEntry,
     updateExpenseEntry,

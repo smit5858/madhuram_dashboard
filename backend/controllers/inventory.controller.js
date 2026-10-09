@@ -210,6 +210,44 @@ exports.updateSerialStatus = async (req, res) => {
   }
 };
 
+// PUT /inventory/serials/:id/details — { serialNumber, purchasePrice, sellingPrice, purchaseDate, dealerId }
+exports.updateSerialUnit = async (req, res) => {
+  try {
+    const user = req.user;
+    const { id } = req.params;
+    const { serialNumber, purchasePrice, sellingPrice, purchaseDate, dealerId } = req.body || {};
+
+    const unit = await inventoryService.updateSerialUnit({
+      serialUnitId: id,
+      serialNumber,
+      purchasePrice,
+      sellingPrice,
+      purchaseDate,
+      dealerId,
+      userId: user.id,
+    });
+    return res.status(200).json({ success: true, message: "Serial unit updated successfully", data: unit });
+  } catch (err) {
+    if (err.name === "SequelizeUniqueConstraintError") {
+      return res.status(409).json({ success: false, message: "Duplicate serial number for this product" });
+    }
+    return errorResponse(res, err);
+  }
+};
+
+// DELETE /inventory/serials/:id
+exports.deleteSerialUnit = async (req, res) => {
+  try {
+    const user = req.user;
+    const { id } = req.params;
+
+    const data = await inventoryService.deleteSerialUnit({ serialUnitId: id, userId: user.id });
+    return res.status(200).json({ success: true, message: "Serial unit deleted successfully", data });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
 // GET /inventory/backorders?productId=&saleId=
 exports.getBackorders = async (req, res) => {
   try {
