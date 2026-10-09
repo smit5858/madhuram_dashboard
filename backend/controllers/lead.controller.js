@@ -3,6 +3,8 @@ const { Op } = require("sequelize");
 const { canViewAllRecords } = require("../helper/permissionScope");
 const { notify } = require("../services/notification.service");
 const orderService = require("../services/order.service");
+const { exportLeads: exportLeadFile, STATUS_LABELS, APPROVAL_LABELS } = require("../services/leadExport.service");
+const dayjs = require("dayjs");
 
 const ROUTE_PATH = "/leads";
 
@@ -161,17 +163,172 @@ const buildLeadWhere = async (user, query) => {
     if (followUpEndDate) where.followUp1Date[Op.lte] = followUpEndDate;
   }
 
-  if (startDate || endDate) {
+  const { startDate: createdFrom, endDate: createdTo } = resolveCreatedRange({ startDate, endDate, month: query.month });
+  if (createdFrom || createdTo) {
     where.createdAt = {};
-    if (startDate) where.createdAt[Op.gte] = new Date(startDate);
-    if (endDate) {
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999);
-      where.createdAt[Op.lte] = end;
-    }
+    // Both bounds in server-local time ("T00:00:00" — a bare YYYY-MM-DD would parse as UTC
+    // midnight and drop the start day's early-morning leads), inclusive of the whole end day.
+    if (createdFrom) where.createdAt[Op.gte] = new Date(`${createdFrom}T00:00:00`);
+    if (createdTo) where.createdAt[Op.lte] = new Date(`${createdTo}T23:59:59.999`);
   }
 
   return where;
+};
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const isValidDate = (value) => DATE_RE.test(value) && dayjs(value).format("YYYY-MM-DD") === value;
+const isPositiveInt = (value) => /^\d+$/.test(String(value)) && parseInt(value, 10) > 0;
+
+// Created-date range from an explicit startDate/endDate, or else a whole `month` (YYYY-MM).
+// An explicit range always wins so the table's date pickers and a month shortcut can't conflict.
+const resolveCreatedRange = ({ startDate, endDate, month }) => {
+  if (startDate || endDate) return { startDate, endDate };
+  if (month && MONTH_RE.test(month)) {
+    const first = dayjs(`${month}-01`);
+    return { startDate: first.format("YYYY-MM-DD"), endDate: first.endOf("month").format("YYYY-MM-DD") };
+  }
+  return {};
+};
+
+// Strict validation for the export endpoint only — getLeads keeps its existing lenient parsing.
+const validateLeadExportQuery = (query) => {
+  const { format, startDate, endDate, month, followUpStartDate, followUpEndDate, status, approvalStatus, salesEmployeeId, platformId, productId, search } =
+    query;
+  if (format && !["pdf", "excel"].includes(format)) return "format must be pdf or excel";
+  for (const [name, value] of Object.entries({ startDate, endDate, followUpStartDate, followUpEndDate })) {
+    if (value && !isValidDate(value)) return `${name} must be a valid date (YYYY-MM-DD)`;
+  }
+  if (month && !MONTH_RE.test(month)) return "month must be in YYYY-MM format";
+  if (startDate && endDate && startDate > endDate) return "startDate cannot be after endDate";
+  if (followUpStartDate && followUpEndDate && followUpStartDate > followUpEndDate) return "followUpStartDate cannot be after followUpEndDate";
+  if (status && !VALID_STATUSES.includes(status)) return `status must be one of ${VALID_STATUSES.join(", ")}`;
+  if (approvalStatus && !VALID_APPROVAL_STATUSES.includes(approvalStatus)) {
+    return `approvalStatus must be one of ${VALID_APPROVAL_STATUSES.join(", ")}`;
+  }
+  for (const [name, value] of Object.entries({ salesEmployeeId, platformId, productId })) {
+    if (value && !isPositiveInt(value)) return `${name} must be a valid id`;
+  }
+  if (search && String(search).length > 150) return "Search term is too long";
+  return null;
+};
+
+const LEAD_EXPORT_ATTRIBUTES = [
+  "id",
+  "customerName",
+  "companyName",
+  "phone",
+  "address",
+  "city",
+  "quantity",
+  "status",
+  "approvalStatus",
+  "createdBy",
+  "createdAt",
+  ...[1, 2, 3].flatMap((n) => [`followUp${n}Date`, `followUp${n}Status`, `followUp${n}Notes`]),
+];
+
+const LEAD_EXPORT_INCLUDE = [
+  { model: Platform, as: "platform", attributes: ["name"] },
+  { model: Product, as: "product", attributes: ["name"] },
+  { model: User, as: "salesEmployee", attributes: ["name"] },
+];
+
+const describeLeadPeriod = ({ startDate, endDate }) => {
+  if (!startDate && !endDate) return "All dates";
+  if (startDate && endDate) {
+    const first = dayjs(startDate);
+    if (first.date() === 1 && first.endOf("month").format("YYYY-MM-DD") === endDate) return first.format("MMMM YYYY");
+    return `${formatDisplay(startDate)} to ${formatDisplay(endDate)}`;
+  }
+  return startDate ? `From ${formatDisplay(startDate)}` : `Up to ${formatDisplay(endDate)}`;
+};
+
+// Leads_2026-10 for a whole month, Leads_2026-10-01_to_2026-10-15 for a range, Leads_All otherwise.
+// Kept in sync with frontend lead.service.ts#leadExportFileName.
+const leadExportFileBase = ({ startDate, endDate }) => {
+  if (startDate && endDate) {
+    const first = dayjs(startDate);
+    if (first.date() === 1 && first.endOf("month").format("YYYY-MM-DD") === endDate) return `Leads_${first.format("YYYY-MM")}`;
+    return `Leads_${startDate}_to_${endDate}`;
+  }
+  if (startDate) return `Leads_from_${startDate}`;
+  if (endDate) return `Leads_until_${endDate}`;
+  return "Leads_All";
+};
+
+const formatDisplay = (value) => dayjs(value).format("DD-MM-YYYY");
+
+// GET /leads/export?format=pdf|excel&<same filters as GET /leads>&month=YYYY-MM
+// Exports EVERY lead matching the list's filters (unpaginated). Scope comes from the same
+// buildLeadWhere as the table, so a user without viewAllRecords is always pinned to their own
+// leads — a salesEmployeeId they pass is ignored, never trusted.
+exports.exportLeads = async (req, res) => {
+  try {
+    const validationError = validateLeadExportQuery(req.query);
+    if (validationError) return res.status(400).json({ success: false, message: validationError });
+
+    const canViewAll = await canViewAllRecords(req.user, ROUTE_PATH);
+    const { salesEmployeeId, platformId, productId } = req.query;
+
+    let employeeLabel = "All Employees";
+    if (!canViewAll) {
+      const self = await User.findByPk(req.user.id, { attributes: ["name"] });
+      employeeLabel = self?.name || "My Leads";
+    } else if (salesEmployeeId) {
+      const employee = await User.findByPk(salesEmployeeId, { attributes: ["name"] });
+      if (!employee) return res.status(400).json({ success: false, message: "Selected employee does not exist" });
+      employeeLabel = employee.name;
+    }
+
+    const where = await buildLeadWhere(req.user, req.query);
+    const rows = await Lead.findAll({
+      where,
+      attributes: LEAD_EXPORT_ATTRIBUTES,
+      include: LEAD_EXPORT_INCLUDE,
+      order: [["createdAt", "DESC"], ["id", "DESC"]],
+    });
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: "No leads match the selected filters" });
+    }
+
+    const [platform, product] = await Promise.all([
+      platformId ? Platform.findByPk(platformId, { attributes: ["name"] }) : null,
+      productId ? Product.findByPk(productId, { attributes: ["name"] }) : null,
+    ]);
+    const { search, status, approvalStatus, city, followUpStartDate, followUpEndDate } = req.query;
+    const filterParts = [];
+    if (status) filterParts.push(`Status: ${STATUS_LABELS[status]}`);
+    if (approvalStatus) filterParts.push(`Approval: ${APPROVAL_LABELS[approvalStatus]}`);
+    if (platform) filterParts.push(`Source: ${platform.name}`);
+    if (product) filterParts.push(`Product: ${product.name}`);
+    if (city && city.trim()) filterParts.push(`City: ${city.trim()}`);
+    if (followUpStartDate || followUpEndDate) {
+      filterParts.push(
+        `Follow-up: ${followUpStartDate ? formatDisplay(followUpStartDate) : "Start"} to ${followUpEndDate ? formatDisplay(followUpEndDate) : "Any"}`
+      );
+    }
+    if (search && search.trim()) filterParts.push(`Search: "${search.trim()}"`);
+
+    const createdRange = resolveCreatedRange(req.query);
+    const format = req.query.format === "pdf" ? "pdf" : "excel";
+    return await exportLeadFile(
+      format,
+      rows.map((r) => r.get({ plain: true })),
+      {
+        periodLabel: describeLeadPeriod(createdRange),
+        employeeLabel,
+        filterLabel: filterParts.length ? `Filters — ${filterParts.join(" | ")}` : "Filters — None",
+        fileBaseName: leadExportFileBase(createdRange),
+      },
+      res
+    );
+  } catch (err) {
+    // Once the file stream has started the JSON error can't be sent — just cut the response.
+    if (res.headersSent) return res.end();
+    return errorResponse(res, err);
+  }
 };
 
 // GET /leads

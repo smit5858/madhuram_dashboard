@@ -7,6 +7,8 @@ const leadController = require("../controllers/lead.controller");
 const ROUTE_PATH = "/leads";
 
 router.get("/stats", authenticate, authorize(ROUTE_PATH, "read"), leadController.getLeadStats);
+// Declared before /:id so "export" is never swallowed by the param route.
+router.get("/export", authenticate, authorize(ROUTE_PATH, "read"), leadController.exportLeads);
 router.get("/", authenticate, authorize(ROUTE_PATH, "read"), leadController.getLeads);
 router.post("/", authenticate, authorize(ROUTE_PATH, "create"), leadController.createLead);
 router.get("/:id", authenticate, authorize(ROUTE_PATH, "read"), leadController.getLeadById);

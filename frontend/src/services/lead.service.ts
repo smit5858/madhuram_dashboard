@@ -78,6 +78,8 @@ export interface LeadFilters {
   followUpEndDate?: string;
   startDate?: string;
   endDate?: string;
+  /** YYYY-MM — whole-month created-date filter; ignored when startDate/endDate are set. */
+  month?: string;
   page?: number;
   limit?: number;
 }
@@ -118,7 +120,37 @@ const rejectLead = (id: number, rejectionReason: string) =>
 const getLeadStats = (params?: LeadFilters, config?: { signal?: AbortSignal }) =>
   httpService.get<{ success: boolean; data: LeadStats }>("/leads/stats", { params, signal: config?.signal });
 
+export type LeadExportFormat = "pdf" | "excel";
+
+/** Unpaginated export of every lead matching the filters — page/limit are stripped, and the
+ *  backend pins non-viewAll users to their own leads regardless of salesEmployeeId. */
+const exportLeads = (format: LeadExportFormat, filters?: LeadFilters) => {
+  const params: LeadFilters & { format: LeadExportFormat } = { ...filters, format };
+  delete params.page;
+  delete params.limit;
+  return httpService.get<Blob>("/leads/export", { params, responseType: "blob" });
+};
+
+const isWholeMonth = (startDate: string, endDate: string) => {
+  const [year, month, day] = startDate.split("-").map(Number);
+  if (day !== 1) return false;
+  const lastDay = new Date(year, month, 0).getDate();
+  return endDate === `${startDate.slice(0, 7)}-${String(lastDay).padStart(2, "0")}`;
+};
+
+/** Leads_2026-10.xlsx for a whole month, Leads_2026-10-01_to_2026-10-15.pdf for a range —
+ *  kept in sync with backend lead.controller.js#leadExportFileBase. */
+export const leadExportFileName = (format: LeadExportFormat, filters?: LeadFilters) => {
+  const { startDate, endDate } = filters ?? {};
+  let base = "Leads_All";
+  if (startDate && endDate) base = isWholeMonth(startDate, endDate) ? `Leads_${startDate.slice(0, 7)}` : `Leads_${startDate}_to_${endDate}`;
+  else if (startDate) base = `Leads_from_${startDate}`;
+  else if (endDate) base = `Leads_until_${endDate}`;
+  return `${base}.${format === "pdf" ? "pdf" : "xlsx"}`;
+};
+
 export default {
+  exportLeads,
   getLeads,
   getLeadById,
   createLead,

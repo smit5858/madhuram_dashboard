@@ -6,7 +6,8 @@ import toast from "react-hot-toast";
 import { Field, Form, Formik, useFormikContext, type FormikProps } from "formik";
 import { AlertTriangle, Edit2, Eye, Plus, RotateCcw, Search as SearchIcon, ShoppingBag, Trash2, UserSquare2 } from "lucide-react";
 import type { RootState } from "@/store/store";
-import leadService, { type LeadData, type LeadFilters } from "@/services/lead.service";
+import leadService, { leadExportFileName, type LeadData, type LeadFilters } from "@/services/lead.service";
+import ExportDropdown from "@/shared/components/ExportDropdown";
 import platformService from "@/services/platform.service";
 import userService from "@/services/user.service";
 import { leadFilterSchema, LEAD_STATUSES, type LeadFilterValues } from "@/validation/lead.validation";
@@ -87,6 +88,56 @@ const FilterSync = ({ setAppliedFilters }: { setAppliedFilters: React.Dispatch<R
   }, [values.followUpStartDate, values.followUpEndDate, values.startDate, values.endDate]);
 
   return null;
+};
+
+// Month shortcut for the Created date range — writes the month's first/last day into
+// startDate/endDate (rather than a separate filter) so the table, the export, and the date
+// pickers always describe the same range.
+const CreatedMonthPicker = () => {
+  const { values, setFieldValue } = useFormikContext<LeadFilterValues>();
+
+  const monthBounds = (month: string) => {
+    const [year, monthNum] = month.split("-").map(Number);
+    const lastDay = new Date(year, monthNum, 0).getDate();
+    return { start: `${month}-01`, end: `${month}-${String(lastDay).padStart(2, "0")}` };
+  };
+
+  // Show a month only when the current range is exactly that whole month.
+  const selectedMonth = (() => {
+    if (!values.startDate || !values.endDate) return "";
+    const month = values.startDate.slice(0, 7);
+    const { start, end } = monthBounds(month);
+    return values.startDate === start && values.endDate === end ? month : "";
+  })();
+
+  const applyMonth = (month: string) => {
+    const { start, end } = month ? monthBounds(month) : { start: "", end: "" };
+    setFieldValue("startDate", start);
+    setFieldValue("endDate", end);
+  };
+
+  const currentMonth = getTodayISODate().slice(0, 7);
+
+  return (
+    <>
+      <span className="ml-2 font-semibold uppercase tracking-wide text-slate-400">Month:</span>
+      <input
+        type="month"
+        value={selectedMonth}
+        onChange={(e) => applyMonth(e.target.value)}
+        className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700"
+      />
+      <button
+        type="button"
+        onClick={() => applyMonth(currentMonth)}
+        className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold ${
+          selectedMonth === currentMonth ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+        }`}
+      >
+        This Month
+      </button>
+    </>
+  );
 };
 
 const Leads = () => {
@@ -302,15 +353,23 @@ const Leads = () => {
                 </button>
               </div>
 
-              {pagePermission.canCreate && (
-                <button
-                  type="button"
-                  onClick={() => setShowAddModal(true)}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-full bg-[#3d6fe0] px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-blue-500/10 hover:bg-[#3162d2] active:scale-[0.98]"
-                >
-                  <Plus className="h-4 w-4" /> Add Lead
-                </button>
-              )}
+              <div className="flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:items-center">
+                <ExportDropdown
+                  filePrefix="leads"
+                  fileName={(format) => leadExportFileName(format, appliedFilters)}
+                  successMessage="Leads exported successfully"
+                  onExport={(format) => leadService.exportLeads(format, appliedFilters)}
+                />
+                {pagePermission.canCreate && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAddModal(true)}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-full bg-[#3d6fe0] px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-blue-500/10 hover:bg-[#3162d2] active:scale-[0.98]"
+                  >
+                    <Plus className="h-4 w-4" /> Add Lead
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
@@ -322,6 +381,7 @@ const Leads = () => {
               <Field name="startDate" type="date" className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700" />
               <span>to</span>
               <Field name="endDate" type="date" className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700" />
+              <CreatedMonthPicker />
             </div>
           </Form>
         </Formik>
