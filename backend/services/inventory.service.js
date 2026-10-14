@@ -468,9 +468,8 @@ const fulfillStock = async ({ productId, saleItemId, quantity, userId, serialNum
           transaction: t,
           lock: true,
         });
-        if (units.length < quantity) {
-          throw new Error("Not enough reserved serial units to fulfill this quantity");
-        }
+        // A line may hold fewer units than its quantity — serial selection is optional and a
+        // unit can be manually removed from a customer — so ship whatever units are on record.
       }
       for (const unit of units) {
         unit.status = "SOLD";
@@ -565,6 +564,17 @@ const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId },
       targetStatus = "SOLD";
     }
 
+    // Serial selection is optional: an empty pick means "nothing chosen" — keep whatever units
+    // back the reservation (releasing them would leave the line short of stock) and mark the line
+    // as not manually selected so the picker shows it as "Not Selected".
+    if (serialNumbers.length === 0) {
+      if (item.serialsManuallySelected !== false) {
+        item.serialsManuallySelected = false;
+        await item.save({ transaction: t });
+      }
+      return { serialUnitIds: currentUnits.map((u) => u.id) };
+    }
+
     // The line's quantity — not however many units happen to be linked right now — decides how
     // many serials it must hold. A line can fall short of that (e.g. a unit lost to an earlier
     // bad edit, or a sale saved with fewer serials than its quantity); the picker then asks for
@@ -589,13 +599,8 @@ const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId },
     //   throw err;
     // }
 
-    // Units only FIFO-held by reserveStock were never shown as selected, so an empty pick means
-    // "nothing chosen yet" — keep them backing the reservation instead of releasing them.
-    if (serialNumbers.length === 0 && item.serialsManuallySelected === false) {
-      return { serialUnitIds: currentUnits.map((u) => u.id) };
-    }
     // Any non-empty submission is an explicit user pick, even one matching the FIFO units.
-    if (serialNumbers.length > 0 && item.serialsManuallySelected !== true) {
+    if (item.serialsManuallySelected !== true) {
       item.serialsManuallySelected = true;
       await item.save({ transaction: t });
     }
@@ -946,6 +951,8 @@ const allocateBackorders = async (productId, { transaction } = {}) => {
       const toAllocate = units.length;
       item.backorderedQuantity -= toAllocate;
       item.allocatedQuantity += toAllocate;
+      // FIFO-held, not user-picked — never shown as pre-selected in the Courier picker.
+      item.serialsManuallySelected = false;
       await item.save({ transaction: t });
 
       await StockMovement.create(
@@ -1063,14 +1070,150 @@ const updateSerialStatus = async ({ serialUnitId, status, userId, notes }, { tra
 // selling price is read from the SaleItem, so only purchase provenance stays editable on them.
 const SALE_LINKED_SERIAL_STATUSES = ["RESERVED", "SOLD"];
 
-// Manual correction of one unit's details (typo in serial number, wrong purchase price, etc.).
+const SERIAL_STATUSES = ["AVAILABLE", "RESERVED", "SOLD", "RETURNED", "DAMAGED", "LOST"];
+
+// Sale lines of a SERIALIZED product a unit can be manually assigned to (its "customer"):
+// every line of a non-cancelled sale, with how many units it holds vs. how many it should.
+const getAssignableSaleLines = async (productId, { transaction } = {}) => {
+  const items = await SaleItem.findAll({
+    where: { productId, fulfillmentStatus: { [Op.ne]: "CANCELLED" } },
+    include: [{ model: Sale, attributes: ["id", "invoiceNumber", "customerName", "status"], where: { status: { [Op.ne]: "CANCELLED" } } }],
+    order: [["id", "DESC"]],
+    transaction,
+  });
+  const held = items.length
+    ? await SerialUnit.findAll({
+        where: { saleItemId: items.map((i) => i.id), status: { [Op.in]: SALE_LINKED_SERIAL_STATUSES } },
+        attributes: ["saleItemId"],
+        transaction,
+      })
+    : [];
+  return items.map((i) => ({
+    saleItemId: i.id,
+    saleId: i.saleId,
+    invoiceNumber: i.Sale?.invoiceNumber || null,
+    customerName: i.Sale?.customerName || null,
+    quantity: i.quantity,
+    requiredCount: expectedSerialCount(i),
+    heldCount: held.filter((u) => u.saleItemId === i.id).length,
+  }));
+};
+
+// Manual correction of which customer (sale line) a unit belongs to and its status — e.g.
+// removing a unit from a customer, moving it to another customer's sale, or fixing a status.
+// RESERVED/SOLD need a sale line; AVAILABLE never has one; RETURNED/DAMAGED/LOST may keep one
+// for lineage. A line can never hold more units than its quantity: moving a unit into a full
+// line swaps out one of its FIFO-held (never user-picked) units, otherwise the request is
+// refused. This only changes which unit is on record — the line's allocated/fulfilled
+// quantities are untouched, so a line left short of units just shows "Not Selected".
+const applySerialAssignment = async (unit, { status, saleItemId, userId }, { transaction: t }) => {
+  if (!SERIAL_STATUSES.includes(status)) {
+    const err = new Error(`status must be one of ${SERIAL_STATUSES.join(", ")}`);
+    err.statusCode = 400;
+    throw err;
+  }
+  const targetItemId = status === "AVAILABLE" ? null : saleItemId ? Number(saleItemId) : null;
+  if (SALE_LINKED_SERIAL_STATUSES.includes(status) && !targetItemId) {
+    const err = new Error(`A ${status} unit must be assigned to a customer's sale`);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const fromStatus = unit.status;
+  const fromItemId = unit.saleItemId;
+  if (fromStatus === status && (fromItemId || null) === targetItemId) return null;
+
+  if (targetItemId) {
+    const item = await SaleItem.findByPk(targetItemId, {
+      include: [{ model: Sale, attributes: ["id", "invoiceNumber", "customerName", "status"] }],
+      transaction: t,
+      lock: true,
+    });
+    if (!item || item.productId !== unit.productId) {
+      const err = new Error("Selected sale does not contain this product");
+      err.statusCode = 400;
+      throw err;
+    }
+    if (item.fulfillmentStatus === "CANCELLED" || item.Sale?.status === "CANCELLED") {
+      const err = new Error("Cannot assign a serial unit to a cancelled sale");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const joiningLine = SALE_LINKED_SERIAL_STATUSES.includes(status) &&
+      !(SALE_LINKED_SERIAL_STATUSES.includes(fromStatus) && fromItemId === item.id);
+    if (joiningLine) {
+      const others = await SerialUnit.findAll({
+        where: { saleItemId: item.id, status: { [Op.in]: SALE_LINKED_SERIAL_STATUSES }, id: { [Op.ne]: unit.id } },
+        order: [["id", "DESC"]],
+        transaction: t,
+        lock: true,
+      });
+      const required = expectedSerialCount(item);
+      if (required === 0) {
+        const err = new Error("This sale has no units allocated for this product yet — it is still backordered");
+        err.statusCode = 400;
+        throw err;
+      }
+      if (others.length >= required) {
+        if (item.serialsManuallySelected !== false) {
+          const err = new Error(
+            `${item.Sale?.customerName || "This sale"} already has all ${required} serial number(s) for this product — remove one first`
+          );
+          err.statusCode = 409;
+          throw err;
+        }
+        // FIFO-held placeholders — release just enough to make room for the explicit pick.
+        for (const extra of others.slice(0, others.length - required + 1)) {
+          extra.status = "AVAILABLE";
+          extra.saleItemId = null;
+          extra.soldAt = null;
+          await extra.save({ transaction: t });
+        }
+      }
+      if (item.serialsManuallySelected !== true) {
+        item.serialsManuallySelected = true;
+        await item.save({ transaction: t });
+      }
+    }
+  }
+
+  unit.status = status;
+  unit.saleItemId = targetItemId;
+  if (status === "SOLD") unit.soldAt = unit.soldAt || new Date();
+  else if (status === "AVAILABLE" || status === "RESERVED") unit.soldAt = null;
+  if (status === "RETURNED") unit.returnedAt = unit.returnedAt || new Date();
+  await unit.save({ transaction: t });
+
+  await StockMovement.create(
+    {
+      productId: unit.productId,
+      type: "ADJUSTMENT",
+      quantity: 0,
+      reservedDelta: 0,
+      referenceType: "serialUnit",
+      referenceId: unit.id,
+      createdBy: userId,
+      notes: `Serial ${unit.serialNumber}: ${fromStatus}${fromItemId ? ` (sale item #${fromItemId})` : ""} -> ${status}${targetItemId ? ` (sale item #${targetItemId})` : ""}`,
+    },
+    { transaction: t }
+  );
+  return unit;
+};
+
+// Manual correction of one unit's details (typo in serial number, wrong purchase price, etc.),
+// optionally together with its status/assigned customer (see applySerialAssignment).
 const updateSerialUnit = async (
-  { serialUnitId, serialNumber, purchasePrice, sellingPrice, purchaseDate, dealerId, userId },
+  { serialUnitId, serialNumber, purchasePrice, sellingPrice, purchaseDate, dealerId, status, saleItemId, userId },
   { transaction } = {}
 ) => {
   return withTransaction(transaction, async (t) => {
     const unit = await SerialUnit.findByPk(serialUnitId, { transaction: t, lock: true });
     if (!unit) throw new Error("Serial unit not found");
+
+    if (status !== undefined) {
+      await applySerialAssignment(unit, { status, saleItemId, userId }, { transaction: t });
+    }
 
     const isSaleLinked = SALE_LINKED_SERIAL_STATUSES.includes(unit.status);
     const changes = [];
@@ -1167,6 +1310,7 @@ module.exports = {
   allocateBackorders,
   adjustStock,
   updateSerialStatus,
+  getAssignableSaleLines,
   updateSerialUnit,
   deleteSerialUnit,
   recomputeSaleFulfillmentStatus,

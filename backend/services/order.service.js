@@ -916,7 +916,9 @@ const applyReturn = async ({ item, quantity, userId, reason, defective, serialNu
         lock: true,
       });
     }
-    if (units.length < quantity) {
+    // Without explicit serials, a line short of units on record (serials are optional and can be
+    // manually unassigned) returns whatever units it holds.
+    if (serialNumbers && serialNumbers.length && units.length < quantity) {
       const err = new Error("Not enough sold serial units matched for this return");
       err.statusCode = 400;
       throw err;

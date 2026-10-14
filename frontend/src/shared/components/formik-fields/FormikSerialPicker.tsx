@@ -99,12 +99,6 @@ const FormikSerialPicker = ({
         update(selected.filter((s) => s !== serial));
     };
 
-    const fillRemaining = () => {
-        const chosen = new Set(selected);
-        const extra = choices.filter((s) => !chosen.has(s)).slice(0, Math.max(0, requiredCount - selected.length));
-        update([...selected, ...extra]);
-    };
-
     const complete = selected.length === requiredCount;
 
     return (
@@ -115,19 +109,10 @@ const FormikSerialPicker = ({
                     <p className={`text-xs font-semibold ${complete ? 'text-emerald-600' : 'text-amber-600'}`}>
                         Serial Numbers Selected: {selected.length} / {requiredCount}
                     </p>
-                    {requiredCount > 1 && (
-                        <div className="flex gap-2 text-[11px] font-semibold">
-                            {selected.length < requiredCount && (
-                                <button type="button" onClick={fillRemaining} className="text-[#3d6fe0] hover:underline">
-                                    Auto-fill remaining
-                                </button>
-                            )}
-                            {selected.length > 0 && (
-                                <button type="button" onClick={() => { setSwapTarget(null); update([]); }} className="text-slate-500 hover:underline">
-                                    Clear all
-                                </button>
-                            )}
-                        </div>
+                    {requiredCount > 1 && selected.length > 0 && (
+                        <button type="button" onClick={() => { setSwapTarget(null); update([]); }} className="text-[11px] font-semibold text-slate-500 hover:underline">
+                            Clear all
+                        </button>
                     )}
                 </div>
 

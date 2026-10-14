@@ -676,8 +676,8 @@ exports.updateCourier = async (req, res) => {
 
     // Re-picks whichever serial numbers are currently assigned to this line — reserved (not yet
     // fulfilled) or already sold (see inventoryService.reassignSerials for the swap logic).
-    // An empty array is rejected by reassignSerials rather than skipped — silently ignoring it
-    // would let a serialized line save with its serials cleared out from under the picker.
+    // Serial selection is optional — an empty array leaves the line "Not Selected" (see
+    // reassignSerials) while its reserved units keep backing the stock reservation.
     if (Array.isArray(serialNumbers) && courier.saleItemId) {
       const saleItem = await SaleItem.findByPk(courier.saleItemId, { transaction: t, lock: true });
       if (saleItem) {

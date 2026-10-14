@@ -210,12 +210,22 @@ exports.updateSerialStatus = async (req, res) => {
   }
 };
 
-// PUT /inventory/serials/:id/details — { serialNumber, purchasePrice, sellingPrice, purchaseDate, dealerId }
+// GET /inventory/products/:productId/sale-lines — sales a serial unit can be assigned to
+exports.getAssignableSaleLines = async (req, res) => {
+  try {
+    const data = await inventoryService.getAssignableSaleLines(req.params.productId);
+    return res.status(200).json({ success: true, data });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// PUT /inventory/serials/:id/details — { serialNumber, purchasePrice, sellingPrice, purchaseDate, dealerId, status, saleItemId }
 exports.updateSerialUnit = async (req, res) => {
   try {
     const user = req.user;
     const { id } = req.params;
-    const { serialNumber, purchasePrice, sellingPrice, purchaseDate, dealerId } = req.body || {};
+    const { serialNumber, purchasePrice, sellingPrice, purchaseDate, dealerId, status, saleItemId } = req.body || {};
 
     const unit = await inventoryService.updateSerialUnit({
       serialUnitId: id,
@@ -224,6 +234,8 @@ exports.updateSerialUnit = async (req, res) => {
       sellingPrice,
       purchaseDate,
       dealerId,
+      status,
+      saleItemId,
       userId: user.id,
     });
     return res.status(200).json({ success: true, message: "Serial unit updated successfully", data: unit });

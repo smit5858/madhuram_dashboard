@@ -38,6 +38,7 @@ import inventoryService, {
   type ReceiveNonSerialPayload,
   type ReceiveSerializedPayload,
   type UpdateSerialUnitPayload,
+  type SerialStatus,
 } from "../../services/inventory.service";
 import AddressAutocompleteInput from "@/shared/components/AddressAutocompleteInput";
 import { getTodayISODate, formatDisplayDate } from "@/shared/utils/date";
@@ -716,11 +717,18 @@ interface EditSerialUnitFormValues {
   sellingPrice: number | "";
   purchaseDate: string;
   dealerId: number | "";
+  status: SerialStatus;
+  /** Sale line (customer) the unit is assigned to — "" for none. */
+  saleItemId: number | "";
 }
 
-/** Edits one already-received serial unit from the product detail's Serial Units table.
- *  RESERVED/SOLD units are tied to a sale, so only their purchase details stay editable
- *  (the backend enforces the same rule). */
+const SERIAL_STATUS_OPTIONS: SerialStatus[] = ["AVAILABLE", "RESERVED", "SOLD", "RETURNED", "DAMAGED", "LOST"];
+const isSaleLinkedStatus = (status: SerialStatus) => status === "RESERVED" || status === "SOLD";
+
+/** Edits one already-received serial unit from the product detail's Serial Units table,
+ *  including its status and assigned customer (sale). While RESERVED/SOLD the unit is tied to
+ *  a sale, so its serial number and selling price stay locked (the backend enforces the same
+ *  rule) — set it to AVAILABLE / remove the customer first to change those. */
 const EditSerialUnitModal = ({
   unit,
   productId,
@@ -733,7 +741,14 @@ const EditSerialUnitModal = ({
   onClose: () => void;
 }) => {
   const queryClient = useQueryClient();
-  const isSaleLinked = unit.status === "RESERVED" || unit.status === "SOLD";
+  const wasSaleLinked = isSaleLinkedStatus(unit.status);
+
+  const { data: saleLinesResponse, isLoading: saleLinesLoading } = useQuery({
+    queryKey: ["serial-sale-lines", productId],
+    queryFn: ({ signal }) => inventoryService.getAssignableSaleLines(productId, { signal }),
+    gcTime: 0,
+  });
+  const saleLines = saleLinesResponse?.data?.data || [];
 
   const updateSerialUnitMutation = useMutation({
     mutationFn: (payload: UpdateSerialUnitPayload) => inventoryService.updateSerialUnit(unit.id, payload),
@@ -751,9 +766,11 @@ const EditSerialUnitModal = ({
   const initialValues: EditSerialUnitFormValues = {
     serialNumber: unit.serialNumber,
     purchasePrice: unit.purchasePrice ?? "",
-    sellingPrice: isSaleLinked ? "" : (unit.sellingPrice ?? ""),
+    sellingPrice: wasSaleLinked ? "" : (unit.sellingPrice ?? ""),
     purchaseDate: unit.purchaseDate ? unit.purchaseDate.slice(0, 10) : "",
     dealerId: unit.dealer?.id ?? "",
+    status: unit.status,
+    saleItemId: unit.saleItemId ?? "",
   };
 
   return (
@@ -785,18 +802,79 @@ const EditSerialUnitModal = ({
               purchaseDate: values.purchaseDate || null,
               dealerId: values.dealerId === "" ? null : Number(values.dealerId),
             };
-            if (!isSaleLinked) {
+            const saleItemId = values.status === "AVAILABLE" || values.saleItemId === "" ? null : Number(values.saleItemId);
+            if (values.status !== unit.status || saleItemId !== (unit.saleItemId ?? null)) {
+              payload.status = values.status;
+              payload.saleItemId = saleItemId;
+            }
+            if (!isSaleLinkedStatus(values.status)) {
               payload.serialNumber = values.serialNumber.trim();
-              payload.sellingPrice = values.sellingPrice === "" ? null : Number(values.sellingPrice);
+              if (!wasSaleLinked) payload.sellingPrice = values.sellingPrice === "" ? null : Number(values.sellingPrice);
             }
             updateSerialUnitMutation.mutate(payload, { onSettled: () => helpers.setSubmitting(false) });
           }}
         >
-          {({ values, setFieldValue, isSubmitting }) => (
+          {({ values, errors, touched, setFieldValue, isSubmitting }) => {
+            const isSaleLinked = isSaleLinkedStatus(values.status);
+            return (
             <Form className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Status</label>
+                  <select
+                    value={values.status}
+                    onChange={(e) => {
+                      const status = e.target.value as SerialStatus;
+                      setFieldValue("status", status);
+                      if (status === "AVAILABLE") setFieldValue("saleItemId", "");
+                    }}
+                    className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+                  >
+                    {SERIAL_STATUS_OPTIONS.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Assigned Customer{isSaleLinked ? " *" : ""}
+                  </label>
+                  <select
+                    value={values.saleItemId}
+                    disabled={values.status === "AVAILABLE" || saleLinesLoading}
+                    onChange={(e) => setFieldValue("saleItemId", e.target.value ? Number(e.target.value) : "")}
+                    className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none disabled:opacity-60"
+                  >
+                    <option value="">{saleLinesLoading ? "Loading..." : "-- No customer --"}</option>
+                    {/* Keep the current assignment selectable even if its sale is no longer listed (e.g. cancelled). */}
+                    {unit.saleItemId && !saleLines.some((l) => l.saleItemId === unit.saleItemId) && (
+                      <option value={unit.saleItemId}>
+                        {unit.customerName || "Unknown customer"}
+                        {unit.invoiceNumber ? ` (${unit.invoiceNumber})` : ""}
+                      </option>
+                    )}
+                    {saleLines.map((l) => (
+                      <option key={l.saleItemId} value={l.saleItemId}>
+                        {l.customerName || "Unknown customer"}
+                        {l.invoiceNumber ? ` (${l.invoiceNumber})` : ""} — {l.heldCount}/{l.requiredCount} serials
+                      </option>
+                    ))}
+                  </select>
+                  {touched.saleItemId && errors.saleItemId && (
+                    <div className="formik-input-error">{errors.saleItemId}</div>
+                  )}
+                </div>
+              </div>
+              {wasSaleLinked && !isSaleLinked && (
+                <p className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-700">
+                  This removes the unit from {unit.customerName || "its customer"} — their sale will show this serial as "Not Selected".
+                </p>
+              )}
               {isSaleLinked && (
                 <p className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-700">
-                  This unit is {unit.status} — only its purchase details can be changed.
+                  While {values.status}, the serial number can't be changed — set it to AVAILABLE first to edit it.
                 </p>
               )}
               {isSaleLinked ? (
@@ -811,7 +889,7 @@ const EditSerialUnitModal = ({
               )}
               <div className="grid grid-cols-2 gap-3">
                 <Field name="purchasePrice" type="number" label="Purchase Price" placeholder="0.00" component={FormikInput} />
-                {!isSaleLinked && (
+                {!isSaleLinked && !wasSaleLinked && (
                   <Field name="sellingPrice" type="number" label="Selling Price" placeholder="0.00" component={FormikInput} />
                 )}
                 <div>
@@ -857,7 +935,8 @@ const EditSerialUnitModal = ({
                 </button>
               </div>
             </Form>
-          )}
+            );
+          }}
         </Formik>
       </div>
     </div>
@@ -2204,7 +2283,11 @@ const Products = () => {
                                           </span>
                                         </td>
                                         <td className="py-1.5 pr-3 whitespace-nowrap">
-                                          {isSold ? u.customerName || "—" : <span className="italic text-slate-400">Not Sold</span>}
+                                          {isSold || u.status === "RESERVED" ? (
+                                            u.customerName || "—"
+                                          ) : (
+                                            <span className="italic text-slate-400">Not Assigned</span>
+                                          )}
                                         </td>
                                         <td className="py-1.5 pr-3 whitespace-nowrap">
                                           {isSold ? (

@@ -263,6 +263,7 @@ exports.getProductById = async (req, res) => {
           id: u.id,
           serialNumber: u.serialNumber,
           status: u.status,
+          saleItemId: u.saleItemId,
           purchasePrice: u.purchasePrice,
           purchaseDate: u.purchaseDate,
           dealer: u.Dealer ? { id: u.Dealer.id, name: u.Dealer.name } : null,

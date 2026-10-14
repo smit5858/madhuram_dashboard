@@ -34,6 +34,8 @@ export interface SerialUnitDetail {
   id: number;
   serialNumber: string;
   status: "AVAILABLE" | "RESERVED" | "SOLD" | "RETURNED" | "DAMAGED" | "LOST";
+  /** Sale line (customer) this unit is assigned to, if any. */
+  saleItemId?: number | null;
   purchasePrice: number | null;
   purchaseDate: string | null;
   dealer: DealerRef | null;

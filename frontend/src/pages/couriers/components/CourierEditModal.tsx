@@ -260,26 +260,15 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
         if (courierRequired && !values.courierCompany && !errors.courierCompany) {
             errors.courierCompany = "Please select a courier company";
         }
+        // Serial numbers are optional — a serialized line may be saved with nothing selected.
         const serialErrors: Record<number, string> = {};
-        // Serial numbers are never pre-selected — every serialized line needs a manual pick.
-        for (const row of productRows) {
-            if (!row.isSerialized || row.requiredSerialCount === 0) continue;
-            if ((values.serialsByItem?.[row.saleItemId] || []).length === 0) {
-                serialErrors[row.saleItemId] = row.requiredSerialCount > 1 ? "Please select the serial numbers" : "Please select a serial number";
-            }
-        }
-        // for (const row of productRows) {
-        //     if (!row.isSerialized || row.requiredSerialCount === 0) continue;
-        //     const err = validateSerialNumbers(values.serialsByItem?.[row.saleItemId] || [], row.requiredSerialCount);
-        //     if (err) serialErrors[row.saleItemId] = err;
-        // }
         // Belt-and-braces cross-row check: two sibling rows for the same product (e.g. a sale
         // with two separate lines of the same serialized item) must never claim the same unit —
         // the picker already excludes a sibling's live pick from its own choices (see
         // FormikSerialPicker's excludeSerials), but this catches it too in case values change
         // out from under that (e.g. a row unmounting/remounting while a pick is in flight).
         for (const row of productRows) {
-            if (!row.isSerialized || row.requiredSerialCount === 0 || serialErrors[row.saleItemId]) continue;
+            if (!row.isSerialized || row.requiredSerialCount === 0) continue;
             const mySerials = values.serialsByItem?.[row.saleItemId] || [];
             const claimedBySiblings = productRows
                 .filter((r) => r.saleItemId !== row.saleItemId && r.productId === row.productId)

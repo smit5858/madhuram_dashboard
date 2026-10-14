@@ -135,8 +135,15 @@ export const receiveSerializedStockSchema = z.object({
 export type ReceiveSerializedStockFormValues = z.infer<typeof receiveSerializedStockSchema>;
 
 // Edit one already-received serial unit.
-export const editSerialUnitSchema = z.object({
-  serialNumber: z.string().trim().min(1, "Serial number is required"),
-  purchasePrice: optionalAmountField,
-  sellingPrice: optionalAmountField,
-});
+export const editSerialUnitSchema = z
+  .object({
+    serialNumber: z.string().trim().min(1, "Serial number is required"),
+    purchasePrice: optionalAmountField,
+    sellingPrice: optionalAmountField,
+    status: z.enum(["AVAILABLE", "RESERVED", "SOLD", "RETURNED", "DAMAGED", "LOST"]),
+    saleItemId: z.union([z.number(), z.literal("")]),
+  })
+  .refine((v) => !["RESERVED", "SOLD"].includes(v.status) || v.saleItemId !== "", {
+    message: "Select the customer this unit is reserved/sold to",
+    path: ["saleItemId"],
+  });

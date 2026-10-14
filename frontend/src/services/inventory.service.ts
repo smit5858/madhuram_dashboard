@@ -68,7 +68,26 @@ export interface UpdateSerialUnitPayload {
   sellingPrice?: number | null;
   purchaseDate?: string | null;
   dealerId?: number | null;
+  /** Status + assigned customer's sale line — RESERVED/SOLD need a saleItemId, AVAILABLE has none. */
+  status?: SerialStatus;
+  saleItemId?: number | null;
 }
+
+/** A sale line of a SERIALIZED product a unit can be assigned to (its customer). */
+export interface AssignableSaleLine {
+  saleItemId: number;
+  saleId: number;
+  invoiceNumber: string | null;
+  customerName: string | null;
+  quantity: number;
+  requiredCount: number;
+  heldCount: number;
+}
+
+const getAssignableSaleLines = (productId: number, config?: { signal?: AbortSignal }) =>
+  httpService.get<{ success: boolean; data: AssignableSaleLine[] }>(`/inventory/products/${productId}/sale-lines`, {
+    signal: config?.signal,
+  });
 
 const updateSerialUnit = (id: number, data: UpdateSerialUnitPayload) =>
   httpService.put<{ success: boolean; message: string; data: SerialUnitData }>(`/inventory/serials/${id}/details`, data);
@@ -81,6 +100,7 @@ export default {
   getSerialById,
   receiveStock,
   updateSerialStatus,
+  getAssignableSaleLines,
   updateSerialUnit,
   deleteSerialUnit,
 };
