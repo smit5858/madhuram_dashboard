@@ -100,6 +100,7 @@ export const editProductSchema = z.object({
   name: nameField,
   description: descriptionField,
   isActive: z.boolean().optional(),
+  purchasePrice: optionalAmountField,
   sellingPrice: optionalAmountField,
   quantity: optionalQuantityField,
 });

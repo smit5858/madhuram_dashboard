@@ -109,8 +109,10 @@ export interface UpdateProductPayload {
   name?: string;
   description?: string;
   isActive?: boolean;
-  /** Any type except SERIALIZED (whose pricing is per sale item). */
-  sellingPrice?: number;
+  /** SERIALIZED only — applied to every unit still in stock (AVAILABLE). */
+  purchasePrice?: number | null;
+  /** For SERIALIZED, applied to every unit still in stock (AVAILABLE). */
+  sellingPrice?: number | null;
   dealerId?: number | null;
   /** NON_SERIAL / HARDWARE_ORDER_BASED only — sets the Stock row's on-hand quantity. */
   quantity?: number;

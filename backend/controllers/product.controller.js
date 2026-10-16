@@ -23,6 +23,12 @@ const getSerialCountsForProducts = async (productIds) => {
     if (!byProduct[row.productId]) byProduct[row.productId] = { AVAILABLE: 0, RESERVED: 0, SOLD: 0 };
     byProduct[row.productId][row.status] = parseInt(row.count, 10) || 0;
   }
+  // AVAILABLE units already claimed by a sale whose serial hasn't been picked in Courier yet
+  // aren't free stock — same adjustment as inventoryService.getSerialAvailability.
+  const unassigned = await inventoryService.getUnassignedSerialDemand(productIds);
+  for (const [productId, count] of Object.entries(unassigned)) {
+    if (byProduct[productId]) byProduct[productId].AVAILABLE = Math.max(0, byProduct[productId].AVAILABLE - count);
+  }
   return byProduct;
 };
 
@@ -35,17 +41,21 @@ const getLatestSerialPricesForProducts = async (productIds) => {
   if (!productIds.length) return {};
   const rows = await SerialUnit.findAll({
     where: { productId: { [Op.in]: productIds } },
-    attributes: ["productId", "purchasePrice", "sellingPrice"],
+    attributes: ["productId", "purchasePrice", "sellingPrice", "dealerId"],
+    include: [{ model: Dealer, attributes: DEALER_ATTRS }],
     order: [
       ["receivedAt", "DESC"],
       ["id", "DESC"],
     ],
-    raw: true,
   });
   const byProduct = {};
   for (const row of rows) {
     if (!(row.productId in byProduct)) {
-      byProduct[row.productId] = { purchasePrice: row.purchasePrice, sellingPrice: row.sellingPrice };
+      byProduct[row.productId] = {
+        purchasePrice: row.purchasePrice,
+        sellingPrice: row.sellingPrice,
+        dealer: row.Dealer ? { id: row.Dealer.id, name: row.Dealer.name } : null,
+      };
     }
   }
   return byProduct;
@@ -109,7 +119,7 @@ const serializeProduct = (p, serialCounts, latestSerialPrices = {}) => {
     sold: counts.SOLD,
     purchasePrice: latest ? latest.purchasePrice : null,
     sellingPrice: latest ? latest.sellingPrice : null,
-    dealer: null,
+    dealer: latest ? latest.dealer || null : null,
   };
 };
 
@@ -482,7 +492,7 @@ exports.updateProduct = async (req, res) => {
   try {
     const user = req.user;
     const { id } = req.params;
-    const { name, description, isActive, sellingPrice, dealerId, quantity } = req.body || {};
+    const { name, description, isActive, purchasePrice, sellingPrice, dealerId, quantity } = req.body || {};
 
     const product = await Product.findByPk(id, { transaction: t });
     if (!product) {
@@ -556,12 +566,45 @@ exports.updateProduct = async (req, res) => {
           }
         }
       }
-    } else if (sellingPrice !== undefined) {
-      await t.rollback();
-      return res.status(400).json({
-        success: false,
-        message: "sellingPrice cannot be set on SERIALIZED products — pricing is per sale item",
-      });
+    } else {
+      // SERIALIZED — price/dealer live on each unit. An edit applies only the fields sent, and only
+      // to units still in stock (AVAILABLE); sold/reserved/returned units keep their own history.
+      const unitChanges = {};
+      if (purchasePrice !== undefined) unitChanges.purchasePrice = purchasePrice === "" ? null : purchasePrice;
+      if (sellingPrice !== undefined) unitChanges.sellingPrice = sellingPrice === "" ? null : sellingPrice;
+      if (dealerId !== undefined) {
+        if (dealerId === null || dealerId === "") {
+          unitChanges.dealerId = null;
+        } else {
+          const dealer = await Dealer.findByPk(dealerId, { transaction: t });
+          if (!dealer) {
+            await t.rollback();
+            return res.status(400).json({ success: false, message: "Selected dealer does not exist" });
+          }
+          unitChanges.dealerId = dealer.id;
+        }
+      }
+      if (Object.keys(unitChanges).length > 0) {
+        const [updatedCount] = await SerialUnit.update(unitChanges, {
+          where: { productId: id, status: "AVAILABLE" },
+          transaction: t,
+        });
+        if (updatedCount > 0) {
+          await StockMovement.create(
+            {
+              productId: id,
+              type: "ADJUSTMENT",
+              quantity: 0,
+              reservedDelta: 0,
+              referenceType: "manual",
+              referenceId: null,
+              createdBy: user.id,
+              notes: `Product edit: updated ${Object.keys(unitChanges).join(", ")} on ${updatedCount} available serial unit(s)`,
+            },
+            { transaction: t }
+          );
+        }
+      }
     }
 
     await t.commit();

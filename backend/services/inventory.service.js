@@ -53,8 +53,38 @@ const assertNonSerial = (product) => {
   }
 };
 
+// Serial numbers are never picked when a sale is created or edited — they're assigned only from
+// the Courier module (see reassignSerials). A SERIALIZED sale line therefore claims stock by
+// count: its allocated + fulfilled - returned quantity, of which only the part already backed by
+// an assigned (RESERVED/SOLD) unit is visible in serial_units. The rest is this "unassigned
+// demand" — AVAILABLE units that are spoken for by a sale but don't have a serial picked yet.
+// Free stock for a new sale is AVAILABLE minus this demand. Returns { [productId]: count }.
+const getUnassignedSerialDemand = async (productIds, { transaction } = {}) => {
+  const ids = (Array.isArray(productIds) ? productIds : [productIds]).map(Number).filter(Boolean);
+  if (ids.length === 0) return {};
+  const rows = await sequelize.query(
+    `SELECT si.productId AS productId,
+            SUM(GREATEST(si.allocatedQuantity + si.fulfilledQuantity - si.returnedQuantity - COALESCE(h.held, 0), 0)) AS unassigned
+       FROM sells_items si
+       JOIN sells s ON s.id = si.saleId AND s.status <> 'CANCELLED'
+       LEFT JOIN (
+         SELECT saleItemId, COUNT(*) AS held
+           FROM serial_units
+          WHERE saleItemId IS NOT NULL AND status IN ('RESERVED', 'SOLD')
+          GROUP BY saleItemId
+       ) h ON h.saleItemId = si.id
+      WHERE si.productId IN (:ids) AND si.fulfillmentStatus <> 'CANCELLED'
+      GROUP BY si.productId`,
+    { replacements: { ids }, type: sequelize.QueryTypes.SELECT, transaction }
+  );
+  const byProduct = {};
+  for (const row of rows) byProduct[row.productId] = parseInt(row.unassigned, 10) || 0;
+  return byProduct;
+};
+
 // SERIALIZED availability/reserved/sold, derived on read from serial_units — the sole
 // source of truth for SERIALIZED products. No counter to keep in sync, nothing to drift.
+// `available` excludes AVAILABLE units already claimed by a sale awaiting serial selection.
 const getSerialAvailability = async (productId, { transaction } = {}) => {
   const rows = await SerialUnit.findAll({
     where: { productId },
@@ -65,10 +95,12 @@ const getSerialAvailability = async (productId, { transaction } = {}) => {
   });
   const counts = { AVAILABLE: 0, RESERVED: 0, SOLD: 0, RETURNED: 0, DAMAGED: 0, LOST: 0 };
   for (const row of rows) counts[row.status] = parseInt(row.count, 10) || 0;
+  const unassigned = (await getUnassignedSerialDemand(productId, { transaction }))[productId] || 0;
   return {
-    available: counts.AVAILABLE,
+    available: Math.max(0, counts.AVAILABLE - unassigned),
     reserved: counts.RESERVED,
     sold: counts.SOLD,
+    unassigned,
     total: Object.values(counts).reduce((a, b) => a + b, 0),
   };
 };
@@ -147,12 +179,14 @@ const getOrCreateStock = async (productId, { transaction } = {}) => {
 // Reserves up to `quantity` units for a SaleItem. Never over-reserves: allocates as much as
 // is currently available and reports the rest as backordered. Caller is responsible for
 // writing the resulting allocated/backordered split onto the SaleItem.
-// For SERIALIZED products, an explicit `serialNumbers` list picks exact units (the sales-flow
-// serial picker) instead of FIFO — this is all-or-nothing: any requested serial that's missing
-// or no longer AVAILABLE fails the whole reservation, so a unit can never be double-sold.
-const reserveStock = async ({ productId, saleItemId, quantity, userId, serialNumbers }, { transaction } = {}) => {
+// For SERIALIZED products this is a count-only claim: no serial unit is selected, reserved or
+// otherwise touched — serial numbers are assigned exclusively from the Courier module (see
+// reassignSerials). The Product row lock serializes concurrent claims on the same product; it
+// must be taken before the transaction's first non-locking read so the free-stock count below
+// sees every claim committed before this one (see createOrder, which locks its products first).
+const reserveStock = async ({ productId, saleItemId, quantity, userId }, { transaction } = {}) => {
   return withTransaction(transaction, async (t) => {
-    const product = await Product.findByPk(productId, { transaction: t });
+    const product = await Product.findByPk(productId, { transaction: t, lock: true });
     assertProduct(product);
 
     // Non-inventory (Other / Quick Add): no stock check at all — always fully allocated, never
@@ -201,58 +235,10 @@ const reserveStock = async ({ productId, saleItemId, quantity, userId, serialNum
       return { allocated, backordered, serialUnitIds: [], available: stock.quantity - stock.reserved };
     }
 
-    let units;
-    if (serialNumbers && serialNumbers.length > 0) {
-      if (serialNumbers.length !== quantity) {
-        const err = new Error("Number of selected serial numbers must match the quantity");
-        err.statusCode = 400;
-        throw err;
-      }
-
-      // Lock every matching row for this product regardless of status, so we can tell a
-      // "not found" serial apart from one that's simply no longer AVAILABLE.
-      units = await SerialUnit.findAll({
-        where: { productId, serialNumber: { [Op.in]: serialNumbers } },
-        transaction: t,
-        lock: true,
-      });
-
-      const foundNumbers = units.map((u) => u.serialNumber);
-      const missing = serialNumbers.filter((s) => !foundNumbers.includes(s));
-      if (missing.length > 0) {
-        const err = new Error(`Serial number(s) not found for this product: ${missing.join(", ")}`);
-        err.statusCode = 404;
-        throw err;
-      }
-
-      const unavailable = units.filter((u) => u.status !== "AVAILABLE");
-      if (unavailable.length > 0) {
-        const err = new Error(
-          `Serial number(s) already reserved/sold, pick a different unit: ${unavailable.map((u) => u.serialNumber).join(", ")}`
-        );
-        err.statusCode = 409;
-        throw err;
-      }
-    } else {
-      // SERIALIZED — lock and claim up to `quantity` AVAILABLE units directly. The row-level
-      // FOR UPDATE lock on the selected units is what prevents double-allocation under
-      // concurrency; there is no Stock row to lock instead.
-      units = await SerialUnit.findAll({
-        where: { productId, status: "AVAILABLE" },
-        order: [["id", "ASC"]],
-        limit: quantity,
-        transaction: t,
-        lock: true,
-      });
-    }
-
-    for (const unit of units) {
-      unit.status = "RESERVED";
-      unit.saleItemId = saleItemId;
-      await unit.save({ transaction: t });
-    }
-
-    const allocated = units.length;
+    // SERIALIZED — claim by count against free stock (AVAILABLE units not already spoken for by
+    // another sale line); serial_units rows are left exactly as they are.
+    const { available: free } = await getSerialAvailability(productId, { transaction: t });
+    const allocated = Math.max(0, Math.min(free, quantity));
     const backordered = quantity - allocated;
 
     if (allocated > 0) {
@@ -265,14 +251,13 @@ const reserveStock = async ({ productId, saleItemId, quantity, userId, serialNum
           referenceType: "saleItem",
           referenceId: saleItemId,
           createdBy: userId,
-          notes: `Reserved ${allocated} serial unit(s) for sale item #${saleItemId}`,
+          notes: `Reserved ${allocated} unit(s) for sale item #${saleItemId} — serial numbers to be selected in Courier`,
         },
         { transaction: t }
       );
     }
 
-    const { available } = await getSerialAvailability(productId, { transaction: t });
-    return { allocated, backordered, serialUnitIds: units.map((u) => u.id), available };
+    return { allocated, backordered, serialUnitIds: [], available: free - allocated };
   });
 };
 
@@ -310,13 +295,22 @@ const releaseReservation = async ({ productId, saleItemId, quantity, userId, rea
       return;
     }
 
-    const units = await SerialUnit.findAll({
+    // SERIALIZED — the claim itself is just the line's allocatedQuantity (the caller lowers it).
+    // Assigned units are only released when the line would otherwise hold more units than it
+    // still needs; a line without serials picked yet has nothing to release.
+    const item = await SaleItem.findByPk(saleItemId, { transaction: t, lock: true });
+    const reservedUnits = await SerialUnit.findAll({
       where: { saleItemId, status: "RESERVED" },
-      order: [["id", "ASC"]],
-      limit: quantity,
+      order: [["id", "DESC"]],
       transaction: t,
       lock: true,
     });
+    const heldCount = await SerialUnit.count({
+      where: { saleItemId, status: { [Op.in]: ["RESERVED", "SOLD"] } },
+      transaction: t,
+    });
+    const stillNeeded = item ? Math.max(0, expectedSerialCount(item) - quantity) : 0;
+    const units = reservedUnits.slice(0, Math.max(0, Math.min(quantity, heldCount - stillNeeded)));
     for (const unit of units) {
       unit.status = "AVAILABLE";
       unit.saleItemId = null;
@@ -328,11 +322,13 @@ const releaseReservation = async ({ productId, saleItemId, quantity, userId, rea
         productId,
         type: "RELEASE",
         quantity: 0,
-        reservedDelta: -units.length,
+        reservedDelta: -quantity,
         referenceType: "saleItem",
         referenceId: saleItemId,
         createdBy: userId,
-        notes: reason || `Released ${units.length} serial unit(s) reserved for sale item #${saleItemId}`,
+        notes:
+          reason ||
+          `Released ${quantity} unit(s) reserved for sale item #${saleItemId}${units.length ? ` (serials returned to stock: ${units.map((u) => u.serialNumber).join(", ")})` : ""}`,
       },
       { transaction: t }
     );
@@ -518,21 +514,16 @@ const fulfillStock = async ({ productId, saleItemId, quantity, userId, serialNum
 const expectedSerialCount = (item) =>
   Math.max(0, (item.allocatedQuantity || 0) + (item.fulfilledQuantity || 0) - (item.returnedQuantity || 0));
 
-// Re-picks the serial numbers currently assigned to a courier's line item — either before
-// fulfillment (units still RESERVED) or after (units already SOLD, e.g. correcting which
-// physical unit actually went out). Releases the units currently held for this saleItemId and
-// assigns the newly chosen ones into that same state, validating count and AVAILABLE status the
-// same way reserveStock's explicit-serials path does, so a unit can never be double-assigned.
-// Swapping SOLD units doesn't touch Stock/StockMovement quantities — SERIALIZED availability is
-// derived entirely from serial_units status (see getSerialAvailability), so on-hand count is
-// unaffected either way; only which unit is on record for this line changes.
+// The only place serial numbers get assigned to a sale line — called from the Courier module's
+// save (courier.controller.js#updateCourier), inside that save's transaction, so a failed save
+// leaves every unit as it was. Sets the line's assigned units to exactly `serialNumbers`, either
+// before fulfillment (units RESERVED) or after (units SOLD, e.g. correcting which physical unit
+// actually went out): units dropped from the selection go back to AVAILABLE, newly picked ones
+// must be AVAILABLE (row-locked, so a unit can never be assigned to two lines). An empty
+// selection unassigns every unit. Assigning or swapping units doesn't change free stock — the
+// line's claim is by count (see getUnassignedSerialDemand), so only which unit backs it changes.
 const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId }, { transaction } = {}) => {
   return withTransaction(transaction, async (t) => {
-    // if (!Array.isArray(serialNumbers) || serialNumbers.length === 0) {
-    //   const err = new Error("serialNumbers must be a non-empty array");
-    //   err.statusCode = 400;
-    //   throw err;
-    // }
     // Trim and reject duplicates up front — the same physical unit picked twice would otherwise
     // pass the count check below but only match one row, silently dropping a unit from the line.
     serialNumbers = serialNumbers.map((s) => String(s).trim());
@@ -564,59 +555,57 @@ const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId },
       targetStatus = "SOLD";
     }
 
-    // Serial selection is optional: an empty pick means "nothing chosen" — keep whatever units
-    // back the reservation (releasing them would leave the line short of stock) and mark the line
-    // as not manually selected so the picker shows it as "Not Selected".
+    const currentNumbers = currentUnits.map((u) => u.serialNumber);
+    const unchanged =
+      serialNumbers.length === currentNumbers.length && serialNumbers.every((s) => currentNumbers.includes(s));
+
+    // Serial selection is optional: an empty pick means "nothing assigned". Units still linked to
+    // the line are released back to AVAILABLE — the line's stock claim is by count, so this never
+    // leaves it short. Lines whose units were FIFO-held by older code (serialsManuallySelected
+    // === false) already show as "Not Selected" in the picker, so this is what makes the saved
+    // state match what the user saw.
     if (serialNumbers.length === 0) {
       if (item.serialsManuallySelected !== false) {
         item.serialsManuallySelected = false;
         await item.save({ transaction: t });
       }
-      return { serialUnitIds: currentUnits.map((u) => u.id) };
+      if (currentUnits.length === 0) return { serialUnitIds: [] };
+    } else {
+      // A line can hold at most as many serials as it has units allocated or shipped (never its
+      // still-backordered part) — anything more would take a unit another sale is counting on.
+      const required = expectedSerialCount(item);
+      if (required === 0) {
+        const err = new Error("This product has no units allocated yet — serial numbers can be picked once it is in stock");
+        err.statusCode = 400;
+        throw err;
+      }
+      if (serialNumbers.length > required) {
+        const err = new Error(
+          `Too many serial numbers selected (${serialNumbers.length}) — this product needs at most ${required}`
+        );
+        err.statusCode = 400;
+        throw err;
+      }
+      if (currentUnits.length === 0) {
+        // Nothing linked at all — new units take on whatever state the line itself is in.
+        targetStatus = item.allocatedQuantity > 0 ? "RESERVED" : "SOLD";
+      }
+
+      // Any non-empty submission is an explicit user pick, even one matching the held units.
+      if (item.serialsManuallySelected !== true) {
+        item.serialsManuallySelected = true;
+        await item.save({ transaction: t });
+      }
+      if (unchanged) return { serialUnitIds: currentUnits.map((u) => u.id) };
     }
 
-    // The line's quantity — not however many units happen to be linked right now — decides how
-    // many serials it must hold. A line can fall short of that (e.g. a unit lost to an earlier
-    // bad edit, or a sale saved with fewer serials than its quantity); the picker then asks for
-    // the full count and the missing ones are claimed here rather than being stuck at the
-    // shortfall forever.
-    const expected = expectedSerialCount(item);
-    const required = expected > 0 ? expected : currentUnits.length;
-    if (required === 0) {
-      const err = new Error("No serial numbers are currently assigned to this line");
-      err.statusCode = 400;
-      throw err;
-    }
-    if (currentUnits.length === 0) {
-      // Nothing linked at all — new units take on whatever state the line itself is in.
-      targetStatus = item.allocatedQuantity > 0 ? "RESERVED" : "SOLD";
-    }
-    // if (serialNumbers.length !== required) {
-    //   const err = new Error(
-    //     `Number of selected serial numbers (${serialNumbers.length}) must match the quantity (${required})`
-    //   );
-    //   err.statusCode = 400;
-    //   throw err;
-    // }
-
-    // Any non-empty submission is an explicit user pick, even one matching the FIFO units.
-    if (item.serialsManuallySelected !== true) {
-      item.serialsManuallySelected = true;
-      await item.save({ transaction: t });
-    }
-
-    const currentNumbers = currentUnits.map((u) => u.serialNumber);
-    const unchanged =
-      serialNumbers.length === currentNumbers.length && serialNumbers.every((s) => currentNumbers.includes(s));
-    if (unchanged) {
-      return { serialUnitIds: currentUnits.map((u) => u.id) };
-    }
-
-    const candidates = await SerialUnit.findAll({
-      where: { productId, serialNumber: { [Op.in]: serialNumbers } },
-      transaction: t,
-      lock: true,
-    });
+    const candidates = serialNumbers.length
+      ? await SerialUnit.findAll({
+          where: { productId, serialNumber: { [Op.in]: serialNumbers } },
+          transaction: t,
+          lock: true,
+        })
+      : [];
 
     const foundNumbers = candidates.map((u) => u.serialNumber);
     const missing = serialNumbers.filter((s) => !foundNumbers.includes(s));
@@ -671,7 +660,9 @@ const reassignSerials = async ({ saleItemId, productId, serialNumbers, userId },
         referenceType: "saleItem",
         referenceId: saleItemId,
         createdBy: userId,
-        notes: `Reassigned ${targetStatus === "SOLD" ? "sold" : "reserved"} serial numbers for sale item #${saleItemId}: ${candidates.map((u) => u.serialNumber).join(", ")}`,
+        notes: candidates.length
+          ? `Assigned ${targetStatus === "SOLD" ? "sold" : "reserved"} serial numbers for sale item #${saleItemId}: ${candidates.map((u) => u.serialNumber).join(", ")}`
+          : `Unassigned serial numbers from sale item #${saleItemId}: ${currentNumbers.join(", ")}`,
       },
       { transaction: t }
     );
@@ -749,7 +740,8 @@ const receiveStock = async (
   { transaction } = {}
 ) => {
   return withTransaction(transaction, async (t) => {
-    const product = await Product.findByPk(productId, { transaction: t });
+    // Locked first (before any non-locking read) — see reserveStock/allocateBackorders.
+    const product = await Product.findByPk(productId, { transaction: t, lock: true });
     assertProduct(product);
 
     if (product.productType === "SOFTWARE") {
@@ -851,7 +843,8 @@ const receiveStock = async (
 // per-row, both for deadlock-safety and to guarantee FIFO fairness.
 const allocateBackorders = async (productId, { transaction } = {}) => {
   return withTransaction(transaction, async (t) => {
-    const product = await Product.findByPk(productId, { transaction: t });
+    // Locked so the SERIALIZED free-stock count below can't race a concurrent reserveStock.
+    const product = await Product.findByPk(productId, { transaction: t, lock: true });
     assertProduct(product);
 
     const items = await SaleItem.findAll({
@@ -931,28 +924,17 @@ const allocateBackorders = async (productId, { transaction } = {}) => {
       return { allocations, readyShipmentGroupIds: Array.from(readyShipmentGroupIds) };
     }
 
-    // SERIALIZED
+    // SERIALIZED — count-only, same as reserveStock: newly free units are claimed for the oldest
+    // backorders without picking any serial number; those are selected later in Courier.
+    let free = (await getSerialAvailability(productId, { transaction: t })).available;
     for (const item of items) {
-      const units = await SerialUnit.findAll({
-        where: { productId, status: "AVAILABLE" },
-        order: [["id", "ASC"]],
-        limit: item.backorderedQuantity,
-        transaction: t,
-        lock: true,
-      });
-      if (units.length === 0) break;
+      if (free <= 0) break;
+      const toAllocate = Math.min(free, item.backorderedQuantity);
+      if (toAllocate <= 0) continue;
+      free -= toAllocate;
 
-      for (const unit of units) {
-        unit.status = "RESERVED";
-        unit.saleItemId = item.id;
-        await unit.save({ transaction: t });
-      }
-
-      const toAllocate = units.length;
       item.backorderedQuantity -= toAllocate;
       item.allocatedQuantity += toAllocate;
-      // FIFO-held, not user-picked — never shown as pre-selected in the Courier picker.
-      item.serialsManuallySelected = false;
       await item.save({ transaction: t });
 
       await StockMovement.create(
@@ -964,7 +946,7 @@ const allocateBackorders = async (productId, { transaction } = {}) => {
           referenceType: "saleItem",
           referenceId: item.id,
           createdBy: null,
-          notes: `Backorder FIFO sweep: allocated ${toAllocate} serial unit(s) to sale item #${item.id}`,
+          notes: `Backorder FIFO sweep: allocated ${toAllocate} unit(s) to sale item #${item.id} — serial numbers to be selected in Courier`,
         },
         { transaction: t }
       );
@@ -975,7 +957,7 @@ const allocateBackorders = async (productId, { transaction } = {}) => {
         saleId: item.saleId,
         saleItemId: item.id,
         allocatedQty: toAllocate,
-        serialUnitIds: units.map((u) => u.id),
+        serialUnitIds: [],
       });
     }
 
@@ -1298,6 +1280,7 @@ module.exports = {
   STOCK_TRACKED_TYPES,
   getOrCreateStock,
   getSerialAvailability,
+  getUnassignedSerialDemand,
   reserveStock,
   releaseReservation,
   writeOffReservation,

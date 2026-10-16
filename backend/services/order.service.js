@@ -428,6 +428,16 @@ const createOrder = async ({
 
   const t = await sequelize.transaction();
   try {
+    // Must be this transaction's first statement: row-locking every ordered product (ascending id,
+    // deadlock-safe) before any non-locking read means the read snapshot used by reserveStock's
+    // SERIALIZED free-stock count includes every concurrent sale that committed before us.
+    await Product.findAll({
+      where: { id: [...new Set(items.map((i) => Number(i.productId)))] },
+      order: [["id", "ASC"]],
+      lock: true,
+      transaction: t,
+    });
+
     const selling = parseFloat(sellingAmount) || 0;
 
     // Two ways to submit how a sale was paid for: the current multi-payment-method `payments`
@@ -592,18 +602,8 @@ const createOrder = async ({
       }
 
       const requested = parseInt(item.quantity);
-      const serialNumbers = Array.isArray(item.serialNumbers) && item.serialNumbers.length > 0 ? item.serialNumbers : undefined;
-
-      if (serialNumbers && product.productType !== "SERIALIZED") {
-        const err = new Error(`${product.name} is not a serial-tracked product — remove the selected serial numbers`);
-        err.statusCode = 400;
-        throw err;
-      }
-      if (serialNumbers && serialNumbers.length !== requested) {
-        const err = new Error(`Selected serial numbers (${serialNumbers.length}) must match the quantity (${requested}) for ${product.name}`);
-        err.statusCode = 400;
-        throw err;
-      }
+      // Serial numbers are never assigned from the Sells module — any `item.serialNumbers` a client
+      // sends is ignored. They're picked later in the Courier module (inventoryService.reassignSerials).
 
       const trimmedItemNotes = item.notes ? String(item.notes).trim() : null;
       const saleItem = await SaleItem.create(
@@ -617,13 +617,12 @@ const createOrder = async ({
           fulfilledQuantity: 0,
           backorderedQuantity: 0,
           notes: trimmedItemNotes,
-          serialsManuallySelected: !!serialNumbers,
         },
         { transaction: t }
       );
 
       const reserveResult = await inventoryService.reserveStock(
-        { productId: item.productId, saleItemId: saleItem.id, quantity: requested, userId, serialNumbers },
+        { productId: item.productId, saleItemId: saleItem.id, quantity: requested, userId },
         { transaction: t }
       );
       const allocated = reserveResult.allocated;
@@ -1190,7 +1189,8 @@ const quickAddProduct = async ({ name }) => {
 // other lines (mirroring whatever "Create Courier Entry" currently resolves to for this sale —
 // see setCourierEntryForSale), adds this line to the same shipment group; otherwise fulfills
 // whatever was allocated directly, same as a courier-less sale.
-const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialNumbers, notes, userId }) => {
+// Never assigns serial numbers — those are picked in the Courier module only.
+const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, notes, userId }) => {
   const t = await sequelize.transaction();
   try {
     const sale = await Sale.findByPk(saleId, { transaction: t, lock: true });
@@ -1212,20 +1212,11 @@ const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialN
       throw err;
     }
 
-    const product = await Product.findByPk(productId, { transaction: t });
+    // Locked before any non-locking read — see the matching lock at the top of createOrder.
+    const product = await Product.findByPk(productId, { transaction: t, lock: true });
     if (!product) {
       const err = new Error(`Product ID ${productId} not found`);
       err.statusCode = 404;
-      throw err;
-    }
-    if (serialNumbers && product.productType !== "SERIALIZED") {
-      const err = new Error(`${product.name} is not a serial-tracked product — remove the selected serial numbers`);
-      err.statusCode = 400;
-      throw err;
-    }
-    if (serialNumbers && serialNumbers.length !== requested) {
-      const err = new Error(`Selected serial numbers (${serialNumbers.length}) must match the quantity (${requested})`);
-      err.statusCode = 400;
       throw err;
     }
 
@@ -1241,13 +1232,12 @@ const addOrderItem = async ({ saleId, productId, quantity, sellingPrice, serialN
         fulfilledQuantity: 0,
         backorderedQuantity: 0,
         notes: trimmedItemNotes,
-        serialsManuallySelected: Array.isArray(serialNumbers) && serialNumbers.length > 0,
       },
       { transaction: t }
     );
 
     const reserveResult = await inventoryService.reserveStock(
-      { productId, saleItemId: saleItem.id, quantity: requested, userId, serialNumbers },
+      { productId, saleItemId: saleItem.id, quantity: requested, userId },
       { transaction: t }
     );
     saleItem.allocatedQuantity = reserveResult.allocated;
@@ -1362,9 +1352,7 @@ const updateOrderItem = async ({ saleId, saleItemId, quantity, sellingPrice, not
         item.allocatedQuantity += reserveResult.allocated;
         item.backorderedQuantity += reserveResult.backordered;
         newlyAllocated = reserveResult.allocated;
-        // The extra units were FIFO-held, not user-picked — the line's serials must be
-        // re-selected in the Courier picker rather than shown pre-filled.
-        if (reserveResult.serialUnitIds.length > 0) item.serialsManuallySelected = false;
+        // No serial is picked for the extra units — they're selected in the Courier picker.
       } else if (delta < 0) {
         let toRelease = -delta;
         const releaseFromBackorder = Math.min(toRelease, item.backorderedQuantity);

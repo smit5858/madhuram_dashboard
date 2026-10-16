@@ -542,8 +542,9 @@ exports.addSaleItem = async (req, res) => {
       return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to update this sale" });
     }
 
-    const { productId, quantity, sellingPrice, serialNumbers, notes } = req.body || {};
-    const item = await orderService.addOrderItem({ saleId: sale.id, productId, quantity, sellingPrice, serialNumbers, notes, userId: user.id });
+    // serialNumbers is deliberately not read — serials are assigned only in the Courier module.
+    const { productId, quantity, sellingPrice, notes } = req.body || {};
+    const item = await orderService.addOrderItem({ saleId: sale.id, productId, quantity, sellingPrice, notes, userId: user.id });
     return res.status(201).json({ success: true, message: "Product added to sale", data: item });
   } catch (err) {
     return errorResponse(res, err);

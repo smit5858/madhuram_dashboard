@@ -426,8 +426,9 @@ exports.getCourierSerials = async (req, res) => {
         const heldForItem = held.filter((u) => u.saleItemId === item.id && u.productId === item.productId);
         const reserved = heldForItem.filter((u) => u.status === "RESERVED");
         const heldUnits = reserved.length > 0 ? reserved : heldForItem.filter((u) => u.status === "SOLD");
-        // Units only FIFO-held by reserveStock (see SaleItem.serialsManuallySelected) are offered
-        // as ordinary choices, not reported as assigned — the user must pick serials manually.
+        // Units FIFO-held by older sale-creation code (SaleItem.serialsManuallySelected === false)
+        // are offered as ordinary choices, not reported as assigned — the user picks manually,
+        // and saving releases whichever of them weren't picked (see reassignSerials).
         const autoHeld = item.serialsManuallySelected === false;
         const assigned = (autoHeld ? [] : heldUnits).map((u) => ({
           id: u.id,
@@ -674,10 +675,10 @@ exports.updateCourier = async (req, res) => {
       courier.completedDate = new Date().toISOString().slice(0, 10);
     }
 
-    // Re-picks whichever serial numbers are currently assigned to this line — reserved (not yet
-    // fulfilled) or already sold (see inventoryService.reassignSerials for the swap logic).
-    // Serial selection is optional — an empty array leaves the line "Not Selected" (see
-    // reassignSerials) while its reserved units keep backing the stock reservation.
+    // The only place serial numbers are assigned to a sale line (the Sells module never picks
+    // them). Sets this line's serials to exactly the submitted selection — reserved (not yet
+    // fulfilled) or already sold — inside this save's transaction, so a failed save assigns
+    // nothing (see inventoryService.reassignSerials). An empty array leaves it "Not Selected".
     if (Array.isArray(serialNumbers) && courier.saleItemId) {
       const saleItem = await SaleItem.findByPk(courier.saleItemId, { transaction: t, lock: true });
       if (saleItem) {

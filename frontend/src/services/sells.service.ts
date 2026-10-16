@@ -162,7 +162,7 @@ export interface CreateSalePayload {
     productId: number;
     quantity: number;
     sellingPrice: number;
-    serialNumbers?: string[];
+    // No serialNumbers — serial numbers are assigned only in the Courier module.
     notes?: string;
   }>;
 }
@@ -268,7 +268,7 @@ const quickAddProduct = (data: { name: string }) =>
 // after the fact (e.g. a Lead-originated sale that started with just one placeholder line).
 const addSaleItem = (
   saleId: number,
-  data: { productId: number; quantity: number; sellingPrice: number; serialNumbers?: string[]; notes?: string }
+  data: { productId: number; quantity: number; sellingPrice: number; notes?: string }
 ) => httpService.post<{ success: boolean; message: string; data: SaleItemData }>(`/sells/${saleId}/items`, data);
 
 // Edits an existing line's price and/or quantity — the other half of addSaleItem above.
