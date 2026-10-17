@@ -32,6 +32,8 @@ export interface ExpenseEntryData {
 export interface ExpenseFilters {
     search?: string;
     status?: ExpenseStatus | "";
+    startDate?: string;
+    endDate?: string;
     page?: number;
     limit?: number;
 }

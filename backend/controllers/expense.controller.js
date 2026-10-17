@@ -51,7 +51,7 @@ const serializeExpense = (row) => ({
 // by getExpenses and getExpenseTotals so the table and totals can never disagree on scope.
 const buildExpenseWhere = async (user, query) => {
   const canViewAll = user && (await canViewAllRecords(user, "/account/expense"));
-  const { search, status } = query;
+  const { search, status, startDate, endDate } = query;
   const where = { entryType: "EXPENSE", category: { [Op.ne]: "Pending Bill" } };
 
   if (!canViewAll) where.createdBy = user.id;
@@ -65,11 +65,16 @@ const buildExpenseWhere = async (user, query) => {
       { productName: { [Op.like]: term } },
     ];
   }
+  if (startDate || endDate) {
+    where.entryDate = {};
+    if (startDate) where.entryDate[Op.gte] = startDate;
+    if (endDate) where.entryDate[Op.lte] = endDate;
+  }
 
   return where;
 };
 
-// GET /expense?search=&status=&page=&limit=
+// GET /expense?search=&status=&startDate=&endDate=&page=&limit=
 exports.getExpenses = async (req, res) => {
   try {
     const where = await buildExpenseWhere(req.user, req.query);

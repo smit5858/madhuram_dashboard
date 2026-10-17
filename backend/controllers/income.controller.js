@@ -1,6 +1,6 @@
 const {
   AccountEntry, DailyAccountBalance, User, BankAccount, Sale, Courier, SaleItem, Product, SerialUnit,
-  SaleBankAccount, LedgerEntryBankAccount,
+  SaleBankAccount, LedgerEntryBankAccount, CustomerLedgerEntry,
 } = require("../models");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
@@ -8,6 +8,7 @@ const sequelize = require("../config/db");
 const { checkPassword } = require("../helper/common");
 const { recalculateDay, getPreviousClosing } = require("../services/dailyBalance.service");
 const { exportAccountEntries, INCOME_EXPORT_COLUMNS } = require("../services/accountExport.service");
+const { computeOrderTotal } = require("../services/order.service");
 
 const errorResponse = (res, err) => res.status(err.statusCode || 500).json({ success: false, message: err.message });
 
@@ -77,6 +78,82 @@ const attachBankPayments = async (rows) => {
     const source = r.referenceType === "sale" ? bySale : r.referenceType === "customerLedgerEntry" ? byLedgerEntry : null;
     const payments = source?.get(r.referenceId);
     if (payments?.length) r.dataValues.bankPayments = payments;
+  }
+};
+
+/**
+ * Attaches a read-only `paymentSummary` ({ scope, totalAmount, paidAmount, pendingAmount }) to
+ * each Sale / Customer Ledger synced INCOME row, so the Income view shows how much of the bill is
+ * still unpaid — the row's own `amount` is only the payment that was received. Resolved live:
+ *  - referenceType "sale", or a ledger entry tied to a sale: that Sale's order total
+ *    (sellingAmount + courierCharge, see order.service.js#computeOrderTotal), collectedAmount and
+ *    pendingAmount — scope "sale".
+ *  - a customer-level ledger payment (no saleId): the customer's whole ledger — debits as total,
+ *    credits as paid, pending = -SUM(amount) floored at 0 (same balance customerLedger.service.js
+ *    computes) — scope "customer".
+ * Manual income entries have no source bill, so they're left alone.
+ */
+const attachPaymentSummary = async (rows) => {
+  const list = (Array.isArray(rows) ? rows : [rows]).filter((r) => r.referenceId);
+  const ledgerEntryIds = [...new Set(list.filter((r) => r.referenceType === "customerLedgerEntry").map((r) => r.referenceId))];
+  const ledgerEntries = ledgerEntryIds.length
+    ? await CustomerLedgerEntry.findAll({ where: { id: ledgerEntryIds }, attributes: ["id", "customerId", "saleId"] })
+    : [];
+  const ledgerById = new Map(ledgerEntries.map((e) => [e.id, e]));
+
+  const saleIdOf = (r) => (r.referenceType === "sale" ? r.referenceId : ledgerById.get(r.referenceId)?.saleId || null);
+  const customerIdOf = (r) => (r.referenceType === "customerLedgerEntry" ? ledgerById.get(r.referenceId)?.customerId || null : null);
+
+  const saleIds = [...new Set(list.map(saleIdOf).filter(Boolean))];
+  const customerIds = [...new Set(list.filter((r) => !saleIdOf(r)).map(customerIdOf).filter(Boolean))];
+  if (saleIds.length === 0 && customerIds.length === 0) return;
+
+  const [sales, customerTotals] = await Promise.all([
+    saleIds.length
+      ? Sale.findAll({ where: { id: saleIds }, attributes: ["id", "sellingAmount", "courierCharge", "collectedAmount", "pendingAmount"] })
+      : [],
+    customerIds.length
+      ? CustomerLedgerEntry.findAll({
+          where: { customerId: customerIds },
+          attributes: [
+            "customerId",
+            [sequelize.literal("SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END)"), "debit"],
+            [sequelize.literal("SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END)"), "credit"],
+            [sequelize.fn("SUM", sequelize.col("amount")), "balance"],
+          ],
+          group: ["customerId"],
+          raw: true,
+        })
+      : [],
+  ]);
+
+  const bySale = new Map(
+    sales.map((s) => [
+      s.id,
+      {
+        scope: "sale",
+        totalAmount: computeOrderTotal(s.sellingAmount, s.courierCharge),
+        paidAmount: parseFloat(s.collectedAmount) || 0,
+        pendingAmount: parseFloat(s.pendingAmount) || 0,
+      },
+    ])
+  );
+  const byCustomer = new Map(
+    customerTotals.map((c) => [
+      c.customerId,
+      {
+        scope: "customer",
+        totalAmount: parseFloat(c.debit) || 0,
+        paidAmount: parseFloat(c.credit) || 0,
+        pendingAmount: Math.max(0, -(parseFloat(c.balance) || 0)),
+      },
+    ])
+  );
+
+  for (const r of list) {
+    const saleId = saleIdOf(r);
+    const summary = saleId ? bySale.get(saleId) : byCustomer.get(customerIdOf(r));
+    if (summary) r.dataValues.paymentSummary = summary;
   }
 };
 
@@ -220,6 +297,7 @@ exports.getIncomeEntries = async (req, res) => {
     await attachCourierStatus(rows);
     await attachSaleProducts(rows);
     await attachBankPayments(rows);
+    await attachPaymentSummary(rows);
 
     return res.status(200).json({
       success: true,
@@ -342,6 +420,7 @@ exports.getIncomeById = async (req, res) => {
     await attachSaleNotes(entry);
     await attachSaleProducts(entry);
     await attachBankPayments(entry);
+    await attachPaymentSummary(entry);
     return res.status(200).json({ success: true, data: entry });
   } catch (err) {
     return errorResponse(res, err);

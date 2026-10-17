@@ -27,6 +27,10 @@ export interface IncomeEntryData {
     /** Read-only: bank(s) a Sale / Customer Ledger synced row was paid into, resolved from the
      *  source's bank split (see income.controller.js#attachBankPayments). */
     bankPayments?: { bankName: string; accountNumber: string; amount: string | number }[];
+    /** Read-only: total / paid / pending of the bill behind a Sale / Customer Ledger synced row
+     *  (scope "sale" = that sale; "customer" = the customer's whole ledger), see
+     *  income.controller.js#attachPaymentSummary. Absent on manual entries. */
+    paymentSummary?: { scope: "sale" | "customer"; totalAmount: number; paidAmount: number; pendingAmount: number };
     description?: string | null;
     /** Read-only: the linked Sale's own Notes (entered by the sales employee on the Sell form),
      *  attached server-side for sale-linked entries. Distinct from `description` above, which is

@@ -127,6 +127,22 @@ const IncomeViewModal = ({ entry, onClose }: IncomeViewModalProps) => {
               )}
             </Section>
 
+            {entry.paymentSummary && (
+              <Section title={entry.paymentSummary.scope === "sale" ? "Sale Payment" : "Customer Account"}>
+                <DetailItem icon={IndianRupee} label="Total Amount" value={formatCurrency(entry.paymentSummary.totalAmount)} />
+                <DetailItem icon={IndianRupee} label="Total Paid" value={formatCurrency(entry.paymentSummary.paidAmount)} />
+                <DetailItem
+                  icon={IndianRupee}
+                  label="Pending Amount"
+                  value={
+                    <span className={entry.paymentSummary.pendingAmount > 0 ? "text-red-600" : "text-emerald-600"}>
+                      {formatCurrency(entry.paymentSummary.pendingAmount)}
+                    </span>
+                  }
+                />
+              </Section>
+            )}
+
             {entry.description && (
               <Section title="Notes">
                 <div className="sm:col-span-2 flex items-start gap-2.5">

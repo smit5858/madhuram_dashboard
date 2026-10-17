@@ -282,6 +282,9 @@ const Income = () => {
                   <th className="px-4 py-3 whitespace-nowrap">Customer Name</th>
                   <th className="px-4 py-3 whitespace-nowrap">Product / Serial No</th>
                   <th className="px-4 py-3 whitespace-nowrap">Amount</th>
+                  <th className="px-4 py-3 whitespace-nowrap">Total Bill</th>
+                  <th className="px-4 py-3 whitespace-nowrap">Total Paid</th>
+                  <th className="px-4 py-3 whitespace-nowrap">Pending</th>
                   <th className="px-4 py-3 whitespace-nowrap">Date</th>
                   <th className="px-4 py-3 whitespace-nowrap">Status</th>
                   <th className="px-4 py-3 whitespace-nowrap">Courier</th>
@@ -303,6 +306,25 @@ const Income = () => {
                           list is too long for a table cell and would stretch the row. */}
                     </td>
                     <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap">{formatCurrency(entry.amount)}</td>
+                    {/* Bill behind a Sale / Customer Ledger synced row (see income.controller.js#attachPaymentSummary);
+                        manual entries have none, so they show "—". */}
+                    {entry.paymentSummary ? (
+                      <>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-700">{formatCurrency(entry.paymentSummary.totalAmount)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-emerald-700 font-medium">{formatCurrency(entry.paymentSummary.paidAmount)}</td>
+                        <td
+                          className={`px-4 py-3 whitespace-nowrap font-semibold ${entry.paymentSummary.pendingAmount > 0 ? "text-red-600" : "text-gray-400"}`}
+                        >
+                          {formatCurrency(entry.paymentSummary.pendingAmount)}
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-400">—</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-400">—</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-400">—</td>
+                      </>
+                    )}
                     <td className="px-4 py-3 whitespace-nowrap text-gray-500">{formatDisplayDate(entry.entryDate)}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <IncomeStatusBadge status={entry.status} />

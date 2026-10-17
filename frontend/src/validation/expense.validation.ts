@@ -43,6 +43,8 @@ export type ExpenseEntryFormValues = z.infer<typeof expenseEntrySchema>;
 export const expenseFilterSchema = z.object({
   search: z.string().max(150, "Search term is too long").optional(),
   status: z.string().optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
 });
 
 export type ExpenseFilterValues = z.infer<typeof expenseFilterSchema>;

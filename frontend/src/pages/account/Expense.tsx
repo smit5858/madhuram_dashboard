@@ -50,10 +50,12 @@ const FilterSync = ({
     setAppliedFilters((prev) => ({
       ...prev,
       status: (values.status || undefined) as ExpenseFilters["status"],
+      startDate: values.startDate || undefined,
+      endDate: values.endDate || undefined,
       page: 1,
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [values.status]);
+  }, [values.status, values.startDate, values.endDate]);
 
   return null;
 };
@@ -167,7 +169,9 @@ const Expense = () => {
     },
   });
 
-  const hasActiveFilters = Boolean(appliedFilters.search || appliedFilters.status);
+  const hasActiveFilters = Boolean(
+    appliedFilters.search || appliedFilters.status || appliedFilters.startDate || appliedFilters.endDate
+  );
 
   const handleReset = () => {
     filterFormRef.current?.resetForm();
@@ -190,7 +194,7 @@ const Expense = () => {
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <Formik
           innerRef={filterFormRef}
-          initialValues={{ search: "", status: initialStatus } as ExpenseFilterValues}
+          initialValues={{ search: "", status: initialStatus, startDate: "", endDate: "" } as ExpenseFilterValues}
           validate={(values) => {
             const result = expenseFilterSchema.safeParse(values);
             return result.success ? {} : { search: result.error.issues[0]?.message };
@@ -210,6 +214,19 @@ const Expense = () => {
                   className="w-full rounded-full border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-3 text-xs text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
                 />
               </div>
+
+              <Field
+                name="startDate"
+                type="date"
+                aria-label="From date"
+                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+              />
+              <Field
+                name="endDate"
+                type="date"
+                aria-label="To date"
+                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none"
+              />
 
               <Field
                 as="select"
