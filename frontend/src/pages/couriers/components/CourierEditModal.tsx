@@ -323,6 +323,11 @@ const CourierEditModal = ({ courier, direction, onClose }: CourierEditModalProps
                 .filter((row) => !!row.courierId)
                 .map((row) => {
                     const payload: Partial<CourierData> & { serialNumbers?: string[] } = { ...data };
+                    // A shipment's charge is one charge for the whole sale, held on a single row
+                    // (see order.service.js#syncSaleCourierCharge) — sending it to every product
+                    // row would add it once per product to the Courier Charge total. Only the row
+                    // this form was opened on (whose charge it shows) receives it.
+                    if (row.courierId !== courier?.id) delete payload.charge;
                     if (row.isSerialized && row.requiredSerialCount > 0) {
                         payload.serialNumbers = values.serialsByItem?.[row.saleItemId] || [];
                     }

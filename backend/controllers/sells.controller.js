@@ -419,6 +419,7 @@ exports.updateSale = async (req, res) => {
     if (to !== undefined) sale.to = to || "Madhuram Motor";
     if (courierName !== undefined) sale.courierName = courierName || null;
 
+    const previousCourierCharge = parseFloat(sale.courierCharge) || 0;
     if (courierCharge !== undefined) {
       const parsedCourierCharge = courierCharge === null || courierCharge === "" ? 0 : parseFloat(courierCharge);
       if (isNaN(parsedCourierCharge) || parsedCourierCharge < 0) {
@@ -493,6 +494,13 @@ exports.updateSale = async (req, res) => {
         { saleId: sale.id, createCourierEntry: !!createCourierEntry, userId: user.id },
         { transaction: t }
       );
+    }
+
+    // Edited courier charge → update the linked Outgoing Courier row (and the monthly Courier
+    // Charge total) to match. Only on an actual change, so an unrelated sale edit never
+    // overwrites a charge adjusted in the Courier module. See orderService.syncSaleCourierCharge.
+    if ((parseFloat(sale.courierCharge) || 0) !== previousCourierCharge) {
+      await orderService.syncSaleCourierCharge(sale.id, { transaction: t });
     }
 
     // Keep the linked Account → Income entry in sync with this edit (customer/payment/amount,

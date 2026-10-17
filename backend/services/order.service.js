@@ -682,6 +682,9 @@ const createOrder = async ({
     // and a no-op with an empty group if createCourierEntry was off or every line was SOFTWARE.
     await inventoryService.tryFulfillReadyGroup(shipmentGroupId, { userId, transaction: t });
 
+    // Carry the sale's courier charge onto its Outgoing Courier record (one row only).
+    await syncSaleCourierCharge(sale.id, { transaction: t });
+
     // Any line that didn't get a Courier (createCourierEntry off, or a SOFTWARE line even in an
     // otherwise courier-bearing mixed sale) has no shipment to coordinate around — fulfill its
     // allocated quantity directly instead of waiting on group readiness. Anything still
@@ -1079,7 +1082,7 @@ const cancelOrderItem = async ({ saleId, saleItemId, userId, reason, defective }
     // Same courier-count fix as cancelOrder, scoped to this one line item's courier record(s).
     const itemCouriersToCancel = await Courier.findAll({
       where: { saleItemId: item.id, status: { [Op.ne]: "DONE" } },
-      attributes: ["entryDate"],
+      attributes: ["entryDate", "charge"],
       transaction: t,
     });
     await Courier.update(
@@ -1087,6 +1090,11 @@ const cancelOrderItem = async ({ saleId, saleItemId, userId, reason, defective }
       { where: { saleItemId: item.id, status: { [Op.ne]: "DONE" } }, transaction: t }
     );
     await recalculateCourierChargeForDates(itemCouriersToCancel.map((c) => c.entryDate), { transaction: t });
+    // If the cancelled line's row was the one carrying the sale's courier charge, move the charge
+    // onto a remaining active row so it isn't silently dropped from the Courier Charge total.
+    if (itemCouriersToCancel.some((c) => (parseFloat(c.charge) || 0) > 0)) {
+      await syncSaleCourierCharge(saleId, { transaction: t });
+    }
 
     await inventoryService.recomputeSaleFulfillmentStatus(saleId, { transaction: t });
 
@@ -1406,6 +1414,38 @@ const updateOrderItem = async ({ saleId, saleItemId, quantity, sellingPrice, not
   }
 };
 
+// Mirrors a Sale's own courierCharge onto its Outgoing Courier rows so it shows up in
+// Courier → Outgoing Courier and in the monthly Courier Charge total (courierCharge.service.js,
+// a SUM over Courier.charge). A sale's charge is one charge for the whole shipment, but a
+// multi-product sale has one Courier row per line — so it's written onto exactly one "carrier"
+// row (the lowest-id non-cancelled row) and cleared from that sale's other active rows; putting
+// it on every row would add the same charge once per product. Sale-linked rows never get their
+// own Income entry (incomeSync.service.js#shouldHaveCourierIncome), so this can't double-count
+// income either. Cancelled rows are left untouched — they're already excluded from the total.
+const syncSaleCourierCharge = async (saleId, { transaction: t }) => {
+  const sale = await Sale.findByPk(saleId, { attributes: ["id", "status", "courierCharge"], transaction: t });
+  if (!sale || sale.status === "CANCELLED") return;
+
+  const rows = await Courier.findAll({
+    where: { saleId, direction: "OUT", status: { [Op.ne]: "CANCELLED" } },
+    order: [["id", "ASC"]],
+    transaction: t,
+  });
+  if (rows.length === 0) return;
+
+  const amount = parseFloat(sale.courierCharge) || 0;
+  const changedDates = [];
+  for (let i = 0; i < rows.length; i++) {
+    const target = i === 0 && amount > 0 ? amount : null;
+    const current = rows[i].charge === null || rows[i].charge === undefined ? null : parseFloat(rows[i].charge);
+    if (current === target) continue;
+    rows[i].charge = target;
+    await rows[i].save({ transaction: t });
+    changedDates.push(rows[i].entryDate);
+  }
+  if (changedDates.length > 0) await recalculateCourierChargeForDates(changedDates, { transaction: t });
+};
+
 // Toggles whether a Sale has Courier (shipment-tracking) record(s) for its items — lets the
 // "Create Courier Entry" checkbox be flipped after the sale already exists (see
 // sells.controller.js#updateSale). Never touches stock/fulfillment (that's already resolved at
@@ -1432,6 +1472,7 @@ const setCourierEntryForSale = async ({ saleId, createCourierEntry, userId }, { 
   if (createCourierEntry) {
     const itemsWithCourier = new Set(existingActiveCouriers.map((c) => c.saleItemId));
     const shipmentGroupId = `SALE-${sale.id}`;
+    let createdAny = false;
 
     for (const item of items) {
       if (itemsWithCourier.has(item.id)) continue;
@@ -1471,7 +1512,12 @@ const setCourierEntryForSale = async ({ saleId, createCourierEntry, userId }, { 
         },
         { transaction: t }
       );
+      createdAny = true;
     }
+
+    // Newly-created rows (e.g. the toggle turned back on after every earlier row was cancelled)
+    // start without a charge — give the sale's courier charge a carrier row again.
+    if (createdAny) await syncSaleCourierCharge(sale.id, { transaction: t });
   } else if (existingActiveCouriers.length > 0) {
     // A courier that already reached DONE (already shipped/delivered) is left alone — same rule
     // as cancelOrder's courier handling.
@@ -1505,4 +1551,5 @@ module.exports = {
   addOrderItem,
   updateOrderItem,
   setCourierEntryForSale,
+  syncSaleCourierCharge,
 };
