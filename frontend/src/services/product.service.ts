@@ -55,8 +55,18 @@ export interface PurchaseHistoryEntry {
   purchaseAmount: number | null;
 }
 
+export interface WaitingForSerialLine {
+  saleItemId: number;
+  saleId: number;
+  invoiceNumber: string | null;
+  customerName: string | null;
+  quantity: number;
+}
+
 export interface ProductDetail extends ProductData {
   total?: number;
+  /** SERIALIZED only — sales waiting for a serial pick in Courier; they hold AVAILABLE units. */
+  waitingForSerial?: WaitingForSerialLine[];
   units?: SerialUnitDetail[];
   /** NON_SERIAL only — one row per purchase date, merging same-day restock batches. */
   purchases?: PurchaseHistoryEntry[];

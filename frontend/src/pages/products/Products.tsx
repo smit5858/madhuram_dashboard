@@ -2228,6 +2228,21 @@ const Products = () => {
                           <div className="text-[11px] text-slate-400">Sold</div>
                         </div>
                       </div>
+                      {detailProduct.waitingForSerial && detailProduct.waitingForSerial.length > 0 && (
+                        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                          <div className="font-semibold">
+                            Kept for sales waiting for serial selection in Courier (not counted as Available):
+                          </div>
+                          <ul className="mt-1 space-y-0.5">
+                            {detailProduct.waitingForSerial.map((l) => (
+                              <li key={l.saleItemId}>
+                                {l.customerName || "—"}
+                                {l.invoiceNumber ? ` (${l.invoiceNumber})` : ""} — {l.quantity} pc
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                     </div>
                   )}
 
