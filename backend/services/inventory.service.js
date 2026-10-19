@@ -59,6 +59,10 @@ const assertNonSerial = (product) => {
 // an assigned (RESERVED/SOLD) unit is visible in serial_units. The rest is this "unassigned
 // demand" — AVAILABLE units that are spoken for by a sale but don't have a serial picked yet.
 // Free stock for a new sale is AVAILABLE minus this demand. Returns { [productId]: count }.
+// A line whose courier shipment is already DONE no longer has a serial pick ahead of it, so it
+// stops claiming stock — otherwise every delivered line left without a serial would keep eating
+// AVAILABLE units forever, including ones received long after it shipped (stock stuck at 0).
+// To record which unit such a line took, assign it to that customer from Inventory or Courier.
 const getUnassignedSerialDemand = async (productIds, { transaction } = {}) => {
   const ids = (Array.isArray(productIds) ? productIds : [productIds]).map(Number).filter(Boolean);
   if (ids.length === 0) return {};
@@ -74,6 +78,10 @@ const getUnassignedSerialDemand = async (productIds, { transaction } = {}) => {
           GROUP BY saleItemId
        ) h ON h.saleItemId = si.id
       WHERE si.productId IN (:ids) AND si.fulfillmentStatus <> 'CANCELLED'
+        AND NOT (
+          EXISTS (SELECT 1 FROM couriers c WHERE c.saleItemId = si.id AND c.status = 'DONE')
+          AND NOT EXISTS (SELECT 1 FROM couriers c WHERE c.saleItemId = si.id AND c.status NOT IN ('DONE', 'CANCELLED'))
+        )
       GROUP BY si.productId`,
     { replacements: { ids }, type: sequelize.QueryTypes.SELECT, transaction }
   );
