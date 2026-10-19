@@ -58,17 +58,20 @@ const assertNonSerial = (product) => {
 // count: its allocated + fulfilled - returned quantity, of which only the part already backed by
 // an assigned (RESERVED/SOLD) unit is visible in serial_units. The rest is this "unassigned
 // demand" — AVAILABLE units that are spoken for by a sale but don't have a serial picked yet.
-// Free stock for a new sale is AVAILABLE minus this demand. Returns { [productId]: count }.
-// A line whose courier shipment is already DONE no longer has a serial pick ahead of it, so it
-// stops claiming stock — otherwise every delivered line left without a serial would keep eating
-// AVAILABLE units forever, including ones received long after it shipped (stock stuck at 0).
-// To record which unit such a line took, assign it to that customer from Inventory or Courier.
-const getUnassignedSerialDemand = async (productIds, { transaction } = {}) => {
+// Free stock for a new sale is AVAILABLE minus this demand.
+// Only lines still waiting to be dispatched (a PENDING / WAITING_FOR_STOCK courier entry) claim
+// stock this way — that's where the serial gets picked before the unit leaves. A dispatched or
+// delivered line, or one with no courier entry at all, has no pick ahead of it: counting it would
+// make it eat AVAILABLE units forever, including ones received long after it shipped (stock stuck
+// at 0 while units are on the shelf). Such a line records its unit by assigning it to that
+// customer from Inventory. Returns one row per claiming line.
+const getUnassignedSerialLines = async (productIds, { transaction } = {}) => {
   const ids = (Array.isArray(productIds) ? productIds : [productIds]).map(Number).filter(Boolean);
-  if (ids.length === 0) return {};
+  if (ids.length === 0) return [];
   const rows = await sequelize.query(
-    `SELECT si.productId AS productId,
-            SUM(GREATEST(si.allocatedQuantity + si.fulfilledQuantity - si.returnedQuantity - COALESCE(h.held, 0), 0)) AS unassigned
+    `SELECT si.productId AS productId, si.id AS saleItemId, s.id AS saleId,
+            s.invoiceNumber AS invoiceNumber, s.customerName AS customerName,
+            GREATEST(si.allocatedQuantity + si.fulfilledQuantity - si.returnedQuantity - COALESCE(h.held, 0), 0) AS unassigned
        FROM sells_items si
        JOIN sells s ON s.id = si.saleId AND s.status <> 'CANCELLED'
        LEFT JOIN (
@@ -78,15 +81,24 @@ const getUnassignedSerialDemand = async (productIds, { transaction } = {}) => {
           GROUP BY saleItemId
        ) h ON h.saleItemId = si.id
       WHERE si.productId IN (:ids) AND si.fulfillmentStatus <> 'CANCELLED'
-        AND NOT (
-          EXISTS (SELECT 1 FROM couriers c WHERE c.saleItemId = si.id AND c.status = 'DONE')
-          AND NOT EXISTS (SELECT 1 FROM couriers c WHERE c.saleItemId = si.id AND c.status NOT IN ('DONE', 'CANCELLED'))
+        AND EXISTS (
+          SELECT 1 FROM couriers c
+           WHERE c.saleItemId = si.id AND c.status IN ('PENDING', 'WAITING_FOR_STOCK')
         )
-      GROUP BY si.productId`,
+      ORDER BY si.id ASC`,
     { replacements: { ids }, type: sequelize.QueryTypes.SELECT, transaction }
   );
+  return rows
+    .map((r) => ({ ...r, unassigned: parseInt(r.unassigned, 10) || 0 }))
+    .filter((r) => r.unassigned > 0);
+};
+
+// Per-product total of getUnassignedSerialLines. Returns { [productId]: count }.
+const getUnassignedSerialDemand = async (productIds, { transaction } = {}) => {
   const byProduct = {};
-  for (const row of rows) byProduct[row.productId] = parseInt(row.unassigned, 10) || 0;
+  for (const row of await getUnassignedSerialLines(productIds, { transaction })) {
+    byProduct[row.productId] = (byProduct[row.productId] || 0) + row.unassigned;
+  }
   return byProduct;
 };
 
@@ -846,6 +858,28 @@ const receiveStock = async (
   });
 };
 
+// After an item's allocation changes, re-check whether its linked courier shipment (and the
+// whole shipment group it belongs to, for SHIP_COMPLETE orders) is now ready to fulfill.
+// A sale created with "Create Courier Entry" off has no Courier row at all — such an item
+// isn't part of any shipment group, so it's fulfilled directly the moment it's no longer
+// backordered rather than waiting on group readiness. Returns the shipmentGroupId if that group
+// just became ready, else null.
+const recheckCourierForAllocatedItem = async (item, { userId, transaction: t }) => {
+  const courier = await Courier.findOne({ where: { saleItemId: item.id }, transaction: t, lock: true });
+  if (!courier) {
+    if (item.backorderedQuantity === 0 && item.allocatedQuantity > 0) {
+      await fulfillStock(
+        { productId: item.productId, saleItemId: item.id, quantity: item.allocatedQuantity, userId },
+        { transaction: t }
+      );
+    }
+    return null;
+  }
+  if (!courier.shipmentGroupId) return null;
+  const result = await tryFulfillReadyGroup(courier.shipmentGroupId, { userId, transaction: t });
+  return result.becameReady ? courier.shipmentGroupId : null;
+};
+
 // FIFO sweep: allocates currently-available stock to the oldest pending backordered
 // SaleItems for this product. Locks all eligible items in one ordered query rather than
 // per-row, both for deadlock-safety and to guarantee FIFO fairness.
@@ -872,25 +906,9 @@ const allocateBackorders = async (productId, { transaction } = {}) => {
     const allocations = [];
     const readyShipmentGroupIds = new Set();
 
-    // After an item's allocation changes, re-check whether its linked courier shipment (and the
-    // whole shipment group it belongs to, for SHIP_COMPLETE orders) is now ready to fulfill.
-    // A sale created with "Create Courier Entry" off has no Courier row at all — such an item
-    // isn't part of any shipment group, so it's fulfilled directly the moment it's no longer
-    // backordered rather than waiting on group readiness.
     const recheckCourierForItem = async (item) => {
-      const courier = await Courier.findOne({ where: { saleItemId: item.id }, transaction: t, lock: true });
-      if (!courier) {
-        if (item.backorderedQuantity === 0 && item.allocatedQuantity > 0) {
-          await fulfillStock(
-            { productId: item.productId, saleItemId: item.id, quantity: item.allocatedQuantity, userId: null },
-            { transaction: t }
-          );
-        }
-        return;
-      }
-      if (!courier.shipmentGroupId) return;
-      const result = await tryFulfillReadyGroup(courier.shipmentGroupId, { userId: null, transaction: t });
-      if (result.becameReady) readyShipmentGroupIds.add(courier.shipmentGroupId);
+      const groupId = await recheckCourierForAllocatedItem(item, { userId: null, transaction: t });
+      if (groupId) readyShipmentGroupIds.add(groupId);
     };
 
     if (STOCK_TRACKED_TYPES.includes(product.productType)) {
@@ -1112,6 +1130,7 @@ const applySerialAssignment = async (unit, { status, saleItemId, userId }, { tra
   const fromStatus = unit.status;
   const fromItemId = unit.saleItemId;
   if (fromStatus === status && (fromItemId || null) === targetItemId) return null;
+  let filledBackorderItem = null;
 
   if (targetItemId) {
     const item = await SaleItem.findByPk(targetItemId, {
@@ -1140,12 +1159,20 @@ const applySerialAssignment = async (unit, { status, saleItemId, userId }, { tra
         lock: true,
       });
       const required = expectedSerialCount(item);
-      if (required === 0) {
-        const err = new Error("This sale has no units allocated for this product yet — it is still backordered");
+      if (others.length >= required && item.backorderedQuantity > 0) {
+        // The line is still waiting for stock — handing it this physical unit fills one unit of
+        // that backorder (RESERVED: allocated, SOLD: already shipped) instead of being refused.
+        item.backorderedQuantity -= 1;
+        if (status === "SOLD") item.fulfilledQuantity += 1;
+        else item.allocatedQuantity += 1;
+        item.serialsManuallySelected = true;
+        await item.save({ transaction: t });
+        filledBackorderItem = item;
+      } else if (required === 0) {
+        const err = new Error("This sale has no units left to assign for this product");
         err.statusCode = 400;
         throw err;
-      }
-      if (others.length >= required) {
+      } else if (others.length >= required) {
         if (item.serialsManuallySelected !== false) {
           const err = new Error(
             `${item.Sale?.customerName || "This sale"} already has all ${required} serial number(s) for this product — remove one first`
@@ -1184,10 +1211,15 @@ const applySerialAssignment = async (unit, { status, saleItemId, userId }, { tra
       referenceType: "serialUnit",
       referenceId: unit.id,
       createdBy: userId,
-      notes: `Serial ${unit.serialNumber}: ${fromStatus}${fromItemId ? ` (sale item #${fromItemId})` : ""} -> ${status}${targetItemId ? ` (sale item #${targetItemId})` : ""}`,
+      notes: `Serial ${unit.serialNumber}: ${fromStatus}${fromItemId ? ` (sale item #${fromItemId})` : ""} -> ${status}${targetItemId ? ` (sale item #${targetItemId})` : ""}${filledBackorderItem ? " — filled 1 backordered unit" : ""}`,
     },
     { transaction: t }
   );
+
+  if (filledBackorderItem) {
+    await recomputeItemAndSaleStatus(filledBackorderItem, { transaction: t });
+    await recheckCourierForAllocatedItem(filledBackorderItem, { userId, transaction: t });
+  }
   return unit;
 };
 
@@ -1289,6 +1321,7 @@ module.exports = {
   getOrCreateStock,
   getSerialAvailability,
   getUnassignedSerialDemand,
+  getUnassignedSerialLines,
   reserveStock,
   releaseReservation,
   writeOffReservation,

@@ -257,6 +257,7 @@ exports.getProductById = async (req, res) => {
     });
 
     const counts = await inventoryService.getSerialAvailability(id);
+    const waitingForSerial = await inventoryService.getUnassignedSerialLines(id);
     const latestSerialPrices = await getLatestSerialPricesForProducts([id]);
     const base = serializeProduct(
       product,
@@ -269,6 +270,15 @@ exports.getProductById = async (req, res) => {
       data: {
         ...base,
         total: counts.total,
+        // Sales still waiting for a serial pick in Courier — they hold AVAILABLE units by count,
+        // which is why Available can be lower than the AVAILABLE rows in the unit list.
+        waitingForSerial: waitingForSerial.map((l) => ({
+          saleItemId: l.saleItemId,
+          saleId: l.saleId,
+          invoiceNumber: l.invoiceNumber,
+          customerName: l.customerName,
+          quantity: l.unassigned,
+        })),
         units: units.map((u) => ({
           id: u.id,
           serialNumber: u.serialNumber,
