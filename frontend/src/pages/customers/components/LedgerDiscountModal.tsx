@@ -3,30 +3,38 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import type { AxiosError } from "axios";
 import { XCircle } from "lucide-react";
-import customerLedgerService from "@/services/customerLedger.service";
+import customerLedgerService, { type LedgerEntry } from "@/services/customerLedger.service";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
-import { createDiscountSchema, type DiscountFormValues } from "@/validation/customerLedger.validation";
+import { createDiscountSchema, editDiscountSchema, type DiscountFormValues } from "@/validation/customerLedger.validation";
 
 interface LedgerDiscountModalProps {
   customerId: number;
   customerName: string;
   /** Customer's current pending amount (positive) — the most a discount can be. */
   pendingAmount: number;
+  /** When set, the modal edits this existing DISCOUNT entry — only its note can change. */
+  entry?: LedgerEntry | null;
   onClose: () => void;
 }
 
 /** Ledger page "Add Discount" — records a DISCOUNT ledger entry that lowers the customer's
  *  pending amount. Not money received, so (unlike LedgerPaymentModal) it has no payment method
- *  and never creates an Income entry. */
-const LedgerDiscountModal = ({ customerId, customerName, pendingAmount, onClose }: LedgerDiscountModalProps) => {
+ *  and never creates an Income entry. In edit mode the amount is read-only: a discount's amount
+ *  can't be changed (delete and re-apply instead), only its note. */
+const LedgerDiscountModal = ({ customerId, customerName, pendingAmount, entry, onClose }: LedgerDiscountModalProps) => {
   const queryClient = useQueryClient();
-  const schema = createDiscountSchema(pendingAmount);
+  const isEdit = !!entry;
+  const schema = isEdit ? editDiscountSchema : createDiscountSchema(pendingAmount);
 
   const discountMutation = useMutation({
-    mutationFn: (values: DiscountFormValues) =>
-      customerLedgerService.recordDiscount(customerId, { amount: Number(values.amount) }),
+    mutationFn: (values: DiscountFormValues) => {
+      const note = values.note?.trim() ?? "";
+      return isEdit
+        ? customerLedgerService.updateLedgerEntry(customerId, entry!.id, { note })
+        : customerLedgerService.recordDiscount(customerId, { amount: Number(values.amount), note: note || undefined });
+    },
     onSuccess: (res) => {
-      toast.success(res.data?.message || "Discount applied successfully");
+      toast.success(res.data?.message || (isEdit ? "Discount updated successfully" : "Discount applied successfully"));
       queryClient.invalidateQueries({ queryKey: ["customer-ledger", customerId] });
       queryClient.invalidateQueries({ queryKey: ["sells"] });
       queryClient.invalidateQueries({ queryKey: ["debtors"] });
@@ -34,7 +42,7 @@ const LedgerDiscountModal = ({ customerId, customerName, pendingAmount, onClose 
       onClose();
     },
     onError: (err: AxiosError<{ message?: string }>) => {
-      toast.error(err.response?.data?.message || err.message || "Failed to apply discount");
+      toast.error(err.response?.data?.message || err.message || (isEdit ? "Failed to update discount" : "Failed to apply discount"));
     },
   });
 
@@ -57,14 +65,14 @@ const LedgerDiscountModal = ({ customerId, customerName, pendingAmount, onClose 
     >
       <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-200 flex flex-col">
         <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
-          <h3 className="text-base font-bold text-slate-900">Add Discount</h3>
+          <h3 className="text-base font-bold text-slate-900">{isEdit ? "Edit Discount" : "Add Discount"}</h3>
           <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition">
             <XCircle className="h-5 w-5" />
           </button>
         </div>
 
         <Formik<DiscountFormValues>
-          initialValues={{ amount: "" }}
+          initialValues={{ amount: entry ? String(Math.abs(entry.amount)) : "", note: entry?.note || "" }}
           validate={validate}
           onSubmit={(values) => {
             // Guard against a double click firing a second request before isPending re-renders.
@@ -83,16 +91,31 @@ const LedgerDiscountModal = ({ customerId, customerName, pendingAmount, onClose 
                   className="w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs text-slate-500"
                 />
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Current Pending Amount</label>
-                <input
-                  readOnly
-                  disabled
-                  value={`₹${pendingAmount.toLocaleString("en-IN")}`}
-                  className="w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-semibold text-rose-600"
-                />
-              </div>
-              <Field name="amount" label="Discount Amount" type="number" placeholder="0.00" component={FormikInput} />
+              {isEdit ? (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Discount Amount</label>
+                  <input
+                    readOnly
+                    disabled
+                    value={`₹${Math.abs(entry!.amount).toLocaleString("en-IN")}`}
+                    className="w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-semibold text-amber-600"
+                  />
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Current Pending Amount</label>
+                    <input
+                      readOnly
+                      disabled
+                      value={`₹${pendingAmount.toLocaleString("en-IN")}`}
+                      className="w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-semibold text-rose-600"
+                    />
+                  </div>
+                  <Field name="amount" label="Discount Amount" type="number" placeholder="0.00" component={FormikInput} />
+                </>
+              )}
+              <Field name="note" label="Note" placeholder="Optional note (e.g. reason for discount)" multiline component={FormikInput} />
             </div>
 
             <div className="flex justify-end gap-2 border-t border-slate-100 px-6 py-4">
@@ -109,7 +132,9 @@ const LedgerDiscountModal = ({ customerId, customerName, pendingAmount, onClose 
                 disabled={discountMutation.isPending}
                 className="rounded-lg bg-[#3d6fe0] px-4 py-2 text-xs font-bold text-white hover:bg-[#3560c4] disabled:opacity-50"
               >
-                {discountMutation.isPending ? "Applying..." : "Apply Discount"}
+                {isEdit
+                  ? discountMutation.isPending ? "Saving..." : "Save Note"
+                  : discountMutation.isPending ? "Applying..." : "Apply Discount"}
               </button>
             </div>
           </Form>

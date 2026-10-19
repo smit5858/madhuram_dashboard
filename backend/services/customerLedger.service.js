@@ -278,18 +278,38 @@ const recordManualDebit = async ({ customerId, amount, transactionDate, referenc
   );
 };
 
+// Discount note: optional free text — trimmed, blank stored as null, capped at the same 500
+// characters the frontend's Zod schema allows.
+const DISCOUNT_NOTE_MAX_LENGTH = 500;
+const normalizeNote = (note) => {
+  if (note === undefined || note === null) return null;
+  if (typeof note !== "string") {
+    const err = new Error("Note must be text");
+    err.statusCode = 400;
+    throw err;
+  }
+  const trimmed = note.trim();
+  if (trimmed.length > DISCOUNT_NOTE_MAX_LENGTH) {
+    const err = new Error(`Note must be under ${DISCOUNT_NOTE_MAX_LENGTH} characters`);
+    err.statusCode = 400;
+    throw err;
+  }
+  return trimmed || null;
+};
+
 // Ledger page "Discount" — reduces the customer's pending amount without any money changing
 // hands. Stored as a positive DISCOUNT entry so the plain SUM() balance picks it up like a
 // credit, but it is never mirrored into Income/Expense (the controller deliberately skips
 // incomeSync). Must run inside a transaction: the customer row is locked so two concurrent
 // discounts can't both pass the "not more than pending" check against the same stale balance.
-const recordDiscount = async ({ customerId, amount, transactionDate, userId }, { transaction } = {}) => {
+const recordDiscount = async ({ customerId, amount, transactionDate, note, userId }, { transaction } = {}) => {
   const parsedAmount = parseFloat(amount);
   if (isNaN(parsedAmount) || parsedAmount <= 0) {
     const err = new Error("Discount amount must be greater than 0");
     err.statusCode = 400;
     throw err;
   }
+  const resolvedNote = normalizeNote(note);
 
   await Customer.findByPk(customerId, { transaction, lock: !!transaction });
 
@@ -329,7 +349,9 @@ const recordDiscount = async ({ customerId, amount, transactionDate, userId }, {
       saleId: null,
       type: "DISCOUNT",
       amount: parsedAmount,
-      note: "Discount applied",
+      // Optional free-text note from the Discount modal. Discounts applied before this field
+      // existed were saved with the fixed text "Discount applied" — those rows are left as-is.
+      note: resolvedNote,
       transactionDate: resolvedDate,
       createdBy: userId || null,
     },
@@ -401,11 +423,18 @@ const updateEntry = async (
   }
 
   // A discount's amount was validated against the pending balance at the time it was applied —
-  // editing it here would bypass that check, so it can only be deleted and re-applied.
+  // editing it here would bypass that check, so it can only be deleted and re-applied. Its note
+  // is the one exception: it has no financial effect, so a note-only update is allowed.
   if (entry.type === "DISCOUNT") {
-    const err = new Error("A discount cannot be edited — delete it and apply a new discount instead");
-    err.statusCode = 400;
-    throw err;
+    const touchesOtherFields = [amount, paymentMethod, bankPayments, reference, transactionDate].some((v) => v !== undefined);
+    if (touchesOtherFields || note === undefined) {
+      const err = new Error("Only a discount's note can be edited — delete it and apply a new discount to change anything else");
+      err.statusCode = 400;
+      throw err;
+    }
+    entry.note = normalizeNote(note);
+    await entry.save({ transaction });
+    return entry;
   }
 
   if (amount !== undefined) {

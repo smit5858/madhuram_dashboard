@@ -37,6 +37,7 @@ const CustomerLedger = () => {
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isDiscountModalOpen, setIsDiscountModalOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<LedgerEntry | null>(null);
+  const [editingDiscount, setEditingDiscount] = useState<LedgerEntry | null>(null);
   const [deletingEntry, setDeletingEntry] = useState<LedgerEntry | null>(null);
   const [viewingSaleEntry, setViewingSaleEntry] = useState<LedgerEntry | null>(null);
 
@@ -187,10 +188,11 @@ const CustomerLedger = () => {
                               form (see DebitedFormModal) — keeps that flow's field set (no
                               payment method/bank account) separate from this Collect Payment
                               modal's. */}
-                          {/* Discounts aren't editable (the backend rejects it) — delete and re-apply. */}
-                          {canManage && entry.type !== "MANUAL_DEBIT" && entry.type !== "DISCOUNT" && (
+                          {/* A discount's amount isn't editable (the backend rejects it) — delete and
+                              re-apply — but its note is, via the Discount modal's edit mode. */}
+                          {canManage && entry.type !== "MANUAL_DEBIT" && (
                             <button
-                              onClick={() => setEditingEntry(entry)}
+                              onClick={() => (entry.type === "DISCOUNT" ? setEditingDiscount(entry) : setEditingEntry(entry))}
                               className="rounded p-1 text-blue-600 hover:bg-blue-50 transition"
                               title="Edit"
                             >
@@ -227,6 +229,16 @@ const CustomerLedger = () => {
           customerName={customer.name}
           pendingAmount={pendingAmount}
           onClose={() => setIsDiscountModalOpen(false)}
+        />
+      )}
+
+      {editingDiscount && (
+        <LedgerDiscountModal
+          customerId={id}
+          customerName={customer.name}
+          pendingAmount={pendingAmount}
+          entry={editingDiscount}
+          onClose={() => setEditingDiscount(null)}
         />
       )}
 

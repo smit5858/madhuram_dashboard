@@ -138,11 +138,11 @@ exports.recordDiscount = async (req, res) => {
     const customer = await Customer.findByPk(req.params.id);
     if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
 
-    const { amount, transactionDate } = req.body || {};
+    const { amount, transactionDate, note } = req.body || {};
 
     const entry = await sequelize.transaction((transaction) =>
       customerLedgerService.recordDiscount(
-        { customerId: customer.id, amount, transactionDate, userId: req.user.id },
+        { customerId: customer.id, amount, transactionDate, note, userId: req.user.id },
         { transaction }
       )
     );

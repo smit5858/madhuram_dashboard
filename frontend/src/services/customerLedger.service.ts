@@ -102,6 +102,7 @@ const recordManualDebit = (customerId: number, data: RecordManualDebitPayload) =
 
 export interface RecordDiscountPayload {
   amount: number;
+  note?: string;
 }
 
 // Ledger page "Discount" — reduces the customer's pending amount only (no Income/Expense entry),

@@ -83,6 +83,14 @@ export const createDiscountSchema = (pendingAmount: number) =>
     amount: amountField.refine((val) => Number(val) <= pendingAmount, {
       message: `Discount cannot be more than the pending amount (₹${pendingAmount.toLocaleString("en-IN")})`,
     }),
+    note: z.string().max(500, "Note must be under 500 characters").optional(),
   });
 
 export type DiscountFormValues = z.infer<ReturnType<typeof createDiscountSchema>>;
+
+// Editing an existing discount — only its note can change (the backend rejects any other field,
+// see customerLedger.service.js#updateEntry), so the amount isn't re-validated here.
+export const editDiscountSchema = z.object({
+  amount: z.union([z.string(), z.number()]),
+  note: z.string().max(500, "Note must be under 500 characters").optional(),
+});
