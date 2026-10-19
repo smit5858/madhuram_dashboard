@@ -1195,6 +1195,44 @@ const applySerialAssignment = async (unit, { status, saleItemId, userId }, { tra
     }
   }
 
+  // A unit taken off a line that hasn't been dispatched yet (assigned by mistake, wrong serial,
+  // moved to another customer, written off) leaves that line short of a physical unit. Put that pc
+  // back on backorder instead of leaving the line claiming stock by count — otherwise the line
+  // silently grabs the next AVAILABLE unit (Available stays 0) while its courier still shows it as
+  // stocked. The next Receive Stock allocates it again through the normal FIFO backorder sweep.
+  const leavingLine = !!fromItemId && SALE_LINKED_SERIAL_STATUSES.includes(fromStatus) &&
+    !(SALE_LINKED_SERIAL_STATUSES.includes(status) && targetItemId === fromItemId);
+  let backorderedItem = null;
+  if (leavingLine) {
+    const openCouriers = await Courier.findAll({
+      where: { saleItemId: fromItemId, status: { [Op.in]: ["PENDING", "WAITING_FOR_STOCK"] } },
+      transaction: t,
+      lock: true,
+    });
+    const fromItem = openCouriers.length
+      ? await SaleItem.findByPk(fromItemId, { transaction: t, lock: true })
+      : null;
+    if (fromItem && fromItem.fulfillmentStatus !== "CANCELLED") {
+      const stillHeld = await SerialUnit.count({
+        where: { saleItemId: fromItemId, status: { [Op.in]: SALE_LINKED_SERIAL_STATUSES }, id: { [Op.ne]: unit.id } },
+        transaction: t,
+      });
+      if (stillHeld < expectedSerialCount(fromItem)) {
+        if (fromItem.allocatedQuantity > 0) fromItem.allocatedQuantity -= 1;
+        else fromItem.fulfilledQuantity -= 1;
+        fromItem.backorderedQuantity += 1;
+        await fromItem.save({ transaction: t });
+        for (const courier of openCouriers) {
+          if (courier.status === "PENDING") {
+            courier.status = "WAITING_FOR_STOCK";
+            await courier.save({ transaction: t });
+          }
+        }
+        backorderedItem = fromItem;
+      }
+    }
+  }
+
   unit.status = status;
   unit.saleItemId = targetItemId;
   if (status === "SOLD") unit.soldAt = unit.soldAt || new Date();
@@ -1211,11 +1249,12 @@ const applySerialAssignment = async (unit, { status, saleItemId, userId }, { tra
       referenceType: "serialUnit",
       referenceId: unit.id,
       createdBy: userId,
-      notes: `Serial ${unit.serialNumber}: ${fromStatus}${fromItemId ? ` (sale item #${fromItemId})` : ""} -> ${status}${targetItemId ? ` (sale item #${targetItemId})` : ""}${filledBackorderItem ? " — filled 1 backordered unit" : ""}`,
+      notes: `Serial ${unit.serialNumber}: ${fromStatus}${fromItemId ? ` (sale item #${fromItemId})` : ""} -> ${status}${targetItemId ? ` (sale item #${targetItemId})` : ""}${filledBackorderItem ? " — filled 1 backordered unit" : ""}${backorderedItem ? ` — sale item #${backorderedItem.id} back to waiting for stock` : ""}`,
     },
     { transaction: t }
   );
 
+  if (backorderedItem) await recomputeItemAndSaleStatus(backorderedItem, { transaction: t });
   if (filledBackorderItem) {
     await recomputeItemAndSaleStatus(filledBackorderItem, { transaction: t });
     await recheckCourierForAllocatedItem(filledBackorderItem, { userId, transaction: t });
