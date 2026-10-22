@@ -6,7 +6,7 @@ const path = require("path");
 
 const COMPANY_NAME = "Madhuram Motors";
 // Same letterhead logo as salesExport.service.js.
-const LOGO_PATH = path.join(__dirname, "../assets/logo.jpg");
+const LOGO_PATH = path.join(__dirname, "../assets/logo.png");
 
 const formatAmount = (value) => Number(value || 0).toFixed(2);
 const formatDate = (value) => (value ? dayjs(value).format("DD-MM-YYYY") : "");

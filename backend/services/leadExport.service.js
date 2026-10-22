@@ -6,7 +6,7 @@ const path = require("path");
 
 const COMPANY_NAME = "Madhuram Motors";
 // Same letterhead logo as salesExport.service.js / accountExport.service.js.
-const LOGO_PATH = path.join(__dirname, "../assets/logo.jpg");
+const LOGO_PATH = path.join(__dirname, "../assets/logo.png");
 
 const STATUS_LABELS = {
   PENDING: "Pending",

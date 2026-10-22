@@ -3,7 +3,7 @@ import { useMutation } from '@tanstack/react-query';
 import { useDispatch } from 'react-redux';
 import { useMemo } from 'react';
 import toast from 'react-hot-toast';
-import LOGO from "@/assets/logo.jpg";
+import LOGO from "@/assets/logo.png";
 
 import authService from '../../services/auth.service';
 import permissionService from '../../services/permission.service';
@@ -99,7 +99,7 @@ const Login = () => {
 
                 {/* Logo */}
                 <div className="mx-auto mb-3 flex h-20 w-20 items-center justify-center rounded-full overflow-hidden">
-                    <img src={LOGO} alt="Madhuram Motors" className='h-full w-full object-cover' />
+                    <img src={LOGO} alt="Saggu Auto Tech" className='h-full w-full object-cover' />
                 </div>
 
                 {/* Heading */}

@@ -7,7 +7,7 @@ const path = require("path");
 const COMPANY_NAME = "Madhuram Motors";
 // Central place for the export letterhead logo — swap this file (or point elsewhere) to
 // change branding without touching the generators below.
-const LOGO_PATH = path.join(__dirname, "../assets/logo.jpg");
+const LOGO_PATH = path.join(__dirname, "../assets/logo.png");
 
 // Single source of truth for export columns — shared by both generators so the two
 // files never drift apart.

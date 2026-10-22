@@ -7,7 +7,7 @@ const path = require("path");
 const COMPANY_NAME = "Madhuram Motors";
 // Same letterhead logo used by the Sales export — swap this file (or point elsewhere) to
 // change branding without touching the generators below.
-const LOGO_PATH = path.join(__dirname, "../assets/logo.jpg");
+const LOGO_PATH = path.join(__dirname, "../assets/logo.png");
 
 const DELIVERY_MODE_LABEL = {
   OFFICE_PICKUP: "Office Pickup",

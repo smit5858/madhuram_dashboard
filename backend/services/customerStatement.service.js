@@ -5,7 +5,7 @@ const path = require("path");
 
 const COMPANY_NAME = "Madhuram Motors";
 // Same letterhead logo used by the Sales export — see salesExport.service.js.
-const LOGO_PATH = path.join(__dirname, "../assets/logo.jpg");
+const LOGO_PATH = path.join(__dirname, "../assets/logo.png");
 
 const describeEntry = (entry) => {
   if (entry.type === "SALE") return `Product Sale${entry.sale?.invoiceNumber ? ` (${entry.sale.invoiceNumber})` : ""}`;

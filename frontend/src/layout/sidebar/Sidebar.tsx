@@ -3,7 +3,7 @@ import { useSelector, useDispatch } from "react-redux";
 import { useEffect, useState } from "react";
 import type { RootState } from "../../store/store";
 import { logout } from "../../store/slices/authSlice";
-import LOGO from "@/assets/logo.jpg";
+import LOGO from "@/assets/logo.png";
 import { ALL_SIDEBAR_ITEMS, type SidebarItem } from "./sidebar-data";
 import {
     LayoutDashboard,
@@ -205,12 +205,12 @@ const Sidebar = () => {
             >
                 <img
                     src={LOGO}
-                    alt="Madhuram Motors Logo"
+                    alt="Saggu Auto Tech Logo"
                     className="h-10 w-10 shrink-0 rounded-full object-cover border-2 border-blue-500"
                 />
                 <div className={`overflow-hidden whitespace-nowrap transition-all duration-200 ${collapsed ? "max-w-0 opacity-0" : "max-w-[10rem] opacity-100"}`}>
                     <h2 className="text-base font-bold text-white tracking-wide">
-                        Madhuram Motors
+                        Saggu Auto Tech
                     </h2>
                     <span className="text-xs text-blue-400 font-medium uppercase tracking-wider">
                         CRM Dashboard

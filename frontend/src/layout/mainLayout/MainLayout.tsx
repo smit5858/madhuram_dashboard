@@ -31,6 +31,7 @@ const MainLayout = React.memo(({ children }: IMainLayoutProps) => {
                         /> */}
                     </div>
                 </div>
+                <p className="absolute bottom-2 right-6 text-gray-300"> Power by Madhuram Motors</p>
             </div>
         </div>
     )
