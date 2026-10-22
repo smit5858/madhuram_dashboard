@@ -99,7 +99,7 @@ const Login = () => {
 
                 {/* Logo */}
                 <div className="mx-auto mb-3 flex h-20 w-20 items-center justify-center rounded-full overflow-hidden">
-                    <img src={LOGO} alt="Saggu Auto Tech" className='h-full w-full object-cover' />
+                    <img src={LOGO} alt="Madhuram Motors" className='h-full w-full object-cover' />
                 </div>
 
                 {/* Heading */}

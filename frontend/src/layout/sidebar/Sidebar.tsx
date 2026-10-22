@@ -205,12 +205,12 @@ const Sidebar = () => {
             >
                 <img
                     src={LOGO}
-                    alt="Saggu Auto Tech Logo"
+                    alt="Madhuram Motors Logo"
                     className="h-10 w-10 shrink-0 rounded-full object-cover border-2 border-blue-500"
                 />
                 <div className={`overflow-hidden whitespace-nowrap transition-all duration-200 ${collapsed ? "max-w-0 opacity-0" : "max-w-[10rem] opacity-100"}`}>
                     <h2 className="text-base font-bold text-white tracking-wide">
-                        Saggu Auto Tech
+                        Madhuram Motors
                     </h2>
                     <span className="text-xs text-blue-400 font-medium uppercase tracking-wider">
                         CRM Dashboard
