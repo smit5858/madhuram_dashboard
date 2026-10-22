@@ -15,18 +15,18 @@ const LoadingFallback = () => (
 
                 {/* M */}
                 <div className="relative text-4xl font-black italic tracking-tighter text-[#3d6fe0]">
-                    M
+                    C
                 </div>
             </div>
 
             {/* Brand */}
             <div className="text-center">
                 <div className="text-2xl font-bold tracking-[0.22em] text-[#24345c]">
-                    MADHURAM
+                    Saggu
                 </div>
 
                 <div className="mt-1 text-[10px] font-semibold tracking-[0.65em] text-[#3d6fe0]">
-                    MOTORS
+                    Auto Tech
                 </div>
             </div>
 
