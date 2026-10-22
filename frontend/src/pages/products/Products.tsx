@@ -487,9 +487,8 @@ const SerialUnitsInput = ({ units, onChange }: { units: UnitRowValues[]; onChang
 };
 
 /** Records a new purchase batch against an existing product, with its own purchase price/dealer/
- *  date — for SERIALIZED this is still the only way to add units. For NON_SERIAL, Products edit
- *  can also directly correct the on-hand Quantity (e.g. a stock-take adjustment), but that doesn't
- *  create a dated purchase batch or touch purchasePrice the way receiving stock does. */
+ *  date — this is the only way to add units for every stock-tracked type (the Quantity field in
+ *  Products edit is read-only). */
 const ReceiveStockModal = ({
   product,
   dealers,
@@ -1315,9 +1314,10 @@ const Products = () => {
         }
         if (selectedProduct.productType !== "SOFTWARE") {
           updatePayload.dealerId = values.dealerId === "" ? null : Number(values.dealerId);
-          if (values.quantity !== "") {
-            updatePayload.quantity = Number(values.quantity);
-          }
+          // Quantity is no longer editable here — stock is only added via Restock.
+          // if (values.quantity !== "") {
+          //   updatePayload.quantity = Number(values.quantity);
+          // }
         }
       }
       updateProductMutation.mutate(
@@ -1986,6 +1986,9 @@ const Products = () => {
                             type="number"
                             label="Quantity"
                             placeholder="0"
+                            // Stock changes only through Restock (dated purchase batch) — not a direct edit.
+                            readOnly
+                            className="bg-slate-100 cursor-not-allowed"
                             component={FormikInput}
                           />
                           <Field
