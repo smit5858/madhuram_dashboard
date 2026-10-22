@@ -15,7 +15,7 @@ const LoadingFallback = () => (
 
                 {/* M */}
                 <div className="relative text-4xl font-black italic tracking-tighter text-[#3d6fe0]">
-                    C
+                    S
                 </div>
             </div>
 
