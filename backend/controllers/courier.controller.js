@@ -180,10 +180,13 @@ exports.getCouriers = async (req, res) => {
       const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 100);
 
+      // `id` tiebreaker keeps offset pages stable — rows created in one transaction (a
+      // multi-product sale) share a createdAt, so without it MySQL may return them in a
+      // different order per query and infinite-scroll batches could repeat or skip rows.
       const { rows, count } = await Courier.findAndCountAll({
         where,
         include,
-        order: [["createdAt", "DESC"]],
+        order: [["createdAt", "DESC"], ["id", "DESC"]],
         limit,
         offset: (page - 1) * limit,
       });
@@ -198,7 +201,7 @@ exports.getCouriers = async (req, res) => {
     const couriers = await Courier.findAll({
       where,
       include,
-      order: [["createdAt", "DESC"]],
+      order: [["createdAt", "DESC"], ["id", "DESC"]],
     });
 
     return res.status(200).json({

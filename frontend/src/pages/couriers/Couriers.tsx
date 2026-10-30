@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
 import { useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Formik, Form, Field, useFormikContext, type FormikProps } from "formik";
 import { Download, ChevronDown, ExternalLink, Eye, PackageCheck, RotateCcw, Search, Truck } from "lucide-react";
 import { type RootState } from "../../store/store";
-import courierService, { type CourierData, type CourierFilters, type PaginationMeta } from "../../services/courier.service";
+import courierService, { type CourierData, type CourierFilters } from "../../services/courier.service";
 import courierCompanyService, { buildTrackingLink } from "../../services/courierCompany.service";
 import { initSocket } from "../../services/socket.service";
 import { STATUS_LABEL, STATUS_BADGE_CLASS, type CourierStatus } from "../../shared/constants/courierStatus";
@@ -16,6 +16,10 @@ import { courierFilterSchema, type CourierFilterValues } from "../../validation/
 import { useDebounce } from "../../hook/useDebounce";
 import { formatDisplayDate } from "../../shared/utils/date";
 import { formatPhoneDisplay } from "../../shared/utils/phone";
+import { flattenUniqueById, getNextPageParam } from "../../shared/utils/pagination";
+import { DEFAULT_PAGE_SIZE } from "../../shared/constants/pagination";
+import InfiniteScrollFooter, { type InfiniteScrollFooterProps } from "../../shared/components/InfiniteScrollFooter";
+import PageSizeSelect from "../../shared/components/PageSizeSelect";
 import { groupOutgoingCouriers, commonCourierValue, type CourierGroup } from "./utils/groupCouriers";
 import CourierEditModal from "./components/CourierEditModal";
 import CourierViewModal from "./components/CourierViewModal";
@@ -26,7 +30,33 @@ import IncomingCourier from "./IncomingCourier";
 
 type PagePermission = { canRead: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean };
 
-const PAGE_SIZE = 10;
+type CourierFeed = Omit<InfiniteScrollFooterProps, "scrollRoot" | "itemLabel">;
+
+// One infinite-scroll feed of Outgoing couriers for a single status bucket (Pending = NOT_DONE,
+// Completed = DONE). The page size is part of the key, so changing the dropdown (or any filter)
+// starts a brand-new feed from page 1 rather than appending differently-sized batches to the old
+// one — no duplicated or skipped rows. Invalidating ["couriers"] after a mutation refetches every
+// loaded page, so rows already scrolled past stay on screen.
+const useOutgoingCourierFeed = (
+    status: "NOT_DONE" | "DONE",
+    filters: CourierFilters,
+    pageSize: number,
+    enabled: boolean
+) =>
+    useInfiniteQuery({
+        queryKey: ["couriers", "OUT", status, "infinite", filters, pageSize],
+        // Forwarding react-query's AbortSignal means a request superseded by a newer
+        // search/date/delivery-mode change is actually cancelled, not left to resolve and get
+        // ignored — only the response for the latest filters can ever reach the table.
+        queryFn: ({ pageParam, signal }) =>
+            courierService.getCouriers(
+                { direction: "OUT", ...filters, status, page: pageParam, limit: pageSize },
+                { signal }
+            ),
+        initialPageParam: 1,
+        getNextPageParam: (lastPage) => getNextPageParam(lastPage, pageSize),
+        enabled,
+    });
 
 const CourierStatusBadge = ({ status }: { status?: CourierStatus | string | null }) => {
     const key = (status && status in STATUS_LABEL ? status : "PENDING") as CourierStatus;
@@ -71,8 +101,9 @@ const CourierTable = ({
     onDelete,
     onDeleteGroup,
     columnsVariant = "full",
-    meta,
-    onPageChange,
+    feed,
+    pageSize,
+    onPageSizeChange,
 }: {
     title: string;
     badgeClassName: string;
@@ -94,12 +125,19 @@ const CourierTable = ({
     /** "outgoing" trims the table to Sr No/Customer/Mobile/Product/Courier Company/Tracking ID/
      *  Action only — the Incoming table keeps the full column set. */
     columnsVariant?: "full" | "outgoing";
-    /** Server-side pagination footer (Previous/Next) — omitted when the caller doesn't paginate
-     *  this table (there's currently no such caller left, but keeps the component usable without
-     *  pagination too). */
-    meta?: PaginationMeta;
-    onPageChange?: (page: number) => void;
+    /** Infinite-scroll state for this table's feed — the next batch auto-loads as the bottom of
+     *  the table's scroll area comes into view. Omit to render a plain, non-paginated table. */
+    feed?: CourierFeed;
+    /** Records-per-batch dropdown shown in the table's bottom bar (outside the scroll box, so
+     *  it's always reachable). */
+    pageSize?: number;
+    onPageSizeChange?: (value: number) => void;
 }) => {
+    // The table scrolls inside its own bounded box (rather than the page) so Pending's feed can
+    // keep growing without pushing the Completed table out of reach; the infinite-scroll
+    // sentinel observes against this box.
+    const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null);
+
     // Only needed to resolve a courier's tracking link (matched by company name) — same lookup
     // and queryKey CourierViewModal already uses, so react-query dedupes it to one request.
     const { data: companiesResponse } = useQuery({
@@ -410,7 +448,7 @@ const CourierTable = ({
             <h3 className="text-sm font-bold text-slate-900">
                 {title}
                 <span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-bold align-middle ${badgeClassName}`}>
-                    {meta ? meta.total : groups.length}
+                    {feed?.total ?? groups.length}
                 </span>
             </h3>
             {showSearch && (
@@ -430,9 +468,9 @@ const CourierTable = ({
         {groups.length === 0 ? (
             <p className="px-4 py-6 text-center text-xs text-slate-500">{emptyMessage}</p>
         ) : (
-            <div className="overflow-x-auto">
+            <div ref={setScrollRoot} className="max-h-[70vh] overflow-auto">
                 <table className="w-full border-collapse text-left text-sm text-slate-500">
-                    <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-700">
+                    <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-700">
                         {columnsVariant === "outgoing" ? (
                             <tr>
                                 <th className="px-4 py-3 whitespace-nowrap">Sr No.</th>
@@ -476,32 +514,14 @@ const CourierTable = ({
                         )}
                     </tbody>
                 </table>
+                {feed && <InfiniteScrollFooter {...feed} scrollRoot={scrollRoot} itemLabel="couriers" />}
             </div>
         )}
 
-        {meta && onPageChange && groups.length > 0 && (
-            <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
-                <span>
-                    Page {meta.page} of {meta.totalPages} · {meta.total} total
-                </span>
-                <div className="flex items-center gap-2">
-                    <button
-                        type="button"
-                        disabled={meta.page <= 1}
-                        onClick={() => onPageChange(Math.max(1, meta.page - 1))}
-                        className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition"
-                    >
-                        Previous
-                    </button>
-                    <button
-                        type="button"
-                        disabled={meta.page >= meta.totalPages}
-                        onClick={() => onPageChange(Math.min(meta.totalPages, meta.page + 1))}
-                        className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition"
-                    >
-                        Next
-                    </button>
-                </div>
+        {pageSize !== undefined && onPageSizeChange && groups.length > 0 && (
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-4 py-2.5 text-xs text-slate-500">
+                <span>Show</span>
+                <PageSizeSelect value={pageSize} onChange={onPageSizeChange} />
             </div>
         )}
     </div>
@@ -563,23 +583,10 @@ const Couriers = () => {
     const filterFormRef = useRef<FormikProps<CourierFilterValues>>(null);
     const [isExportOpen, setIsExportOpen] = useState(false);
 
-    // Pending and Completed are independently paginated (own page/limit against /couriers,
-    // split server-side via the status filter — see applyCourierFilters' NOT_DONE bucket)
-    // rather than one shared page sliced client-side, since a single page of raw rows can't be
-    // divided into "page N of Pending" and "page M of Completed" in any consistent way.
-    const [pendingPage, setPendingPage] = useState(1);
-    const [completedPage, setCompletedPage] = useState(1);
-
-    // Any filter change invalidates both tables' current page — page 2 of the old filter set
-    // has no defined meaning against the new one. Reset during render (same pattern as
-    // CustomerAutocompleteField's prevDebouncedPhone) rather than in an effect, to avoid the
-    // extra render pass a setState-in-effect would cause.
-    const [prevAppliedFilters, setPrevAppliedFilters] = useState(appliedFilters);
-    if (appliedFilters !== prevAppliedFilters) {
-        setPrevAppliedFilters(appliedFilters);
-        setPendingPage(1);
-        setCompletedPage(1);
-    }
+    // Records per infinite-scroll batch, chosen per table from its bottom bar. A display
+    // preference rather than a filter, so Clear Filters leaves it alone.
+    const [pendingPageSize, setPendingPageSize] = useState(DEFAULT_PAGE_SIZE);
+    const [completedPageSize, setCompletedPageSize] = useState(DEFAULT_PAGE_SIZE);
 
     const handleClearFilters = () => {
         filterFormRef.current?.resetForm();
@@ -620,45 +627,24 @@ const Couriers = () => {
     // sale line item gets an OUT courier row the moment the sale is created, so the Outgoing
     // list is the single source of truth for both "what's pending" and "what's delivered";
     // Incoming rows are always manually created. Pending (NOT_DONE) and Completed (DONE) are
-    // fetched as two separate paginated queries — see the pendingPage/completedPage comment
-    // above for why a single combined page can't be split into two independent tables.
+    // two independent infinite-scroll feeds (split server-side via the status filter — see
+    // applyCourierFilters' NOT_DONE bucket), each loading its own next batch as its table is
+    // scrolled, since one shared feed couldn't be divided into two tables consistently.
     const enableOutgoingQueries = pagePermission.canRead && direction === "OUT";
 
-    const {
-        data: pendingResponse,
-        isLoading: pendingLoading,
-        isError: pendingIsError,
-        error: pendingError,
-    } = useQuery({
-        queryKey: ["couriers", direction, "NOT_DONE", appliedFilters, pendingPage],
-        // Forwarding react-query's AbortSignal means a request superseded by a newer
-        // search/date/delivery-mode/page change is actually cancelled, not left to resolve and
-        // get ignored — only the response for the latest filters can ever reach the table.
-        queryFn: ({ signal }) =>
-            courierService.getCouriers(
-                { direction, ...appliedFilters, status: "NOT_DONE", page: pendingPage, limit: PAGE_SIZE },
-                { signal }
-            ),
-        enabled: enableOutgoingQueries,
-    });
+    const pendingQuery = useOutgoingCourierFeed("NOT_DONE", appliedFilters, pendingPageSize, enableOutgoingQueries);
+    const completedQuery = useOutgoingCourierFeed("DONE", appliedFilters, completedPageSize, enableOutgoingQueries);
 
-    const {
-        data: completedResponse,
-        isLoading: completedLoading,
-        isError: completedIsError,
-        error: completedError,
-    } = useQuery({
-        queryKey: ["couriers", direction, "DONE", appliedFilters, completedPage],
-        queryFn: ({ signal }) =>
-            courierService.getCouriers(
-                { direction, ...appliedFilters, status: "DONE", page: completedPage, limit: PAGE_SIZE },
-                { signal }
-            ),
-        enabled: enableOutgoingQueries,
-    });
-
-    const listLoading = pendingLoading || completedLoading;
-    const listError = pendingIsError ? pendingError : completedIsError ? completedError : null;
+    const listLoading = pendingQuery.isLoading || completedQuery.isLoading;
+    // Only a failed *first* batch replaces the tables with the error screen — a failed later
+    // batch keeps what's already loaded and offers a retry in that table's footer instead.
+    const pendingInitialError = pendingQuery.isError && !pendingQuery.data;
+    const completedInitialError = completedQuery.isError && !completedQuery.data;
+    const listError = pendingInitialError ? pendingQuery.error : completedInitialError ? completedQuery.error : null;
+    const retryInitialLoad = () => {
+        if (pendingInitialError) pendingQuery.refetch();
+        if (completedInitialError) completedQuery.refetch();
+    };
 
     // Sales whose backordered items just got allocated by a stock receipt (live push via
     // socket — see backend inventory.controller.js#notifyBackorderAllocations). Any courier
@@ -805,19 +791,34 @@ const Couriers = () => {
         },
     });
 
-    const pendingList: CourierData[] = useMemo(() => pendingResponse?.data?.data || [], [pendingResponse]);
-    const completedList: CourierData[] = useMemo(() => completedResponse?.data?.data || [], [completedResponse]);
-    const pendingMeta: PaginationMeta = pendingResponse?.data?.meta || { page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 };
-    const completedMeta: PaginationMeta = completedResponse?.data?.meta || { page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 };
+    const pendingList: CourierData[] = useMemo(() => flattenUniqueById(pendingQuery.data?.pages), [pendingQuery.data]);
+    const completedList: CourierData[] = useMemo(() => flattenUniqueById(completedQuery.data?.pages), [completedQuery.data]);
+    // Total is read from the newest batch so it reflects rows created/deleted mid-scroll.
+    const pendingTotal = pendingQuery.data?.pages.at(-1)?.data?.meta?.total ?? 0;
+    const completedTotal = completedQuery.data?.pages.at(-1)?.data?.meta?.total ?? 0;
+
+    const toFeed = (query: typeof pendingQuery, loadedCount: number, total: number): CourierFeed => ({
+        hasNextPage: query.hasNextPage,
+        isFetching: query.isFetching,
+        isFetchingNextPage: query.isFetchingNextPage,
+        isError: query.isFetchNextPageError,
+        // cancelRefetch: false — never abort an in-flight refetch to start the next page.
+        onLoadMore: () => query.fetchNextPage({ cancelRefetch: false }),
+        loadedCount,
+        total,
+    });
+    const pendingFeed = toFeed(pendingQuery, pendingList.length, pendingTotal);
+    const completedFeed = toFeed(completedQuery, completedList.length, completedTotal);
 
     // Incoming keeps its own simple client-side search box (out of scope for this feature —
     // Outgoing's search/date/delivery-mode filtering happens server-side via appliedFilters).
     const [pendingSearch, setPendingSearch] = useState("");
     const [completedSearch, setCompletedSearch] = useState("");
 
-    // Groups each page's Courier rows into one entry per sale (saleId) — see
+    // Groups every loaded batch's Courier rows into one entry per sale (saleId) — see
     // utils/groupCouriers.ts — so a multi-product sale shows as a single Pending/Completed entry
-    // instead of one per product line, even after a Ship Available Products split. Note: since
+    // instead of one per product line, even after a Ship Available Products split, or when its
+    // rows straddle two batches (the later batch's rows merge into the existing group). Note: since
     // Pending/Completed are now fetched as two independently-filtered pages, a sale whose
     // products have mixed statuses (some DONE, some not) will show up as two separate group rows
     // — its unfinished products under Pending, its finished ones under Completed — rather than
@@ -966,12 +967,20 @@ const Couriers = () => {
                 <div className="mt-6 flex min-h-75 flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
                     <p className="text-sm font-medium text-red-500">Failed to load courier list</p>
                     <p className="text-xs text-slate-400">{(listError as any).message || "An unexpected error occurred"}</p>
+                    <button
+                        type="button"
+                        onClick={retryInitialLoad}
+                        className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        Retry
+                    </button>
                 </div>
             ) : !pagePermission.canRead ? (
                 <div className="mt-6 flex min-h-75 flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
                     <p className="text-sm font-medium text-slate-500">You do not have permission to view couriers.</p>
                 </div>
-            ) : pendingMeta.total === 0 && completedMeta.total === 0 ? (
+            ) : pendingTotal === 0 && completedTotal === 0 ? (
                 <div className="mt-6 flex min-h-75 flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
                     <div className="rounded-full bg-slate-100 p-3 text-slate-400">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-6 w-6">
@@ -1025,8 +1034,9 @@ const Couriers = () => {
                         onDelete={setDeletingCourier}
                         onDeleteGroup={setDeletingGroup}
                         columnsVariant="outgoing"
-                        meta={pendingMeta}
-                        onPageChange={setPendingPage}
+                        feed={pendingFeed}
+                        pageSize={pendingPageSize}
+                        onPageSizeChange={setPendingPageSize}
                     />
                     <CourierTable
                         title="Completed"
@@ -1049,8 +1059,9 @@ const Couriers = () => {
                         onDelete={setDeletingCourier}
                         onDeleteGroup={setDeletingGroup}
                         columnsVariant="outgoing"
-                        meta={completedMeta}
-                        onPageChange={setCompletedPage}
+                        feed={completedFeed}
+                        pageSize={completedPageSize}
+                        onPageSizeChange={setCompletedPageSize}
                     />
                 </div>
             )}

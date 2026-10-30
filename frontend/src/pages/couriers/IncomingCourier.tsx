@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
 import toast from "react-hot-toast";
 import { Formik, Form, Field, useFormikContext, type FormikProps } from "formik";
@@ -12,13 +12,15 @@ import { COURIER_STATUSES, STATUS_BADGE_CLASS, STATUS_LABEL } from "../../shared
 import { formatDisplayDate } from "../../shared/utils/date";
 import { formatPhoneDisplay } from "../../shared/utils/phone";
 import FormikInput from "../../shared/components/formik-fields/FormikInput";
+import InfiniteScrollFooter from "../../shared/components/InfiniteScrollFooter";
+import PageSizeSelect from "../../shared/components/PageSizeSelect";
+import { DEFAULT_PAGE_SIZE } from "../../shared/constants/pagination";
+import { flattenUniqueById, getNextPageParam } from "../../shared/utils/pagination";
 import IncomingCourierFormModal from "./components/IncomingCourierFormModal";
 import IncomingCourierViewModal from "./components/IncomingCourierViewModal";
 import IncomingCourierStatusModal from "./components/IncomingCourierStatusModal";
 import DeleteCourierModal from "./components/DeleteCourierModal";
 import IncomingCourierDoneModal from "./components/IncomingCourierDoneModal";
-
-const PAGE_SIZE = 10;
 
 type IncomingAppliedFilters = { search?: string; status?: string; startDate?: string; endDate?: string };
 
@@ -44,7 +46,7 @@ const IncomingFilterSync = ({ onFiltersChange }: { onFiltersChange: (filters: In
 
 /** Dedicated Incoming Courier module — its own page, its own form/view/status modals (see
  *  ./components/IncomingCourier*), separate from Outgoing Courier's components even though both
- *  read/write the same underlying `Courier` table via the `direction` field. Paginated,
+ *  read/write the same underlying `Courier` table via the `direction` field. Infinite-scroll,
  *  auto-filtering table (search / status / date range, no Apply button) with View / Edit /
  *  Status / Delete (Admin-only) / "Create Outgoing Courier" actions. Records stay visible here
  *  through their full lifecycle — including after being marked Done — so the Status column and
@@ -63,45 +65,55 @@ const IncomingCourier = () => {
     }, [permissions]);
 
     // Filters — search is debounced, status/date-range apply immediately, all without an Apply
-    // button (see IncomingFilterSync). Any status change resets to page 1.
+    // button (see IncomingFilterSync). Filters and the records-per-batch size are both part of
+    // the query key, so any change starts a fresh feed from the first batch.
     const [appliedFilters, setAppliedFilters] = useState<IncomingAppliedFilters>({});
-    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
     const hasActiveFilters = Object.values(appliedFilters).some(Boolean);
     const filterFormRef = useRef<FormikProps<IncomingCourierFilterValues>>(null);
-
-    const handleFiltersChange = (filters: IncomingAppliedFilters) => {
-        setAppliedFilters(filters);
-        setPage(1);
-    };
+    const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null);
 
     const activeFilters = useMemo<CourierFilters & { direction: "IN" }>(
         () => ({
             direction: "IN",
-            page,
-            limit: PAGE_SIZE,
             search: appliedFilters.search,
             status: appliedFilters.status,
             startDate: appliedFilters.startDate,
             endDate: appliedFilters.endDate,
         }),
-        [appliedFilters, page]
+        [appliedFilters]
     );
 
-    const { data: response, isLoading, isFetching, isError, error } = useQuery({
-        queryKey: ["couriers", "IN", activeFilters],
+    const {
+        data: response,
+        isLoading,
+        isFetching,
+        isFetchingNextPage,
+        isFetchNextPageError,
+        hasNextPage,
+        fetchNextPage,
+        refetch,
+        isError,
+        error,
+    } = useInfiniteQuery({
+        queryKey: ["couriers", "IN", "infinite", activeFilters, pageSize],
         // Forwarding react-query's AbortSignal means a request superseded by a newer
-        // search/page/filter change is actually cancelled, not left to resolve and get ignored.
-        queryFn: ({ signal }) => courierService.getCouriers(activeFilters, { signal }),
+        // search/filter change is actually cancelled, not left to resolve and get ignored.
+        queryFn: ({ pageParam, signal }) =>
+            courierService.getCouriers({ ...activeFilters, page: pageParam, limit: pageSize }, { signal }),
+        initialPageParam: 1,
+        getNextPageParam: (lastPage) => getNextPageParam(lastPage, pageSize),
         enabled: pagePermission.canRead,
     });
 
-    const couriersList: CourierData[] = response?.data?.data || [];
-    const meta = response?.data?.meta || { page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 };
+    const couriersList: CourierData[] = useMemo(() => flattenUniqueById(response?.pages), [response]);
+    const total = response?.pages.at(-1)?.data?.meta?.total ?? 0;
+    // A failed later batch keeps the loaded rows and retries from the footer instead.
+    const initialLoadError = isError && !response;
 
     const handleResetFilters = () => {
         filterFormRef.current?.resetForm();
         setAppliedFilters({});
-        setPage(1);
     };
 
     // Action-column modal state
@@ -195,7 +207,7 @@ const IncomingCourier = () => {
                     onSubmit={() => { }}
                 >
                     <Form className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-                        <IncomingFilterSync onFiltersChange={handleFiltersChange} />
+                        <IncomingFilterSync onFiltersChange={setAppliedFilters} />
 
                         <div className="min-w-50 max-w-xs flex-1">
                             <Field
@@ -254,7 +266,7 @@ const IncomingCourier = () => {
                         </button>
 
                         <div className="flex h-11.75 items-center gap-2 sm:justify-end">
-                            {isFetching && !isLoading && <span className="text-[11px] text-slate-400">Refreshing…</span>}
+                            {isFetching && !isLoading && !isFetchingNextPage && <span className="text-[11px] text-slate-400">Refreshing…</span>}
                         </div>
                     </Form>
                 </Formik>
@@ -268,10 +280,18 @@ const IncomingCourier = () => {
                         <span className="text-sm text-slate-500">Retrieving incoming courier records...</span>
                     </div>
                 </div>
-            ) : isError ? (
+            ) : initialLoadError ? (
                 <div className="mt-2 flex min-h-75 flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
                     <p className="text-sm font-medium text-red-500">Failed to load incoming courier list</p>
                     <p className="text-xs text-slate-400">{(error as any)?.response?.data?.message || (error as any)?.message || "An unexpected error occurred"}</p>
+                    <button
+                        type="button"
+                        onClick={() => refetch()}
+                        className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        Retry
+                    </button>
                 </div>
             ) : !pagePermission.canRead ? (
                 <div className="mt-2 flex min-h-75 flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
@@ -305,9 +325,9 @@ const IncomingCourier = () => {
                             )}
                         </div>
                     ) : (
-                        <div className="overflow-x-auto">
+                        <div ref={setScrollRoot} className="max-h-[70vh] overflow-auto">
                             <table className="w-full border-collapse text-left text-sm text-slate-500">
-                                <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-700">
+                                <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-700">
                                     <tr>
                                         <th className="px-4 py-3 whitespace-nowrap">Sr. No.</th>
                                         <th className="px-4 py-3 whitespace-nowrap">Customer Name</th>
@@ -328,7 +348,7 @@ const IncomingCourier = () => {
                                         return (
                                             <tr key={courier.id} className="transition-colors hover:bg-slate-50/60">
                                                 <td className="px-4 py-3 font-mono text-xs text-slate-400">
-                                                    {(meta.page - 1) * meta.limit + index + 1}
+                                                    {index + 1}
                                                 </td>
                                                 <td className="px-4 py-3 font-semibold text-slate-900 whitespace-nowrap">
                                                     {courier.customerName || courier.name || <span className="text-slate-300">—</span>}
@@ -421,33 +441,26 @@ const IncomingCourier = () => {
                                     })}
                                 </tbody>
                             </table>
+                            <InfiniteScrollFooter
+                                hasNextPage={hasNextPage}
+                                isFetching={isFetching}
+                                isFetchingNextPage={isFetchingNextPage}
+                                isError={isFetchNextPageError}
+                                // cancelRefetch: false — never abort an in-flight refetch to start the next page.
+                                onLoadMore={() => fetchNextPage({ cancelRefetch: false })}
+                                loadedCount={couriersList.length}
+                                total={total}
+                                scrollRoot={scrollRoot}
+                                itemLabel="incoming couriers"
+                            />
                         </div>
                     )}
 
-                    {/* Pagination */}
+                    {/* Records-per-batch — outside the scroll box so it's always reachable */}
                     {couriersList.length > 0 && (
-                        <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
-                            <span>
-                                Page {meta.page} of {meta.totalPages} · {meta.total} total incoming couriers
-                            </span>
-                            <div className="flex items-center gap-2">
-                                <button
-                                    type="button"
-                                    disabled={meta.page <= 1}
-                                    onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-                                    className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition"
-                                >
-                                    Previous
-                                </button>
-                                <button
-                                    type="button"
-                                    disabled={meta.page >= meta.totalPages}
-                                    onClick={() => setPage((prev) => Math.min(meta.totalPages, prev + 1))}
-                                    className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition"
-                                >
-                                    Next
-                                </button>
-                            </div>
+                        <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-4 py-2.5 text-xs text-slate-500">
+                            <span>Show</span>
+                            <PageSizeSelect value={pageSize} onChange={setPageSize} />
                         </div>
                     )}
                 </div>
