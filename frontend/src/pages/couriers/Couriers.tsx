@@ -6,7 +6,7 @@ import toast from "react-hot-toast";
 import { Formik, Form, Field, useFormikContext, type FormikProps } from "formik";
 import { Download, ChevronDown, ExternalLink, Eye, PackageCheck, RotateCcw, Search, Truck } from "lucide-react";
 import { type RootState } from "../../store/store";
-import courierService, { type CourierData, type CourierFilters } from "../../services/courier.service";
+import courierService, { type AssignmentStatus, type CourierData, type CourierFilters } from "../../services/courier.service";
 import courierCompanyService, { buildTrackingLink } from "../../services/courierCompany.service";
 import { initSocket } from "../../services/socket.service";
 import { STATUS_LABEL, STATUS_BADGE_CLASS, type CourierStatus } from "../../shared/constants/courierStatus";
@@ -78,6 +78,35 @@ const StockStatusBadge = ({ status }: { status?: CourierData["productStockStatus
         </span>
     );
 };
+
+// Per-unit serial assignment of a serialized line — only present while the Courier Assignment
+// Status filter is active (the backend attaches it then). Shows how many of the line's units are
+// still waiting for a serial, or that all are picked.
+const SerialAssignmentBadge = ({ assignment }: { assignment?: CourierData["serialAssignment"] }) => {
+    if (!assignment) return null;
+    const { required, assigned, unassigned } = assignment;
+    return unassigned > 0 ? (
+        <span
+            className="ml-1.5 inline-flex items-center rounded-full border border-amber-100 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700"
+            title={`${assigned} of ${required} serial number(s) assigned`}
+        >
+            {unassigned} serial{unassigned === 1 ? "" : "s"} unassigned
+        </span>
+    ) : (
+        <span
+            className="ml-1.5 inline-flex items-center rounded-full border border-green-100 bg-green-50 px-2 py-0.5 text-[10px] font-semibold text-green-700"
+            title={`${assigned} of ${required} serial number(s) assigned`}
+        >
+            {assigned}/{required} serials assigned
+        </span>
+    );
+};
+
+const ASSIGNMENT_STATUS_OPTIONS: { value: AssignmentStatus; label: string }[] = [
+    { value: "all", label: "All Products" },
+    { value: "assigned", label: "Assigned" },
+    { value: "unassigned", label: "Not Assigned" },
+];
 
 // Renders one courier table with its own search filter — used to show
 // Pending and Completed couriers as two independently filterable lists. Rows are grouped by
@@ -185,6 +214,7 @@ const CourierTable = ({
                         <td className="px-4 py-3 whitespace-nowrap">
                             {courier.productName || <span className="text-slate-300">—</span>}
                             {courier.quantity ? ` × ${courier.quantity}` : ""}
+                            <SerialAssignmentBadge assignment={courier.serialAssignment} />
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap">
                             <StockStatusBadge status={courier.productStockStatus} />
@@ -352,6 +382,7 @@ const CourierTable = ({
                                     {group.items.map((item) => (
                                         <span key={item.id} className="inline-flex items-center rounded-sm px-2 py-0.5 text-[11px] font-medium ">
                                             {item.productName || "—"}{item.quantity ? ` ×${item.quantity}` : ""}
+                                            <SerialAssignmentBadge assignment={item.serialAssignment} />
                                         </span>
                                     ))}
                                 </div>
@@ -549,9 +580,11 @@ const FilterSync = ({
             startDate: values.startDate || undefined,
             endDate: values.endDate || undefined,
             deliveryMode: values.deliveryMode || undefined,
+            // "all" is the no-filter default — left out so it doesn't count as an active filter.
+            assignmentStatus: values.assignmentStatus && values.assignmentStatus !== "all" ? values.assignmentStatus : undefined,
         }));
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [values.startDate, values.endDate, values.deliveryMode]);
+    }, [values.startDate, values.endDate, values.deliveryMode, values.assignmentStatus]);
 
     return null;
 };
@@ -580,6 +613,13 @@ const Couriers = () => {
     // unaffected. Export always reuses this same object so the two can never diverge.
     const [appliedFilters, setAppliedFilters] = useState<CourierFilters>({});
     const hasActiveFilters = Object.values(appliedFilters).some(Boolean);
+    // Assignment-specific empty-state copy; null falls back to the generic filter messages.
+    const assignmentEmptyMessage =
+        appliedFilters.assignmentStatus === "unassigned"
+            ? "No unassigned serialized products found."
+            : appliedFilters.assignmentStatus === "assigned"
+                ? "No assigned serialized products found."
+                : null;
     const filterFormRef = useRef<FormikProps<CourierFilterValues>>(null);
     const [isExportOpen, setIsExportOpen] = useState(false);
 
@@ -856,7 +896,7 @@ const Couriers = () => {
                 <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                     <Formik
                         innerRef={filterFormRef}
-                        initialValues={{ search: "", startDate: "", endDate: "", deliveryMode: "" } as CourierFilterValues}
+                        initialValues={{ search: "", startDate: "", endDate: "", deliveryMode: "", assignmentStatus: "all" } as CourierFilterValues}
                         validate={(values) => {
                             const result = courierFilterSchema.safeParse(values);
                             return result.success ? {} : { search: result.error.issues[0]?.message };
@@ -896,6 +936,20 @@ const Couriers = () => {
                             >
                                 <option value="">All Types</option>
                                 {DELIVERY_MODE_OPTIONS.map((opt) => (
+                                    <option key={opt.value} value={opt.value}>
+                                        {opt.label}
+                                    </option>
+                                ))}
+                            </Field>
+
+                            <Field
+                                as="select"
+                                name="assignmentStatus"
+                                aria-label="Courier Assignment Status"
+                                title="Courier Assignment Status (serial numbers)"
+                                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-medium text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none cursor-pointer"
+                            >
+                                {ASSIGNMENT_STATUS_OPTIONS.map((opt) => (
                                     <option key={opt.value} value={opt.value}>
                                         {opt.label}
                                     </option>
@@ -989,9 +1043,11 @@ const Couriers = () => {
                     </div>
                     {hasActiveFilters ? (
                         <>
-                            <h3 className="mt-4 text-sm font-semibold text-slate-900">No Couriers Match Your Filters</h3>
+                            <h3 className="mt-4 text-sm font-semibold text-slate-900">
+                                {assignmentEmptyMessage ?? "No Couriers Match Your Filters"}
+                            </h3>
                             <p className="mt-1 text-xs text-slate-500">
-                                Try adjusting the date range, search term, or delivery mode.
+                                Try adjusting the date range, search term, delivery mode, or assignment status.
                             </p>
                             <button
                                 type="button"
@@ -1021,9 +1077,9 @@ const Couriers = () => {
                         onSearchChange={setPendingSearch}
                         showSearch={false}
                         emptyMessage={
-                            hasActiveFilters
+                            assignmentEmptyMessage ?? (hasActiveFilters
                                 ? "No pending shipments match your filters."
-                                : "No pending shipments."
+                                : "No pending shipments.")
                         }
                         pagePermission={pagePermission}
                         highlightedSaleIds={highlightedSaleIds}
@@ -1046,9 +1102,9 @@ const Couriers = () => {
                         onSearchChange={setCompletedSearch}
                         showSearch={false}
                         emptyMessage={
-                            hasActiveFilters
+                            assignmentEmptyMessage ?? (hasActiveFilters
                                 ? "No completed couriers match your filters."
-                                : "No completed couriers."
+                                : "No completed couriers.")
                         }
                         pagePermission={pagePermission}
                         highlightedSaleIds={highlightedSaleIds}

@@ -80,6 +80,7 @@ export interface CourierData {
         invoiceNumber: string;
         customerName: string;
     };
+    serialAssignment?: SerialAssignment;
     createdAt?: string;
     updatedAt?: string;
 }
@@ -92,8 +93,22 @@ export interface CourierFilters {
     /** Any CourierStatus for an exact match, "NOT_DONE" for the synthetic "still pending" bucket
      *  (status !== DONE — used by the Outgoing Pending table), or "ALL"/omit for no status filter. */
     status?: string;
+    /** Courier Assignment Status — "assigned" = serialized lines with at least one serial unit
+     *  picked, "unassigned" = serialized lines with at least one unit still awaiting a serial.
+     *  Omit (or "all") for no assignment filter. */
+    assignmentStatus?: AssignmentStatus;
     page?: number;
     limit?: number;
+}
+
+export type AssignmentStatus = "all" | "assigned" | "unassigned";
+
+/** Per-unit serial counts for a serialized line — only returned while an assignmentStatus filter
+ *  is active. `unassigned` = required - assigned (never negative). */
+export interface SerialAssignment {
+    required: number;
+    assigned: number;
+    unassigned: number;
 }
 
 export interface PaginationMeta {

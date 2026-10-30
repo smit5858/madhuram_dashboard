@@ -75,6 +75,7 @@ export const courierFilterSchema = z.object({
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   deliveryMode: z.string().optional(),
+  assignmentStatus: z.enum(["all", "assigned", "unassigned"]).optional(),
 });
 
 export type CourierFilterValues = z.infer<typeof courierFilterSchema>;

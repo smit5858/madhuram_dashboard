@@ -14,6 +14,64 @@ const { createIncomeForCourier, syncIncomeForCourierUpdate, removeIncomeForCouri
 const COURIER_STATUSES = ["PENDING", "WAITING_FOR_STOCK", "IN_PROGRESS", "OUT_FOR_DELIVERY", "DONE"];
 const STATUS_RANK = { PENDING: 0, WAITING_FOR_STOCK: 1, IN_PROGRESS: 2, OUT_FOR_DELIVERY: 3, DONE: 4 };
 const DELIVERY_MODES = ["OFFICE_PICKUP", "COURIER"];
+const ASSIGNMENT_STATUSES = ["all", "assigned", "unassigned"];
+
+// Per-unit serial assignment of every serialized (catalog, non-cancelled) sale line, as one row
+// per SaleItem with `required` and `assigned` unit counts. Mirrors getCourierSerials exactly so
+// the filter can never disagree with what the serial picker shows for the same line:
+//  - required: inventoryService.expectedSerialCount (allocated + fulfilled - returned)
+//  - assigned: held units of the line's own product — RESERVED, else SOLD — and 0 when they
+//              were only FIFO auto-held (serialsManuallySelected = false; the user must still pick).
+// Evaluated per SaleItem (not per sale), so one multi-product sale can have some serialized
+// lines fully assigned and others still waiting for serials.
+const SERIAL_ASSIGNMENT_SQL = `
+  SELECT si.id AS saleItemId,
+         GREATEST(si.allocatedQuantity + si.fulfilledQuantity - si.returnedQuantity, 0) AS required,
+         CASE
+           WHEN si.serialsManuallySelected = 0 THEN 0
+           WHEN COALESCE(h.reserved, 0) > 0 THEN h.reserved
+           ELSE COALESCE(h.sold, 0)
+         END AS assigned
+    FROM sells_items si
+    JOIN products p ON p.id = si.productId AND p.productType = 'SERIALIZED' AND p.isMasterProduct = 1
+    LEFT JOIN (
+      SELECT saleItemId, productId, SUM(status = 'RESERVED') AS reserved, SUM(status = 'SOLD') AS sold
+        FROM serial_units
+       WHERE saleItemId IS NOT NULL AND status IN ('RESERVED', 'SOLD')
+       GROUP BY saleItemId, productId
+    ) h ON h.saleItemId = si.id AND h.productId = si.productId
+   WHERE si.fulfillmentStatus <> 'CANCELLED'`;
+
+// Inner condition (over SERIAL_ASSIGNMENT_SQL's columns) for each assignmentStatus. A line with
+// some units picked and some not matches both — each bucket is about individual units.
+const ASSIGNMENT_CONDITION = {
+  assigned: "x.assigned > 0",
+  unassigned: "x.required > x.assigned",
+};
+
+// Attaches `serialAssignment: { required, assigned, unassigned }` to each serialized row so the
+// list can show how many of a line's units still need a serial. Rows on non-serialized lines are
+// left untouched.
+const attachSerialAssignment = async (couriers) => {
+  const saleItemIds = [...new Set(couriers.map((c) => c.saleItemId).filter(Boolean))];
+  if (!saleItemIds.length) return;
+  const rows = await sequelize.query(
+    `SELECT x.* FROM (${SERIAL_ASSIGNMENT_SQL}) x WHERE x.saleItemId IN (:saleItemIds)`,
+    { replacements: { saleItemIds }, type: sequelize.QueryTypes.SELECT }
+  );
+  const byItem = new Map(rows.map((r) => [r.saleItemId, r]));
+  for (const courier of couriers) {
+    const row = byItem.get(courier.saleItemId);
+    if (!row) continue;
+    const required = parseInt(row.required, 10) || 0;
+    const assigned = parseInt(row.assigned, 10) || 0;
+    courier.setDataValue("serialAssignment", {
+      required,
+      assigned,
+      unassigned: Math.max(0, required - assigned),
+    });
+  }
+};
 
 // Included on list/detail reads so the frontend can show per-product availability
 // (allocated/fulfilled/backordered) and derive shipment/product status without a second call.
@@ -78,6 +136,23 @@ const applyCourierFilters = async (scopeWhere, query) => {
       throw err;
     }
     where.deliveryMode = query.deliveryMode;
+  }
+
+  // Courier Assignment Status — narrows to serialized lines with at least one unit in the
+  // requested state. Applied in SQL (not post-fetch) so pagination counts/offsets stay exact.
+  // Cancelled courier rows are excluded: there's nothing left to assign on them.
+  if (query.assignmentStatus && query.assignmentStatus !== "all") {
+    if (!ASSIGNMENT_STATUSES.includes(query.assignmentStatus)) {
+      const err = new Error(`assignmentStatus must be one of: ${ASSIGNMENT_STATUSES.join(", ")}`);
+      err.statusCode = 400;
+      throw err;
+    }
+    where.saleItemId = {
+      [Op.in]: sequelize.literal(
+        `(SELECT x.saleItemId FROM (${SERIAL_ASSIGNMENT_SQL}) x WHERE ${ASSIGNMENT_CONDITION[query.assignmentStatus]})`
+      ),
+    };
+    where[Op.and] = [...(where[Op.and] || []), { status: { [Op.ne]: "CANCELLED" } }];
   }
 
   // entryDate is DATEONLY — plain 'YYYY-MM-DD' string comparison is sufficient, no
@@ -190,6 +265,9 @@ exports.getCouriers = async (req, res) => {
         limit,
         offset: (page - 1) * limit,
       });
+      if (req.query.assignmentStatus && req.query.assignmentStatus !== "all") {
+        await attachSerialAssignment(rows);
+      }
 
       return res.status(200).json({
         success: true,
@@ -203,6 +281,9 @@ exports.getCouriers = async (req, res) => {
       include,
       order: [["createdAt", "DESC"], ["id", "DESC"]],
     });
+    if (req.query.assignmentStatus && req.query.assignmentStatus !== "all") {
+      await attachSerialAssignment(couriers);
+    }
 
     return res.status(200).json({
       success: true,
@@ -299,7 +380,13 @@ exports.exportCouriers = async (req, res) => {
     const query = { ...req.query };
     if (query.direction === undefined) query.direction = "OUT";
 
-    const hasFilters = !!(query.search || query.startDate || query.endDate || query.deliveryMode);
+    const hasFilters = !!(
+      query.search ||
+      query.startDate ||
+      query.endDate ||
+      query.deliveryMode ||
+      (query.assignmentStatus && query.assignmentStatus !== "all")
+    );
     if (!hasFilters) {
       query.startDate = dayjs().startOf("month").format("YYYY-MM-DD");
       query.endDate = dayjs().endOf("month").format("YYYY-MM-DD");
