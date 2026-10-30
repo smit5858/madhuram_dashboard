@@ -475,6 +475,10 @@ exports.updateSale = async (req, res) => {
       await orderService.applyPaymentsToSale(sale, payments, { userId: user.id }, { transaction: t });
     }
 
+    // A sale that was fully paid (so had no ledger rows) but now owes something after this edit
+    // enters Account → Debited here; a no-op otherwise.
+    await customerLedgerService.syncSaleLedger(sale, { transaction: t, userId: user.id });
+
     await sale.save({ transaction: t });
 
     if (bankPaymentRows !== undefined) {

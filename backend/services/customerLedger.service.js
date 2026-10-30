@@ -1,6 +1,6 @@
 const { Op } = require("sequelize");
 const sequelize = require("../config/db");
-const { CustomerLedgerEntry, Customer, Sale, SaleItem, Product, User, BankAccount, LedgerEntryBankAccount } = require("../models");
+const { CustomerLedgerEntry, Customer, Sale, SaleItem, Product, User, BankAccount, LedgerEntryBankAccount, Payment } = require("../models");
 
 const todayDateOnly = () => new Date().toISOString().slice(0, 10);
 
@@ -134,16 +134,14 @@ const recordSaleDebit = async ({ customerId, saleId, amount, transactionDate, us
 // Adjusts the existing SALE entry for a sale to a new amount (used when a sale's order total —
 // sellingAmount + courierCharge — is edited after creation) instead of leaving it stale — see
 // sells.controller.js#updateSale.
-// Falls back to creating one if none exists yet (e.g. a customer was only just linked on this
-// edit), and removes it outright if the new amount is zero/negative.
-const updateSaleDebit = async (saleId, customerId, newOrderTotal, { transaction, userId } = {}) => {
+// A no-op if none exists yet (a fully paid sale, or a customer only just linked on this edit) —
+// syncSaleLedger creates the debit together with its payments once the sale actually carries an
+// outstanding amount. Removes the entry outright if the new amount is zero/negative.
+const updateSaleDebit = async (saleId, customerId, newOrderTotal, { transaction } = {}) => {
   const parsedAmount = parseFloat(newOrderTotal) || 0;
   const entry = await CustomerLedgerEntry.findOne({ where: { saleId, type: "SALE" }, transaction, lock: !!transaction });
 
-  if (!entry) {
-    if (!customerId || parsedAmount <= 0) return null;
-    return recordSaleDebit({ customerId, saleId, amount: parsedAmount, userId }, { transaction });
-  }
+  if (!entry) return null;
 
   if (!customerId || parsedAmount <= 0) {
     await entry.destroy({ transaction });
@@ -153,6 +151,61 @@ const updateSaleDebit = async (saleId, customerId, newOrderTotal, { transaction,
   entry.amount = -parsedAmount;
   if (entry.customerId !== customerId) entry.customerId = customerId;
   await entry.save({ transaction });
+  return entry;
+};
+
+// Account → Debited only tracks money actually owed: a sale gets ledger rows (its SALE debit plus
+// one PAYMENT/ADJUSTMENT per Payment row) only once it carries an outstanding amount, so a sale
+// paid in full never creates a Debited record. Idempotent — a no-op when the sale already has its
+// SALE entry (later changes are then mirrored by the existing paths), has no customer, is
+// cancelled, or is fully paid. Call inside the same transaction, after Payment rows are written.
+const syncSaleLedger = async (sale, { transaction, userId } = {}) => {
+  if (!sale || !sale.customerId || sale.status === "CANCELLED") return null;
+
+  const existing = await CustomerLedgerEntry.findOne({ where: { saleId: sale.id, type: "SALE" }, transaction });
+  if (existing) return existing;
+
+  const payments = await Payment.findAll({ where: { saleId: sale.id }, order: [["id", "ASC"]], transaction });
+  const orderTotal = (parseFloat(sale.sellingAmount) || 0) + (parseFloat(sale.courierCharge) || 0);
+  const collected = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+  if (orderTotal - collected <= 0.005) return null;
+
+  const dateOf = (value) => (value ? new Date(value).toISOString().slice(0, 10) : todayDateOnly());
+  const entry = await recordSaleDebit(
+    { customerId: sale.customerId, saleId: sale.id, amount: orderTotal, transactionDate: dateOf(sale.createdAt), userId },
+    { transaction }
+  );
+
+  const mirrored = await CustomerLedgerEntry.findAll({
+    where: { saleId: sale.id, paymentId: { [Op.ne]: null } },
+    attributes: ["paymentId"],
+    transaction,
+  });
+  const mirroredIds = new Set(mirrored.map((row) => row.paymentId));
+
+  for (const payment of payments) {
+    if (mirroredIds.has(payment.id)) continue;
+    const amount = parseFloat(payment.amount) || 0;
+    const fields = {
+      customerId: sale.customerId,
+      saleId: sale.id,
+      paymentId: payment.id,
+      amount,
+      paymentMethod: payment.method || null,
+      bankAccountId: payment.bankAccountId,
+      bankPayments: payment.bankAccountId ? [{ bankAccountId: payment.bankAccountId, amount: Math.abs(amount) }] : [],
+      reference: payment.transactionRef,
+      note: payment.notes,
+      transactionDate: dateOf(payment.createdAt),
+      userId: payment.createdBy || userId,
+    };
+    // A credit missing the bank account its method requires is still a credit — mirror it as an
+    // adjustment rather than failing the whole sale edit on a legacy row.
+    const isStrictPayment = amount > 0 && (!needsBankSplit(payment.method) || payment.bankAccountId);
+    if (isStrictPayment) await recordPayment(fields, { transaction });
+    else await recordAdjustment(fields, { transaction });
+  }
+
   return entry;
 };
 
@@ -667,6 +720,7 @@ module.exports = {
   getCustomerBalances,
   recordSaleDebit,
   updateSaleDebit,
+  syncSaleLedger,
   recordPayment,
   recordAdjustment,
   recordManualDebit,

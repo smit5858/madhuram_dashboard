@@ -1,7 +1,7 @@
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const sequelize = require("../config/db");
-const { Sale, SaleItem, Product, Stock, StockMovement, SerialUnit, Customer, Courier, Payment, SaleBankAccount } = require("../models");
+const { Sale, SaleItem, Product, Stock, StockMovement, SerialUnit, Customer, Courier, Payment, SaleBankAccount, CustomerLedgerEntry } = require("../models");
 const inventoryService = require("./inventory.service");
 const { notify } = require("./notification.service");
 const { createIncomeForSale, removeIncomeForSale } = require("./incomeSync.service");
@@ -157,7 +157,14 @@ const applyPaymentsToSale = async (sale, payments, { userId, allowNegative = tru
 
   sale.paymentMethod = await recomputeSalePaymentMethod(sale.id, { transaction: t });
 
-  if (sale.customerId) {
+  // No SALE ledger entry means the sale was fully paid so far (see syncSaleLedger) — mirroring
+  // just these rows would leave orphan credits/adjustments, so let the sync decide instead.
+  const hasLedgerDebit = sale.customerId
+    ? !!(await CustomerLedgerEntry.findOne({ where: { saleId: sale.id, type: "SALE" }, transaction: t }))
+    : false;
+  if (sale.customerId && !hasLedgerDebit) {
+    await customerLedgerService.syncSaleLedger(sale, { transaction: t, userId });
+  } else if (sale.customerId) {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const ledgerRecordFn = row.amount > 0 ? customerLedgerService.recordPayment : customerLedgerService.recordAdjustment;
@@ -263,6 +270,8 @@ const updatePayment = async ({ saleId, paymentId, amount, method, bankAccountId,
         entry.bankAccountId = needsBankSplit(resolvedMethod) ? resolvedBankAccountId : null;
         await entry.save({ transaction: t });
       }
+      // A previously fully paid sale that now has an outstanding amount enters the ledger here.
+      await customerLedgerService.syncSaleLedger(sale, { transaction: t, userId });
     }
 
     await t.commit();
@@ -317,6 +326,7 @@ const deletePayment = async ({ saleId, paymentId, canViewAll, userId }) => {
     if (sale.customerId) {
       const entry = await customerLedgerService.findEntryByPaymentId(payment.id, { transaction: t });
       if (entry) await customerLedgerService.deleteEntry({ entryId: entry.id }, { transaction: t });
+      await customerLedgerService.syncSaleLedger(sale, { transaction: t, userId });
     }
 
     await t.commit();
@@ -713,7 +723,11 @@ const createOrder = async ({
     // for whatever was collected up front — only when the sale resolved to a real Customer (no
     // phone number given means no Customer row, and the ledger is customer-scoped). See
     // customerLedger.service.js — the single place the running balance is computed everywhere.
-    if (finalCustomerId) {
+    // A sale paid in full up front owes nothing, so it gets no ledger rows at all (Account →
+    // Debited only tracks real receivables); customerLedgerService.syncSaleLedger back-fills them
+    // if a later edit/refund leaves an outstanding amount.
+    const upfrontCollected = paymentRows.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0);
+    if (finalCustomerId && orderTotal - upfrontCollected > 0.005) {
       await customerLedgerService.recordSaleDebit({ customerId: finalCustomerId, saleId: sale.id, amount: orderTotal, userId }, { transaction: t });
       // One ledger PAYMENT entry per payment method — mirrors the itemized Payment rows above so
       // a split payment (e.g. part Cash, part UPI) shows up as two distinct ledger lines instead
