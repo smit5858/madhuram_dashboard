@@ -165,9 +165,9 @@ const summarizeAccount = (accountKey, bills) => {
 };
 
 // GET /pending-bills/accounts?search=&status=PENDING|SETTLED&startDate=&endDate=&page=&limit=
-// One row per account (highest outstanding first for Active, most recent activity first for
-// Settled), mirroring customerLedger.service.js#getDebtors. Grouped in memory — the bill/payment
-// tables are small — then paginated server-side.
+// One row per account, latest transaction date first (bill/payment dates, not createdAt), mirroring
+// customerLedger.service.js#getDebtors. Grouped in memory — the bill/payment tables are small —
+// then paginated server-side.
 exports.getPendingBillAccounts = async (req, res) => {
   try {
     const { search, startDate, endDate } = req.query;
@@ -219,11 +219,7 @@ exports.getPendingBillAccounts = async (req, res) => {
       accounts.push({ ...summary, lastTransactionDate: group.dates.reduce((latest, d) => (d > latest ? d : latest), "") || null });
     }
 
-    accounts.sort((a, b) =>
-      status === "PENDING"
-        ? b.outstanding - a.outstanding || a.name.localeCompare(b.name)
-        : (b.lastTransactionDate || "").localeCompare(a.lastTransactionDate || "") || a.name.localeCompare(b.name)
-    );
+    accounts.sort((a, b) => (b.lastTransactionDate || "").localeCompare(a.lastTransactionDate || "") || a.name.localeCompare(b.name));
 
     const total = accounts.length;
     accounts = accounts.slice((pageNum - 1) * limitNum, pageNum * limitNum);

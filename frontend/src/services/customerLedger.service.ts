@@ -152,7 +152,7 @@ export interface DebtorListMeta {
   totalPages: number;
 }
 
-// Account → Debited: every customer currently in Pending, highest-pending first.
+// Account → Debited: every customer currently in Pending, latest transaction first.
 const getDebtors = (filters: DebtorFilters, config?: { signal?: AbortSignal }) =>
   httpService.get<{ success: boolean; data: DebtorRow[]; meta: DebtorListMeta }>("/customers/debtors", {
     params: filters,

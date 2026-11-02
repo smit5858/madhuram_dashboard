@@ -15,7 +15,7 @@ const errorResponse = (res, err) => {
 // same pattern as expense.controller.js's hard Admin locks.
 const isLedgerManager = (roleName) => roleName === "Admin" || roleName === "Account";
 
-// GET /customers/debtors — Account → Debited list (pending-only customers, highest first)
+// GET /customers/debtors — Account → Debited list (pending-only customers, latest transaction first)
 exports.getDebtors = async (req, res) => {
   try {
     const { search, startDate, endDate, page, limit, status } = req.query;

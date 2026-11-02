@@ -83,6 +83,9 @@ const CustomerLedger = () => {
 
   const { customer, balance, entries } = ledger;
   const pendingAmount = balance.status === "PENDING" ? Math.abs(balance.amount) : 0;
+  // The backend query returns oldest first and the statement PDF shares it, so reverse only here to
+  // show the latest date on top.
+  const latestFirstEntries = [...entries].reverse();
 
   return (
     <div className="p-6 bg-white rounded-xl shadow-md flex flex-col gap-6">
@@ -148,7 +151,7 @@ const CustomerLedger = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {entries.map((entry, index) => (
+                {latestFirstEntries.map((entry, index) => (
                   <tr key={entry.id} className="hover:bg-slate-50/70 transition-colors">
                     <td className="px-4 py-3.5 font-mono text-slate-400">{index + 1}</td>
                     <td className="px-4 py-3.5 whitespace-nowrap">{formatDisplayDate(entry.transactionDate)}</td>

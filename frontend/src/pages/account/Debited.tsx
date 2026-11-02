@@ -46,7 +46,7 @@ const FilterSync = ({ setAppliedFilters }: { setAppliedFilters: React.Dispatch<R
 };
 
 // Account → Debited: every customer currently carrying a Pending balance (spec's Customer
-// Account / Ledger system), highest-pending first — reuses the same central balance calc as the
+// Account / Ledger system), latest transaction first — reuses the same central balance calc as the
 // Sells table and the Customer Ledger page (see customerLedger.service.js#getDebtors).
 const Debited = () => {
   const { permissions } = useSelector((state: RootState) => state.auth);
@@ -98,7 +98,7 @@ const Debited = () => {
           <h1 className="text-xl font-bold text-slate-900">Debited</h1>
           <p className="mt-1 text-xs text-slate-500">
             {statusTab === "PENDING"
-              ? "Customers currently carrying a pending balance, highest first."
+              ? "Customers currently carrying a pending balance, latest transaction first."
               : "Customers with no current outstanding balance — settled or advance, most recent activity first."}
           </p>
         </div>

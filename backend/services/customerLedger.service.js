@@ -540,11 +540,12 @@ const deleteEntry = async ({ entryId }, { transaction } = {}) => {
 };
 
 // Account → Debited: one row per customer. `status` selects which bucket:
-// - "PENDING" (default) — balance < 0, highest-pending first (unchanged behavior).
+// - "PENDING" (default) — balance < 0.
 // - "SETTLED" — every other customer with ledger history (balance >= 0, i.e. Settled ∪ Advance)
 //   — the spec's Settled/History view; folding Advance in here too since the spec's Pending/
 //   Settled model doesn't have a third bucket, and "not currently owing" is the least-surprising
 //   read of "Settled" for that case.
+// Both buckets list the latest transaction date first.
 // `startDate`/`endDate` narrow WHICH customers are included (only those with a ledger entry
 // dated inside the range) — the balance shown is always the true, full-history running total
 // (never range-limited), matching the ledger's "balance never resets" rule.
@@ -624,13 +625,8 @@ const getDebtors = async ({ search, startDate, endDate, page, limit, status } = 
     };
   });
 
-  // Pending: highest debt first (balance is negative, so ascending puts the biggest debt on
-  // top). Settled/History: most recent activity first.
-  withBalance.sort((a, b) =>
-    wantSettled
-      ? String(b.lastTransactionDate || "").localeCompare(String(a.lastTransactionDate || ""))
-      : a.balance.amount - b.balance.amount
-  );
+  // Latest transaction date first; id breaks same-date ties so pages stay stable.
+  withBalance.sort((a, b) => String(b.lastTransactionDate || "").localeCompare(String(a.lastTransactionDate || "")) || a.id - b.id);
 
   const offset = (pageNum - 1) * limitNum;
   const pageOfCustomers = withBalance.slice(offset, offset + limitNum);

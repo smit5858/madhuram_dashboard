@@ -56,7 +56,7 @@ const FilterSync = ({
 };
 
 // Account → Pending Bill: one row per Seller/Dealer/Company we owe money to (bills for the same
-// seller are grouped into one account), highest outstanding first. Fully paid accounts move to the
+// seller are grouped into one account), latest transaction first. Fully paid accounts move to the
 // Settled / History tab but stay reachable — same layout as Account → Debited. Click an account
 // for its Account Details page (bills, payments and the running balance).
 const PendingBill = () => {
@@ -139,7 +139,7 @@ const PendingBill = () => {
           <h1 className="text-xl font-bold text-slate-900">Pending Bill</h1>
           <p className="mt-1 text-xs text-slate-500">
             {statusTab === "PENDING"
-              ? "Sellers, dealers and companies we currently owe money to, highest first."
+              ? "Sellers, dealers and companies we currently owe money to, latest transaction first."
               : "Fully paid accounts, most recent activity first — open one for its complete history."}
           </p>
         </div>
