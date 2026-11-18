@@ -5,7 +5,9 @@ const authorize = require("../middlewares/authorize");
 const productController = require("../controllers/product.controller");
 
 router.get("/", authenticate, authorize("/products", "read"), productController.getProducts);
-router.get("/:id", authenticate, authorize("/products", "read"), productController.getProductById);
+// Declared before /:id so "export" is never swallowed by the param route.
+router.get("/export", authenticate, authorize("/products", "read"), productController.exportProducts);
+router.get("/:id",authenticate, authorize("/products", "read"), productController.getProductById);
 router.post("/", authenticate, authorize("/products", "create"), productController.createProduct);
 router.put("/:id", authenticate, authorize("/products", "update"), productController.updateProduct);
 router.delete("/:id", authenticate, authorize("/products", "delete"), productController.deleteProduct);

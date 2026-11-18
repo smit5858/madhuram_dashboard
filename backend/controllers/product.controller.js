@@ -3,6 +3,7 @@ const sequelize = require("../config/db");
 const { Op } = require("sequelize");
 const inventoryService = require("../services/inventory.service");
 const { STOCK_TRACKED_TYPES } = inventoryService;
+const { exportProducts: exportProductFile } = require("../services/productExport.service");
 
 const VALID_PRODUCT_TYPES = ["NON_SERIAL", "SERIALIZED", "SOFTWARE", "HARDWARE_ORDER_BASED"];
 
@@ -188,6 +189,46 @@ exports.getProducts = async (req, res) => {
       },
     });
   } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const VALID_EXPORT_FORMATS = ["excel", "pdf"];
+
+// GET /products/export?format=excel|pdf — every product row in the database (active, inactive,
+// sale-only, zero stock), deliberately ignoring list filters and pagination. Stock figures come
+// from the same serializeProduct path as the list, and serialized counts/prices are fetched in
+// bulk, so the whole export is a fixed handful of queries regardless of catalog size.
+exports.exportProducts = async (req, res) => {
+  try {
+    const format = req.query.format || "excel";
+    if (!VALID_EXPORT_FORMATS.includes(format)) {
+      return res.status(400).json({ success: false, message: `format must be one of ${VALID_EXPORT_FORMATS.join(", ")}` });
+    }
+
+    const products = await Product.findAll({
+      include: { model: Stock, include: [{ model: Dealer, attributes: DEALER_ATTRS }] },
+      order: [
+        ["name", "ASC"],
+        ["id", "ASC"],
+      ],
+    });
+
+    if (products.length === 0) {
+      return res.status(404).json({ success: false, message: "No products available to export" });
+    }
+
+    const serializedIds = products.filter((p) => p.productType === "SERIALIZED").map((p) => p.id);
+    const [serialCounts, latestSerialPrices] = await Promise.all([
+      getSerialCountsForProducts(serializedIds),
+      getLatestSerialPricesForProducts(serializedIds),
+    ]);
+
+    const rows = products.map((p) => serializeProduct(p, serialCounts, latestSerialPrices));
+    await exportProductFile(format, rows, res);
+  } catch (err) {
+    // Once the file stream has started the status line is already sent — just drop the connection.
+    if (res.headersSent) return res.destroy(err);
     return res.status(500).json({ success: false, message: err.message });
   }
 };

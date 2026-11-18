@@ -143,7 +143,22 @@ const updateProduct = (id: number, data: UpdateProductPayload) =>
 const deleteProduct = (id: number) =>
   httpService.delete<{ success: boolean; message: string }>(`/products/${id}`);
 
+export type ProductExportFormat = "pdf" | "excel";
+
+/** Full catalog export — every product in the database (all statuses, zero stock included),
+ *  independent of the list's search/filters/pagination. Returns the generated file as a blob. */
+const exportProducts = (format: ProductExportFormat) =>
+  httpService.get<Blob>("/products/export", { params: { format }, responseType: "blob" });
+
+/** Products_Export_2026-11-18.xlsx — kept in sync with backend productExport.service.js#productExportFileBase. */
+export const productExportFileName = (format: ProductExportFormat) => {
+  const now = new Date();
+  const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  return `Products_Export_${date}.${format === "pdf" ? "pdf" : "xlsx"}`;
+};
+
 export default {
+  exportProducts,
   getProducts,
   getProductById,
   createProduct,

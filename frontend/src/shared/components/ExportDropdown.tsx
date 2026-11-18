@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
-import { ChevronDown, Download, Loader2 } from "lucide-react";
+import { ChevronDown, Download, FileSpreadsheet, FileText, Loader2 } from "lucide-react";
 
 export type ExportFormat = "pdf" | "excel";
 
@@ -13,7 +13,12 @@ interface ExportDropdownProps {
   fileName?: (format: ExportFormat) => string;
   /** When set, shown as a success toast after the file downloads. */
   successMessage?: string;
+  /** Overrides the trigger button's classes so it can match the host page's button style. */
+  buttonClassName?: string;
 }
+
+const DEFAULT_BUTTON_CLASS =
+  "inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60";
 
 const MIME_TYPE: Record<ExportFormat, string> = {
   pdf: "application/pdf",
@@ -21,7 +26,7 @@ const MIME_TYPE: Record<ExportFormat, string> = {
 };
 
 // Same Export button + PDF/Excel menu as the Sells page, packaged for reuse.
-const ExportDropdown = ({ onExport, filePrefix, fileName, successMessage }: ExportDropdownProps) => {
+const ExportDropdown = ({ onExport, filePrefix, fileName, successMessage, buttonClassName }: ExportDropdownProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -73,7 +78,7 @@ const ExportDropdown = ({ onExport, filePrefix, fileName, successMessage }: Expo
         type="button"
         onClick={() => setIsOpen((o) => !o)}
         disabled={exporting !== null}
-        className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+        className={buttonClassName ?? DEFAULT_BUTTON_CLASS}
       >
         {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
         Export
@@ -84,15 +89,17 @@ const ExportDropdown = ({ onExport, filePrefix, fileName, successMessage }: Expo
           <button
             type="button"
             onClick={() => handleExport("pdf")}
-            className="block w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
           >
+            <FileText className="h-3.5 w-3.5 text-red-500" />
             Export as PDF
           </button>
           <button
             type="button"
             onClick={() => handleExport("excel")}
-            className="block w-full px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
           >
+            <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
             Export as Excel
           </button>
         </div>

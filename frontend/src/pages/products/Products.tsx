@@ -25,7 +25,9 @@ import { useDebounce } from "@/hook/useDebounce";
 import { type RootState } from "../../store/store";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
 import FormikPhoneInput from "@/shared/components/formik-fields/FormikPhoneInput";
+import ExportDropdown from "@/shared/components/ExportDropdown";
 import productService, {
+  productExportFileName,
   type ProductData,
   type ProductDetail,
   type CreateProductPayload,
@@ -1497,7 +1499,7 @@ const Products = () => {
           )}
         </Formik>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {pagePermission.canRead && (
             <button
               type="button"
@@ -1508,6 +1510,16 @@ const Products = () => {
               <Barcode className="h-4 w-4" />
               <span>Serial Lookup</span>
             </button>
+          )}
+
+          {pagePermission.canRead && (
+            <ExportDropdown
+              filePrefix="products"
+              fileName={productExportFileName}
+              successMessage="Products exported successfully"
+              onExport={productService.exportProducts}
+              buttonClassName="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-all disabled:opacity-60"
+            />
           )}
 
           {pagePermission.canCreate && (
