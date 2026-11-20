@@ -231,6 +231,10 @@ const deleteSale = (id: number, options?: CancelSaleOptions) =>
 const exportSales = (format: "pdf" | "excel", filters?: SalesFilters) =>
   httpService.get(`/sells/export`, { params: { ...filters, format }, responseType: "blob",});
 
+/** Single-sale customer receipt PDF (not a GST invoice) — backs the Sells table's Share action. */
+const downloadInvoicePdf = (id: number) =>
+  httpService.get<Blob>(`/sells/${id}/invoice.pdf`, { responseType: "blob" });
+
 const getPayments = (saleId: number) =>
   httpService.get<{ success: boolean; data: PaymentData[] }>(`/sells/${saleId}/payments`);
 
@@ -287,6 +291,7 @@ export default {
   updateSale,
   deleteSale,
   exportSales,
+  downloadInvoicePdf,
   getPayments,
   recordPayment,
   recordPayments,

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "react-redux";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
-import { Plus, RotateCcw, Trash2, Eye, Edit2, AlertTriangle, CheckCircle2, XCircle, Package, PackagePlus, IndianRupee, ShoppingBag, Search as SearchIcon, Download, ChevronDown, UserCheck, Loader2 } from "lucide-react";
+import { Plus, RotateCcw, Trash2, Eye, Edit2, AlertTriangle, CheckCircle2, XCircle, Package, PackagePlus, IndianRupee, ShoppingBag, Search as SearchIcon, Download, ChevronDown, UserCheck, Loader2, Share2 } from "lucide-react";
 import { Formik, Form, Field, useFormikContext } from "formik";
 import { useDebounce } from "@/hook/useDebounce";
 import { type RootState } from "../../store/store";
@@ -28,6 +28,7 @@ import { COURIER_COMPANY_OTHER } from "@/shared/constants/courierCompanies";
 import CancelSaleModal from "@/shared/components/CancelSaleModal";
 import StockShortageModal, { type StockShortageItem } from "@/pages/sells/components/StockShortageModal";
 import QuickAddProductModal, { type QuickAddProductResult } from "@/pages/sells/components/QuickAddProductModal";
+import SaleInvoiceModal from "@/pages/sells/components/SaleInvoiceModal";
 import ProductSearchSelect from "@/pages/sells/components/ProductSearchSelect";
 import PaymentsEditor from "@/pages/sells/components/PaymentsEditor";
 import { validatePaymentRows, sumPaymentRows, needsBankAccount, PAYMENT_ENTRY_METHODS, type PaymentRow, type PaymentEntryMethod } from "@/pages/sells/utils/paymentRows";
@@ -319,6 +320,8 @@ const Sells = () => {
 
   // Modal States
   const [isModalOpen, setIsModalOpen] = useState(false);
+  // Share → invoice receipt modal (see SaleInvoiceModal); null when closed.
+  const [shareSaleId, setShareSaleId] = useState<number | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [selectedSale, setSelectedSale] = useState<SaleData | null>(null);
   // Set to a sale's id while handleEditClick is fetching its full detail (payment history
@@ -1635,6 +1638,13 @@ const Sells = () => {
                           >
                             <Eye className="h-4 w-4" />
                           </button>
+                          <button
+                            onClick={() => sell.id && setShareSaleId(sell.id)}
+                            className="rounded p-1 text-emerald-600 hover:bg-emerald-50 transition"
+                            title="Share Invoice"
+                          >
+                            <Share2 className="h-4 w-4" />
+                          </button>
                           {pagePermission.canUpdate && (
                             <button
                               onClick={() => handleEditClick(sell)}
@@ -2929,6 +2939,10 @@ const Sells = () => {
           onClose={() => setIsQuickAddOpen(false)}
           onAdd={handleQuickAddProduct}
         />
+      )}
+
+      {shareSaleId !== null && (
+        <SaleInvoiceModal saleId={shareSaleId} onClose={() => setShareSaleId(null)} />
       )}
 
     </div>

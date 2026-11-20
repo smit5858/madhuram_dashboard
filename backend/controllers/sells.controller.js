@@ -3,6 +3,7 @@ const sequelize = require("../config/db");
 const { Op } = require("sequelize");
 const orderService = require("../services/order.service");
 const { generateSalesExcel, generateSalesPdf } = require("../services/salesExport.service");
+const { generateSaleInvoicePdf } = require("../services/saleInvoice.service");
 const { canViewAllRecords } = require("../helper/permissionScope");
 const { syncIncomeForSaleUpdate } = require("../services/incomeSync.service");
 const { recalculateDay } = require("../services/dailyBalance.service");
@@ -363,6 +364,40 @@ exports.getSaleById = async (req, res) => {
     const [data] = await attachCourierEntryFlags(await attachLedgerBalances([sale]));
     return res.status(200).json({ success: true, data });
   } catch (err) {
+    return errorResponse(res, err);
+  }
+};
+
+// GET /sells/:id/invoice.pdf — simple customer receipt (not a GST invoice) for one sale, used by
+// the Sells page Share action. Same read permission + ownership scope as getSaleById.
+exports.getSaleInvoicePdf = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = req.user;
+    const canViewAll = user && (await canViewAllRecords(user, "/sells"));
+
+    const sale = await Sale.findByPk(id, {
+      include: [
+        { model: Customer, as: "customer", attributes: ["id", "name", "phone", "address", "city", "pincode"] },
+        { model: SaleItem, as: "items", include: [{ model: Product, attributes: ["id", "name"] }] },
+        { model: Payment, as: "payments", attributes: ["id", "amount", "method", "transactionRef", "createdAt"] },
+      ],
+      order: [
+        [{ model: SaleItem, as: "items" }, "id", "ASC"],
+        [{ model: Payment, as: "payments" }, "createdAt", "ASC"],
+      ],
+    });
+
+    if (!sale) {
+      return res.status(404).json({ success: false, message: "Sale not found" });
+    }
+    if (!canViewAll && sale.createdBy !== user.id) {
+      return res.status(403).json({ success: false, message: "Forbidden: You do not have permission to view this sale" });
+    }
+
+    return generateSaleInvoicePdf(sale, res);
+  } catch (err) {
+    if (res.headersSent) return res.destroy(err);
     return errorResponse(res, err);
   }
 };

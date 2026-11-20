@@ -17,7 +17,8 @@ router.get("/:id", authenticate, authorize("/sells", "read"), saleController.get
 router.put("/:id", authenticate, authorize("/sells", "update"), saleController.updateSale);
 router.delete("/:id", authenticate, authorize("/sells", "delete"), saleController.deleteSale);
 
-router.get("/:id/payments", authenticate, authorize("/sells", "read"), saleController.getPayments);
+router.get("/:id/invoice.pdf", authenticate, authorize("/sells", "read"), saleController.getSaleInvoicePdf);
+router.get("/:id/payments",authenticate, authorize("/sells", "read"), saleController.getPayments);
 router.post("/:id/payments", authenticate, authorize("/sells", "update"), saleController.recordPayment);
 router.put("/:id/payments/:paymentId", authenticate, authorize("/sells", "update"), saleController.updatePayment);
 router.delete("/:id/payments/:paymentId", authenticate, authorize("/sells", "update"), saleController.deletePayment);
