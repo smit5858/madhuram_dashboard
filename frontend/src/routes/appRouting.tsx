@@ -14,6 +14,7 @@ const Sells = lazy(() => import('../pages/sells/Sells'));
 const CustomerLedger = lazy(() => import('../pages/customers/CustomerLedger'));
 const Users = lazy(() => import('../pages/users/Users'));
 const Products = lazy(() => import('../pages/products/Products'));
+const Software = lazy(() => import('../pages/software/Software'));
 const Income = lazy(() => import('../pages/account/Income'));
 const Expense = lazy(() => import('../pages/account/Expense'));
 const PendingBill = lazy(() => import('../pages/account/PendingBill'));
@@ -137,6 +138,20 @@ const routesConfig = [
               <Suspense fallback={<LoadingFallback />}>
                 <MainLayout>
                   <Products />
+                </MainLayout>
+              </Suspense>
+            </PermissionGuard>
+          </AuthGuard>
+        )
+      },
+      {
+        path: Routing.Software,
+        element: (
+          <AuthGuard>
+            <PermissionGuard requiredPath="/software">
+              <Suspense fallback={<LoadingFallback />}>
+                <MainLayout>
+                  <Software />
                 </MainLayout>
               </Suspense>
             </PermissionGuard>

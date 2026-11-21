@@ -40,6 +40,7 @@ export interface SidebarItem {
 export const ALL_SIDEBAR_ITEMS: SidebarItem[] = [
     { path: "/dashboard", name: "Dashboard" },
     { path: "/products",  name: "Products"  },
+    { path: "/software",  name: "Software"  },
     { path: "/sells",     name: "Sells"     },
     {
         path: "/couriers",

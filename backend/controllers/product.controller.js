@@ -84,7 +84,7 @@ const serializeProduct = (p, serialCounts, latestSerialPrices = {}, imagesByProd
   if (p.productType === "SOFTWARE") {
     // No physical/warehouse stock concept — currentStock/reserved/available are reported as
     // null ("not applicable"), distinct from a real, meaningful 0. The Stock row still exists
-    // (permanently pinned at quantity 0) purely to hold sellingPrice/dealer, same field as
+    // (permanently pinned at quantity 0) purely to hold purchasePrice/sellingPrice, same fields as
     // NON_SERIAL/HARDWARE_ORDER_BASED — never touched by any reserve/fulfill/receive logic.
     const stock = p.Stock;
     return {
@@ -92,7 +92,7 @@ const serializeProduct = (p, serialCounts, latestSerialPrices = {}, imagesByProd
       currentStock: null,
       reserved: null,
       available: null,
-      purchasePrice: null,
+      purchasePrice: stock ? stock.purchasePrice : null,
       sellingPrice: stock ? stock.sellingPrice : null,
       dealer: null,
     };
@@ -131,10 +131,11 @@ const serializeProduct = (p, serialCounts, latestSerialPrices = {}, imagesByProd
   };
 };
 
-// GET /products?search=&productType=&status=&page=&limit=
-exports.getProducts = async (req, res) => {
+// Shared by GET /products and GET /software. `forcedType` pins the list to one product type
+// regardless of the query string (the Software page must never see other types).
+const listProducts = async (req, res, { forcedType } = {}) => {
   try {
-    const { search, productType, status, masterOnly, page, limit } = req.query;
+    const { search, productType, excludeType, status, masterOnly, page, limit } = req.query;
 
     const where = {};
 
@@ -143,8 +144,13 @@ exports.getProducts = async (req, res) => {
       where[Op.or] = [{ name: { [Op.like]: s } }, { description: { [Op.like]: s } }];
     }
 
-    if (productType && VALID_PRODUCT_TYPES.includes(productType)) {
+    if (forcedType) {
+      where.productType = forcedType;
+    } else if (productType && VALID_PRODUCT_TYPES.includes(productType)) {
       where.productType = productType;
+    } else if (excludeType && VALID_PRODUCT_TYPES.includes(excludeType)) {
+      // The Products page lists every type except SOFTWARE, which has its own page.
+      where.productType = { [Op.ne]: excludeType };
     }
 
     if (status === "active") {
@@ -200,6 +206,12 @@ exports.getProducts = async (req, res) => {
     return res.status(500).json({ success: false, message: err.message });
   }
 };
+
+// GET /products?search=&productType=&excludeType=&status=&masterOnly=&page=&limit=
+exports.getProducts = (req, res) => listProducts(req, res);
+
+// GET /software?search=&status=&masterOnly=&page=&limit=
+exports.getSoftwareProducts = (req, res) => listProducts(req, res, { forcedType: "SOFTWARE" });
 
 const VALID_EXPORT_FORMATS = ["excel", "pdf"];
 
@@ -480,10 +492,10 @@ exports.createProduct = async (req, res) => {
     );
 
     if (resolvedType === "SOFTWARE") {
-      // No quantity/purchase concept at all — nothing was bought, so no StockMovement.
-      // The Stock row exists solely to hold sellingPrice/dealer, permanently pinned at 0.
+      // No quantity concept — no StockMovement. The Stock row exists solely to hold the
+      // purchase/selling price (and dealer), permanently pinned at quantity 0.
       const stock = await Stock.create(
-        { productId: product.id, quantity: 0, reserved: 0, purchasePrice: null, sellingPrice: sellingPrice ?? null, dealerId: dealerId ?? null },
+        { productId: product.id, quantity: 0, reserved: 0, purchasePrice: purchasePrice ?? null, sellingPrice: sellingPrice ?? null, dealerId: dealerId ?? null },
         { transaction: t }
       );
       await t.commit();
@@ -668,9 +680,8 @@ exports.updateProduct = async (req, res) => {
         stock.sellingPrice = sellingPrice;
       }
 
-      // SOFTWARE has no purchase cost concept (always reported as null), so only stock-tracked
-      // types accept a purchase price edit. Past StockMovement rows keep their own recorded price.
-      if (purchasePrice !== undefined && STOCK_TRACKED_TYPES.includes(product.productType)) {
+      // Past StockMovement rows keep their own recorded price — this only changes the current value.
+      if (purchasePrice !== undefined) {
         stock.purchasePrice = purchasePrice === "" ? null : purchasePrice;
       }
 

@@ -34,6 +34,7 @@ import {
     ListTodo,
     FolderKanban,
     Clock,
+    AppWindow,
     type LucideIcon,
 } from "lucide-react";
 
@@ -45,6 +46,7 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = "sidebar:collapsed";
 const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
     "/dashboard": LayoutDashboard,
     "/products": Package,
+    "/software": AppWindow,
     "/sells": TrendingUp,
     "/couriers": Truck,
     "/couriers?direction=out": ArrowUpRight,

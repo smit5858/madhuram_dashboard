@@ -84,6 +84,8 @@ export interface ProductDetail extends ProductData {
 export interface ProductFilters {
   search?: string;
   productType?: ProductType | "";
+  /** Leaves out one type — the Products page excludes SOFTWARE, which has its own page. */
+  excludeType?: ProductType;
   status?: "active" | "inactive" | "";
   /** Excludes products quick-added from the Sells form without "Save as New Product" — those
    *  are scoped to one sale and shouldn't clutter the master product catalog. */

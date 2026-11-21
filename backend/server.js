@@ -29,6 +29,7 @@ const courierCompanies = require("./routes/courierCompany.routes");
 const customers = require("./routes/customer.routes");
 const sells = require("./routes/sells.routes");
 const products = require("./routes/product.routes");
+const software = require("./routes/software.routes");
 const stocks = require("./routes/stock.routes");
 const inventory = require("./routes/inventory.routes");
 const dealers = require("./routes/dealer.routes");
@@ -56,6 +57,7 @@ app.use("/sells", sells);
 // Keep the old API path working for existing clients.
 app.use("/sales", sells);
 app.use("/products", products);
+app.use("/software", software);
 app.use("/stock", stocks);
 app.use("/inventory", inventory);
 app.use("/dealers", dealers);
@@ -128,6 +130,7 @@ const ensureAllRoutesAndPermissions = async () => {
       { name: "Customers", path: "/customers" },
       { name: "Sells", path: "/sells" },
       { name: "Products", path: "/products" },
+      { name: "Software", path: "/software" },
       { name: "Users", path: "/users" },
       { name: "Account", path: "/account" },
       { name: "Account Income", path: "/account/income", module: "Account" },
@@ -221,6 +224,39 @@ const backfillIncomingCourierPermissions = async () => {
     }
   } catch (e) {
     console.warn("Could not backfill Incoming Courier permissions:", e.message);
+  }
+};
+
+// Software products moved out of the Products page into their own page/permission ("/software").
+// So nobody loses access the day this ships, copies every existing Products UserPermission row
+// onto Software (same booleans) — but only while Software has no permission rows at all, so it
+// runs once and never re-grants access an Admin later removes in Settings → Route Setting.
+const backfillSoftwarePermissions = async () => {
+  try {
+    const productsRoute = await Route.findOne({ where: { path: "/products" } });
+    const softwareRoute = await Route.findOne({ where: { path: "/software" } });
+    if (!productsRoute || !softwareRoute) return;
+
+    const existing = await UserPermission.count({ where: { routeId: softwareRoute.id } });
+    if (existing > 0) return;
+
+    const productPerms = await UserPermission.findAll({ where: { routeId: productsRoute.id } });
+    for (const perm of productPerms) {
+      await UserPermission.findOrCreate({
+        where: { userId: perm.userId, routeId: softwareRoute.id },
+        defaults: {
+          userId: perm.userId,
+          routeId: softwareRoute.id,
+          canRead: perm.canRead,
+          canCreate: perm.canCreate,
+          canUpdate: perm.canUpdate,
+          canDelete: perm.canDelete,
+          viewAllRecords: perm.viewAllRecords,
+        },
+      });
+    }
+  } catch (e) {
+    console.warn("Could not backfill Software permissions:", e.message);
   }
 };
 
@@ -785,6 +821,7 @@ sequelize
     await ensureAllRoutesAndPermissions();
     await pruneObsoleteRoutes();
     await backfillIncomingCourierPermissions();
+    await backfillSoftwarePermissions();
     await grantInitialPendingBillAccess();
     await grantInitialLeadsAccess();
     await grantInitialTasksAccess();

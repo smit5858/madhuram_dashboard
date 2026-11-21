@@ -79,6 +79,15 @@ export const createSoftwareSchema = z.object({
 
 export type CreateSoftwareFormValues = z.infer<typeof createSoftwareSchema>;
 
+// Software page create/edit form — no stock fields, just purchase + selling price.
+export const softwareFormSchema = z.object({
+  name: nameField,
+  description: descriptionField,
+  isActive: z.boolean().optional(),
+  purchasePrice: optionalAmountField,
+  sellingPrice: optionalAmountField,
+});
+
 // Create — HARDWARE_ORDER_BASED: same shape as NON_SERIAL minus quantity — this type always
 // starts at 0 stock and is procured per order via the existing Receive Stock flow.
 export const createHardwareOrderBasedSchema = z.object({

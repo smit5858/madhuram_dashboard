@@ -142,6 +142,9 @@ const confirmGenerateSerialUnits = (units: UnitRowValues[], quantity: number | "
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
+// Software is managed on its own page (see pages/software/Software.tsx).
+const PRODUCT_PAGE_TYPE_OPTIONS = PRODUCT_TYPE_OPTIONS.filter((opt) => opt.value !== "SOFTWARE");
+
 const TYPE_BADGE_CLASS: Record<ProductType, string> = {
   NON_SERIAL: "bg-slate-100 text-slate-700 border-slate-200",
   SERIALIZED: "bg-indigo-50 text-indigo-700 border-indigo-100",
@@ -1144,7 +1147,8 @@ const Products = () => {
   const queryFilters = useMemo<ProductFilters>(
     // The master catalog never shows products quick-added from the Sells form without
     // "Save as New Product" — those exist only to back one sale's line item.
-    () => ({ ...appliedFilters, masterOnly: true, page: appliedFilters.page ?? 1, limit: pageSize }),
+    // Software products live on their own Software page.
+    () => ({ ...appliedFilters, masterOnly: true, excludeType: "SOFTWARE", page: appliedFilters.page ?? 1, limit: pageSize }),
     [appliedFilters, pageSize]
   );
 
@@ -1473,7 +1477,7 @@ const Products = () => {
                 className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-medium text-slate-700 focus:border-[#3d6fe0] focus:bg-white focus:outline-none cursor-pointer"
               >
                 <option value="">All Types</option>
-                {PRODUCT_TYPE_OPTIONS.map((opt) => (
+                {PRODUCT_PAGE_TYPE_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
                   </option>
@@ -1851,7 +1855,7 @@ const Products = () => {
                         className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-[#3d6fe0] focus:bg-white focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
                       >
                         <option value="">-- Select Product Type --</option>
-                        {PRODUCT_TYPE_OPTIONS.map((opt) => (
+                        {PRODUCT_PAGE_TYPE_OPTIONS.map((opt) => (
                           <option key={opt.value} value={opt.value}>
                             {opt.label}
                           </option>
