@@ -15,6 +15,20 @@ const describeEntry = (entry) => {
   return `Adjustment${entry.note ? ` - ${entry.note}` : ""}`;
 };
 
+// Product lines for a SALE entry (e.g. "Helmet x2, Battery") so the customer can tell which
+// purchase each debit is for — the invoice number alone isn't meaningful to them.
+const describeSaleItems = (entry) => {
+  if (entry.type !== "SALE") return "";
+  const items = entry.sale?.items || [];
+  return items
+    .map((item) => {
+      const name = item.Product?.name || "Product";
+      const qty = Number(item.quantity) || 0;
+      return qty > 1 ? `${name} x${qty}` : name;
+    })
+    .join(", ");
+};
+
 // Generates a printable PDF account statement for one customer — same pdfkit + letterhead
 // pattern as salesExport.service.js#generateSalesPdf.
 function generateCustomerStatementPdf(customer, balance, entries, res) {
@@ -86,7 +100,13 @@ function generateCustomerStatementPdf(customer, balance, entries, res) {
   }
 
   entries.forEach((entry, index) => {
-    if (y + rowHeight > doc.page.height - doc.page.margins.bottom - 40) {
+    const itemsText = describeSaleItems(entry);
+    doc.font("Helvetica").fontSize(8);
+    const itemsHeight = itemsText ? doc.heightOfString(itemsText, { width: columns[2].width }) + 2 : 0;
+    doc.fontSize(9);
+    const entryHeight = Math.max(rowHeight, 12 + itemsHeight + 6);
+
+    if (y + entryHeight > doc.page.height - doc.page.margins.bottom - 40) {
       doc.addPage({ size: "A4", margin: 40 });
       y = doc.page.margins.top;
       drawColumnHeader();
@@ -99,7 +119,11 @@ function generateCustomerStatementPdf(customer, balance, entries, res) {
     x += columns[0].width;
     doc.text(dayjs(entry.transactionDate).format("DD-MM-YYYY"), x, y, { width: columns[1].width });
     x += columns[1].width;
-    doc.text(describeEntry(entry), x, y, { width: columns[2].width, ellipsis: true });
+    doc.text(describeEntry(entry), x, y, { width: columns[2].width, ellipsis: true, lineBreak: false });
+    if (itemsText) {
+      doc.fontSize(8).fillColor("#555555").text(itemsText, x, y + 12, { width: columns[2].width });
+      doc.fontSize(9).fillColor("black");
+    }
     x += columns[2].width;
     // A discount is stored positive (it reduces pending) but shown as a deduction, in its own
     // color so it isn't mistaken for either a sale debit or a received payment.
@@ -108,7 +132,7 @@ function generateCustomerStatementPdf(customer, balance, entries, res) {
       .fillColor(isDiscount ? "#d97706" : amount < 0 ? "#e11d48" : "#059669")
       .text(`${isDiscount || amount < 0 ? "-" : "+"} Rs. ${Math.abs(amount).toLocaleString("en-IN")}`, x, y, { width: columns[3].width });
     doc.fillColor("black");
-    y += rowHeight;
+    y += entryHeight;
   });
 
   y += 10;
