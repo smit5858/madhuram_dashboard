@@ -6,6 +6,11 @@ export interface DealerRef {
   name: string;
 }
 
+/** A stored product photo — fetch the binary with getProductImage (authenticated). */
+export interface ProductImageRef {
+  id: number;
+}
+
 export interface ProductData {
   id: number;
   name: string;
@@ -14,6 +19,10 @@ export interface ProductData {
   isActive: boolean;
   /** false for products quick-added from the Sells form without "Save as New Product". */
   isMasterProduct: boolean;
+  /** Product photos (up to MAX_PRODUCT_IMAGES), cover first. */
+  images?: ProductImageRef[];
+  /** Whether at least one product photo has been uploaded. */
+  hasImage?: boolean;
   /** Currently on-hand/available count. NON_SERIAL/HARDWARE_ORDER_BASED: quantity - reserved.
    *  SERIALIZED: count of AVAILABLE units. SOFTWARE: null — not applicable, no stock concept. */
   currentStock: number | null;
@@ -150,6 +159,36 @@ export type ProductExportFormat = "pdf" | "excel";
 const exportProducts = (format: ProductExportFormat) =>
   httpService.get<Blob>("/products/export", { params: { format }, responseType: "blob" });
 
+/** Customer-facing product catalogue card PDF (Share action) — backend whitelists customer-safe fields only. */
+const downloadProductSharePdf = (id: number, price?: number) =>
+  httpService.get<Blob>(`/products/${id}/share.pdf`, {
+    // Optional share-only price override (never saved); 0 hides the price.
+    params: price !== undefined ? { price } : undefined,
+    responseType: "blob",
+  });
+
+/** Max photos per product — kept in sync with backend productImage.service.js#MAX_IMAGES_PER_PRODUCT. */
+export const MAX_PRODUCT_IMAGES = 4;
+
+type ProductImagesResponse = { success: boolean; message: string; data: { images: ProductImageRef[] } };
+
+/** One product photo as a blob — authenticated, so it can't be a plain <img src> URL. */
+const getProductImage = (productId: number, imageId: number) =>
+  httpService.get<Blob>(`/products/${productId}/images/${imageId}`, { responseType: "blob" });
+
+/** Adds one photo (max MAX_PRODUCT_IMAGES). Send a JPEG/PNG blob (see pages/products/utils/productImage.ts). */
+const uploadProductImage = (productId: number, image: Blob) =>
+  httpService.post<ProductImagesResponse>(`/products/${productId}/images`, image, {
+    headers: { "Content-Type": image.type || "image/jpeg" },
+  });
+
+/** Makes this photo the cover (first) one — used as the share card / PDF hero. */
+const setProductCoverImage = (productId: number, imageId: number) =>
+  httpService.put<ProductImagesResponse>(`/products/${productId}/images/${imageId}/cover`);
+
+const deleteProductImage = (productId: number, imageId: number) =>
+  httpService.delete<ProductImagesResponse>(`/products/${productId}/images/${imageId}`);
+
 /** Products_Export_2026-11-18.xlsx — kept in sync with backend productExport.service.js#productExportFileBase. */
 export const productExportFileName = (format: ProductExportFormat) => {
   const now = new Date();
@@ -159,6 +198,11 @@ export const productExportFileName = (format: ProductExportFormat) => {
 
 export default {
   exportProducts,
+  downloadProductSharePdf,
+  getProductImage,
+  uploadProductImage,
+  setProductCoverImage,
+  deleteProductImage,
   getProducts,
   getProductById,
   createProduct,

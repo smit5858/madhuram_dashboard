@@ -34,6 +34,14 @@ const Product = sequelize.define(
       allowNull: false,
       defaultValue: true,
     },
+    // LEGACY — photos now live in the product_images table (models/productImage.model.js). This
+    // column only holds a file name under backend/uploads/products that hasn't been moved into the
+    // DB yet; migrateLegacyProductImageFiles (services/productImage.service.js) moves it on server
+    // start and nulls it. Kept in the model so sync({alter:true}) doesn't drop it before that runs.
+    imageFile: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
   },
   {
     tableName: "products",

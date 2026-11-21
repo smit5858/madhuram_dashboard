@@ -15,7 +15,10 @@ axios.interceptors.request.use(
         if (config.url && !/^https?:\/\//i.test(config.url)) {
             config.url = getBaseURL(backend_url) + config.url;
         }
-        config.headers["Content-Type"] = "application/json";
+        // Binary uploads (e.g. product photos) keep their own Content-Type; everything else is JSON.
+        if (!(config.data instanceof Blob)) {
+            config.headers["Content-Type"] = "application/json";
+        }
 
         const savedAuth = sessionStorage.getItem("auth");
         if (savedAuth) {

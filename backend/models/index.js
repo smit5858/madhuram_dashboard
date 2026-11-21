@@ -6,6 +6,7 @@ const Courier = require("./courier.model");
 const CourierCompany = require("./courierCompany.model");
 const CourierCharge = require("./courierCharge.model");
 const Product = require("./product.model");
+const ProductImage = require("./productImage.model");
 const Stock = require("./stock.model");
 const StockMovement = require("./stockMovement.model");
 const Customer = require("./customer.model");
@@ -65,6 +66,10 @@ Customer.belongsTo(User, { foreignKey: "createdBy", as: "creator" });
 // Product ↔ Stock (one-to-one: each product has one stock record)
 Product.hasOne(Stock, { foreignKey: "productId" });
 Stock.belongsTo(Product, { foreignKey: "productId" });
+
+// Product ↔ ProductImage (one-to-many: up to 4 photos stored in the DB, lowest sortOrder = cover)
+Product.hasMany(ProductImage, { foreignKey: "productId", as: "images", onDelete: "CASCADE" });
+ProductImage.belongsTo(Product, { foreignKey: "productId" });
 
 // Product ↔ StockMovement (one-to-many: audit trail)
 Product.hasMany(StockMovement, { foreignKey: "productId" });
@@ -285,6 +290,7 @@ module.exports = {
   CourierCharge,
   Customer,
   Product,
+  ProductImage,
   Stock,
   StockMovement,
   Sale,

@@ -32,3 +32,5 @@ build/
 /CLAUDE.md
 .claude
 .github/
+# Uploaded product photos (runtime data)
+backend/uploads/

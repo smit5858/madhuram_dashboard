@@ -20,12 +20,15 @@ import {
   PackageCheck,
   PlusCircle,
   Receipt,
+  Share2,
 } from "lucide-react";
 import { useDebounce } from "@/hook/useDebounce";
 import { type RootState } from "../../store/store";
 import FormikInput from "@/shared/components/formik-fields/FormikInput";
 import FormikPhoneInput from "@/shared/components/formik-fields/FormikPhoneInput";
 import ExportDropdown from "@/shared/components/ExportDropdown";
+import ProductShareModal from "@/pages/products/components/ProductShareModal";
+import ProductImageUpload from "@/pages/products/components/ProductImageUpload";
 import productService, {
   productExportFileName,
   type ProductData,
@@ -1174,6 +1177,8 @@ const Products = () => {
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<ProductData | null>(null);
   const [detailProductId, setDetailProductId] = useState<number | null>(null);
+  // Share → customer catalogue card modal (see ProductShareModal); null when closed.
+  const [shareProduct, setShareProduct] = useState<ProductData | null>(null);
   const [unitSearchQuery, setUnitSearchQuery] = useState("");
   const [editingSerialUnit, setEditingSerialUnit] = useState<SerialUnitDetail | null>(null);
   const [receiveStockProduct, setReceiveStockProduct] = useState<ProductData | null>(null);
@@ -1666,6 +1671,17 @@ const Products = () => {
                           <Eye className="h-4 w-4" />
                         </button>
 
+                        {product.isActive && (
+                          <button
+                            type="button"
+                            onClick={() => setShareProduct(product)}
+                            title="Share Product"
+                            className="rounded p-1 text-emerald-600 hover:bg-emerald-50 transition"
+                          >
+                            <Share2 className="h-4 w-4" />
+                          </button>
+                        )}
+
                         {pagePermission.canUpdate && (
                           <button
                             type="button"
@@ -1807,6 +1823,24 @@ const Products = () => {
                   <Form className="mt-5 space-y-4">
                     <Field name="name" label="Product Name *" placeholder="e.g. THINKCAR Diagnostic Tool" component={FormikInput} />
                     <Field name="description" label="Description" placeholder="Optional details about this product" multiline component={FormikInput} />
+
+                    {/* Photo is saved immediately (its own upload request), independent of this form's Save. */}
+                    {selectedProduct ? (
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Product Photos</label>
+                        <div className="max-w-xs">
+                          <ProductImageUpload
+                            key={selectedProduct.id}
+                            productId={selectedProduct.id}
+                            images={selectedProduct.images}
+                            productName={selectedProduct.name}
+                            canEdit={pagePermission.canUpdate}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-slate-400">You can add up to 4 product photos after saving, from Edit or Share.</p>
+                    )}
 
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 mb-1">Product Type *</label>
@@ -2169,12 +2203,26 @@ const Products = () => {
                 </div>
 
                 <div className="mt-5 space-y-4 text-xs">
+                  {detailProduct.hasImage && (
+                    <div className="mx-auto w-full max-w-sm">
+                      <ProductImageUpload
+                        key={detailProduct.id}
+                        productId={detailProduct.id}
+                        images={detailProduct.images}
+                        productName={detailProduct.name}
+                        canEdit={false}
+                      />
+                    </div>
+                  )}
                   <div className="rounded-xl bg-slate-50 p-4 border border-slate-100 space-y-3">
                     <div>
                       <span className="text-slate-400 font-medium flex items-center gap-1">
                         <Tag className="h-3 w-3" /> Description
                       </span>
-                      <span className="text-slate-800 font-medium">{detailProduct.description || "No description provided"}</span>
+                      {/* Long descriptions scroll inside their own box instead of stretching the modal. */}
+                      <p className="mt-0.5 max-h-40 overflow-y-auto whitespace-pre-line wrap-break-word text-slate-800 font-medium">
+                        {detailProduct.description || "No description provided"}
+                      </p>
                     </div>
                     <div>
                       <span className="text-slate-400 font-medium block">Created On</span>
@@ -2445,6 +2493,15 @@ const Products = () => {
       )}
 
       {isSerialLookupOpen && <SerialLookupModal onClose={() => setIsSerialLookupOpen(false)} />}
+
+      {shareProduct && (
+        <ProductShareModal
+          product={shareProduct}
+          canEditImage={pagePermission.canUpdate}
+          onImageChange={(images) => setShareProduct((p) => (p ? { ...p, images, hasImage: images.length > 0 } : p))}
+          onClose={() => setShareProduct(null)}
+        />
+      )}
     </div>
   );
 };

@@ -4,6 +4,8 @@ const { Op } = require("sequelize");
 const inventoryService = require("../services/inventory.service");
 const { STOCK_TRACKED_TYPES } = inventoryService;
 const { exportProducts: exportProductFile } = require("../services/productExport.service");
+const { generateProductSharePdf } = require("../services/productShare.service");
+const productImageService = require("../services/productImage.service");
 
 const VALID_PRODUCT_TYPES = ["NON_SERIAL", "SERIALIZED", "SOFTWARE", "HARDWARE_ORDER_BASED"];
 
@@ -62,7 +64,10 @@ const getLatestSerialPricesForProducts = async (productIds) => {
   return byProduct;
 };
 
-const serializeProduct = (p, serialCounts, latestSerialPrices = {}) => {
+// imagesByProduct: { [productId]: [{ id }, …] } from productImageService — photo refs only (cover
+// first); the binaries are fetched separately via GET /products/:id/images/:imageId.
+const serializeProduct = (p, serialCounts, latestSerialPrices = {}, imagesByProduct = {}) => {
+  const images = imagesByProduct[p.id] || [];
   const base = {
     id: p.id,
     name: p.name,
@@ -70,6 +75,8 @@ const serializeProduct = (p, serialCounts, latestSerialPrices = {}) => {
     productType: p.productType,
     isActive: p.isActive,
     isMasterProduct: p.isMasterProduct,
+    images,
+    hasImage: images.length > 0,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
   };
@@ -171,12 +178,13 @@ exports.getProducts = async (req, res) => {
     });
 
     const serializedIds = rows.filter((p) => p.productType === "SERIALIZED").map((p) => p.id);
-    const [serialCounts, latestSerialPrices] = await Promise.all([
+    const [serialCounts, latestSerialPrices, imagesByProduct] = await Promise.all([
       getSerialCountsForProducts(serializedIds),
       getLatestSerialPricesForProducts(serializedIds),
+      productImageService.getImagesForProducts(rows.map((p) => p.id)),
     ]);
 
-    const data = rows.map((p) => serializeProduct(p, serialCounts, latestSerialPrices));
+    const data = rows.map((p) => serializeProduct(p, serialCounts, latestSerialPrices, imagesByProduct));
 
     return res.status(200).json({
       success: true,
@@ -233,6 +241,90 @@ exports.exportProducts = async (req, res) => {
   }
 };
 
+// GET /products/:id/share.pdf — customer-facing product catalogue card for the Products page Share
+// action. Reuses serializeProduct for price/availability, then productShare.service whitelists only
+// customer-safe fields (no purchase price, dealer, serials or stock counts ever reach the PDF).
+exports.getProductSharePdf = async (req, res) => {
+  try {
+    const product = await Product.findByPk(req.params.id, { include: { model: Stock } });
+    if (!product) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+    if (!product.isActive) {
+      return res.status(400).json({ success: false, message: "Inactive products cannot be shared" });
+    }
+
+    // Optional share-only price (?price=52000) typed in the Share dialog — used for this PDF only and
+    // never written to the database. price=0 hides the price; absent means the stored price.
+    let priceOverride;
+    if (req.query.price !== undefined) {
+      priceOverride = Number(req.query.price);
+      if (!Number.isFinite(priceOverride) || priceOverride < 0) {
+        return res.status(400).json({ success: false, message: "price must be a non-negative number" });
+      }
+    }
+
+    // Only the selling price is needed (no stock info is shared) — SERIALIZED prices live on its units.
+    const latestSerialPrices = product.productType === "SERIALIZED" ? await getLatestSerialPricesForProducts([product.id]) : {};
+    const shareData = serializeProduct(product, {}, latestSerialPrices);
+    if (priceOverride !== undefined) shareData.sellingPrice = priceOverride > 0 ? priceOverride : null;
+
+    return generateProductSharePdf(shareData, res, {
+      images: await productImageService.getProductImageBuffers(product.id),
+    });
+  } catch (err) {
+    if (res.headersSent) return res.destroy(err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /products/:id/images/:imageId — one product photo from the DB (authenticated; the frontend
+// fetches it as a blob). A photo row is never modified — replacing means a new id — so it may be
+// cached privately for a long time.
+exports.getProductImage = async (req, res) => {
+  try {
+    const image = await productImageService.getProductImage(req.params.id, req.params.imageId);
+    if (!image) {
+      return res.status(404).json({ success: false, message: "Photo not found" });
+    }
+    res.set("Content-Type", image.mimeType);
+    res.set("Cache-Control", "private, max-age=31536000, immutable");
+    return res.send(image.data);
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// POST /products/:id/images — raw JPEG/PNG body (see routes: express.raw). Adds one photo (max 4).
+exports.uploadProductImage = async (req, res) => {
+  try {
+    const images = await productImageService.addProductImage(req.params.id, req.body);
+    return res.status(201).json({ success: true, message: "Product photo added", data: { images } });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ success: false, message: err.message });
+  }
+};
+
+// PUT /products/:id/images/:imageId/cover — make this photo the first (cover) one.
+exports.setProductCoverImage = async (req, res) => {
+  try {
+    const images = await productImageService.setCoverImage(req.params.id, req.params.imageId);
+    return res.status(200).json({ success: true, message: "Cover photo updated", data: { images } });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ success: false, message: err.message });
+  }
+};
+
+// DELETE /products/:id/images/:imageId
+exports.deleteProductImage = async (req, res) => {
+  try {
+    const images = await productImageService.deleteProductImage(req.params.id, req.params.imageId);
+    return res.status(200).json({ success: true, message: "Product photo removed", data: { images } });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ success: false, message: err.message });
+  }
+};
+
 // GET /products/:id — SERIALIZED responses include the full per-unit list (§23): purchase
 // provenance plus, for SOLD units, sale-side info read through saleItem -> sale, never duplicated.
 exports.getProductById = async (req, res) => {
@@ -249,9 +341,11 @@ exports.getProductById = async (req, res) => {
       return res.status(404).json({ success: false, message: "Product not found" });
     }
 
+    const imagesByProduct = { [product.id]: await productImageService.listProductImages(product.id) };
+
     if (product.productType === "SOFTWARE") {
       // No purchase history or serial units — just the base serialized shape.
-      return res.status(200).json({ success: true, data: serializeProduct(product, {}) });
+      return res.status(200).json({ success: true, data: serializeProduct(product, {}, {}, imagesByProduct) });
     }
 
     if (STOCK_TRACKED_TYPES.includes(product.productType)) {
@@ -278,7 +372,7 @@ exports.getProductById = async (req, res) => {
       }
 
       const data = {
-        ...serializeProduct(product, {}),
+        ...serializeProduct(product, {}, {}, imagesByProduct),
         purchases: Array.from(groupsByDate.values()),
       };
       return res.status(200).json({ success: true, data });
@@ -303,7 +397,8 @@ exports.getProductById = async (req, res) => {
     const base = serializeProduct(
       product,
       { [id]: { AVAILABLE: counts.available, RESERVED: counts.reserved, SOLD: counts.sold } },
-      latestSerialPrices
+      latestSerialPrices,
+      imagesByProduct
     );
 
     return res.status(200).json({
@@ -672,11 +767,12 @@ exports.updateProduct = async (req, res) => {
 
     const latestSerialPrices =
       refreshed.productType === "SERIALIZED" ? await getLatestSerialPricesForProducts([id]) : {};
+    const imagesByProduct = { [refreshed.id]: await productImageService.listProductImages(refreshed.id) };
 
     return res.status(200).json({
       success: true,
       message: "Product updated successfully",
-      data: serializeProduct(refreshed, {}, latestSerialPrices),
+      data: serializeProduct(refreshed, {}, latestSerialPrices, imagesByProduct),
     });
   } catch (err) {
     if (!t.finished) await t.rollback();

@@ -5,6 +5,7 @@ import { Download, Loader2, MessageCircle, Share2, XCircle } from "lucide-react"
 import LOGO from "@/assets/logo.png";
 import saleService from "@/services/sells.service";
 import { formatPhoneDisplay } from "@/shared/utils/phone";
+import { canShareFiles, downloadBlob, getBlobErrorMessage, shareFile } from "@/shared/utils/fileShare";
 import {
   INVOICE_COMPANY_NAME,
   INVOICE_TAGLINE,
@@ -26,31 +27,6 @@ const STATUS_TEXT_CLASS: Record<string, string> = {
   PAID: "text-emerald-600",
   PARTIALLY_PAID: "text-amber-600",
   UNPAID: "text-rose-600",
-};
-
-// The Web Share API's file support (mobile Chrome/Safari, some desktops) — the only way to hand
-// the actual PDF to WhatsApp or another app. Feature-detected once; elsewhere the button is hidden.
-const canShareFiles = (() => {
-  try {
-    return typeof navigator !== "undefined" && typeof navigator.canShare === "function" &&
-      navigator.canShare({ files: [new File([""], "invoice.pdf", { type: "application/pdf" })] });
-  } catch {
-    return false;
-  }
-})();
-
-// A blob responseType also wraps the JSON error body in a Blob — unwrap it for the message
-// (same as ExportDropdown).
-const getBlobErrorMessage = async (err: unknown, fallback: string) => {
-  const data = (err as { response?: { data?: unknown } })?.response?.data;
-  if (data instanceof Blob) {
-    try {
-      return JSON.parse(await data.text())?.message || fallback;
-    } catch {
-      return fallback;
-    }
-  }
-  return (err as { message?: string })?.message || fallback;
 };
 
 /** Share action on the Sells table — previews a simple customer receipt (not a GST invoice) built
@@ -88,14 +64,7 @@ const SaleInvoiceModal = ({ saleId, onClose }: SaleInvoiceModalProps) => {
     if (!invoice) return;
     setIsDownloading(true);
     try {
-      const url = window.URL.createObjectURL(await getPdfBlob());
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = invoiceFileName(invoice, saleId);
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      downloadBlob(await getPdfBlob(), invoiceFileName(invoice, saleId));
       toast.success("Invoice downloaded");
     } catch (err) {
       toast.error(await getBlobErrorMessage(err, "Failed to download invoice"));
@@ -109,16 +78,12 @@ const SaleInvoiceModal = ({ saleId, onClose }: SaleInvoiceModalProps) => {
     setIsSharing(true);
     try {
       const file = new File([await getPdfBlob()], invoiceFileName(invoice, saleId), { type: "application/pdf" });
-      await navigator.share({
-        files: [file],
+      await shareFile(file, {
         title: `${INVOICE_COMPANY_NAME} Invoice${invoice.invoiceNumber ? ` ${invoice.invoiceNumber}` : ""}`,
         text: buildInvoiceShareMessage(invoice),
       });
     } catch (err) {
-      // Closing the share sheet rejects with AbortError — not a failure worth reporting.
-      if ((err as { name?: string })?.name !== "AbortError") {
-        toast.error(await getBlobErrorMessage(err, "Failed to share invoice"));
-      }
+      toast.error(await getBlobErrorMessage(err, "Failed to share invoice"));
     } finally {
       setIsSharing(false);
     }

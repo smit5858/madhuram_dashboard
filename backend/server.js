@@ -790,6 +790,8 @@ sequelize
     await grantInitialTasksAccess();
     await grantInitialTimesheetAccess();
     await ensureOtherProductSeeded();
+    // Moves photos from the old file-based storage (uploads/products) into product_images.
+    await require("./services/productImage.service").migrateLegacyProductImageFiles();
 
     // Initialize Socket.io after DB is ready
     initSocket(httpServer);
