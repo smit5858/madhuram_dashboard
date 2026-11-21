@@ -573,6 +573,12 @@ exports.updateProduct = async (req, res) => {
         stock.sellingPrice = sellingPrice;
       }
 
+      // SOFTWARE has no purchase cost concept (always reported as null), so only stock-tracked
+      // types accept a purchase price edit. Past StockMovement rows keep their own recorded price.
+      if (purchasePrice !== undefined && STOCK_TRACKED_TYPES.includes(product.productType)) {
+        stock.purchasePrice = purchasePrice === "" ? null : purchasePrice;
+      }
+
       if (dealerId !== undefined) {
         if (dealerId === null || dealerId === "") {
           stock.dealerId = null;

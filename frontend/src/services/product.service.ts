@@ -119,7 +119,7 @@ export interface UpdateProductPayload {
   name?: string;
   description?: string;
   isActive?: boolean;
-  /** SERIALIZED only — applied to every unit still in stock (AVAILABLE). */
+  /** SERIALIZED: applied to every unit still in stock (AVAILABLE). NON_SERIAL / HARDWARE_ORDER_BASED: sets the Stock row's price. */
   purchasePrice?: number | null;
   /** For SERIALIZED, applied to every unit still in stock (AVAILABLE). */
   sellingPrice?: number | null;

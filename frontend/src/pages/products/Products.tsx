@@ -1315,6 +1315,7 @@ const Products = () => {
           updatePayload.sellingPrice = Number(values.sellingPrice);
         }
         if (selectedProduct.productType !== "SOFTWARE") {
+          updatePayload.purchasePrice = values.purchasePrice === "" ? null : Number(values.purchasePrice);
           updatePayload.dealerId = values.dealerId === "" ? null : Number(values.dealerId);
           // Quantity is no longer editable here — stock is only added via Restock.
           // if (values.quantity !== "") {
@@ -2003,14 +2004,7 @@ const Products = () => {
                             className="bg-slate-100 cursor-not-allowed"
                             component={FormikInput}
                           />
-                          <Field
-                            name="purchasePrice"
-                            type="number"
-                            label="Purchase Price"
-                            readOnly
-                            className="bg-slate-100 cursor-not-allowed"
-                            component={FormikInput}
-                          />
+                          <Field name="purchasePrice" type="number" label="Purchase Price" placeholder="0.00" component={FormikInput} />
                           <Field name="sellingPrice" type="number" label="Selling Price" placeholder="0.00" component={FormikInput} />
                         </div>
                         <div>
